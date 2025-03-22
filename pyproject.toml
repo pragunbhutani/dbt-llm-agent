@@ -1,72 +1,41 @@
 [tool.poetry]
-name = "dbt-llm-tools"
-version = "0.2.0"
-description = "LLM based tools for dbt projects. Answer data questions, generate documentation and more."
-authors = [
-    "Pragun Bhutani <1109752+pragunbhutani@users.noreply.github.com>"
-]
-license = "MIT"
+name = "dbt-llm-agent"
+version = "0.1.0"
+description = "An LLM-powered agent for interacting with dbt projects"
+authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
-repository = "https://github.com/pragunbhutani/dbt-llm-tools"
-keywords = ["dbt", "openai", "llm", "data chatbot", "dbt documentation"]
-classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
-    "Intended Audience :: Developers",
-    "Operating System :: OS Independent",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
-]
-
-packages = [
-    { include = "dbt_llm_tools" },
-]
+packages = [{include = "dbt_llm_agent"}]
 
 [tool.poetry.dependencies]
 python = "^3.10"
-openai = "^1.16.0"
-chromadb = "^0.4.24"
-PyYAML = "^6.0.1"
-typing-extensions = "^4.10.0"
-streamlit = "^1.33.0"
-tinydb = "^4.8.0"
+pandas = "^2.0.0"
+markdown = "^3.4.0"
+openai = "^1.5.0"
+dbt-core = "^1.6.0"
+sqlalchemy = "^2.0.23"
+psycopg2-binary = "^2.9.9"
+pgvector = "^0.2.5"
+langchain = "^0.3.2"
+langchain-openai = "^0.3.8"
+pydantic = "2.10.1"
+python-dotenv = "^1.0.0"
+fastapi = "^0.115.0"
+uvicorn = "^0.25.0"
+slack-sdk = "^3.23.0"
+slack-bolt = "^1.18.0"
+pytest = "^7.4.3"
+pytest-cov = "^4.1.0"
+pyyaml = "^6.0.1"
 
 [tool.poetry.group.dev.dependencies]
-pylint = "^3.1.0"
-flake8 = "^7.0.0"
-black = "^24.3.0"
-pytest = "^8.1.1"
-pytest-cov = "^5.0.0"
-flake8-pyproject = "^1.2.3"
-
-
-[tool.poetry.group.local.dependencies]
-notebook = "^7.1.2"
-
-
-[tool.poetry.group.docs.dependencies]
-sphinx-rtd-theme = "^2.0.0"
-
-[tool.flake8]
-max-line-length = 120
-per-file-ignores = """
-    __init__.py: F401
-"""
-
-[tool.pylint.'MESSAGES CONTROL']
-max-line-length=120
-disable = """
-    missing-module-docstring,
-    too-many-arguments,
-    too-few-public-methods,
-    broad-exception-raised,
-    missing-function-docstring,
-    redefined-builtin,
-    duplicate-code
-"""
+black = "^23.11.0"
+isort = "^5.12.0"
+mypy = "^1.7.1"
+ruff = "^0.1.6"
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+dbt-llm-agent = "dbt_llm_agent.cli:main" 
