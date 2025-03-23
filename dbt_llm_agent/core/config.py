@@ -42,7 +42,7 @@ def load_config(config_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
     # Create configuration dict from environment variables
     config = {
         "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
-        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4"),
+        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4-turbo"),
         "temperature": float(os.environ.get("TEMPERATURE", "0.0")),
         "postgres_uri": os.environ.get(
             "POSTGRES_URI",
@@ -60,7 +60,7 @@ def load_config(config_path: Optional[str] = None) -> Optional[Dict[str, Any]]:
         "slack_bot_token": os.environ.get("SLACK_BOT_TOKEN", ""),
         "slack_app_token": os.environ.get("SLACK_APP_TOKEN", ""),
         "slack_signing_secret": os.environ.get("SLACK_SIGNING_SECRET", ""),
-        "embedding_model": os.environ.get("EMBEDDING_MODEL", "text-embedding-ada-002"),
+        "embedding_model": os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small"),
     }
 
     return config

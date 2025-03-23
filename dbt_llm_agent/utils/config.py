@@ -13,34 +13,27 @@ load_dotenv()
 
 
 def load_config() -> Dict[str, Any]:
-    """Load the configuration from environment variables.
-
-    Returns:
-        Configuration dictionary
-    """
-    # Create configuration from environment variables
+    """Load configuration from environment variables."""
     config = {
-        "openai_api_key": os.environ.get("OPENAI_API_KEY", ""),
-        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4"),
-        "temperature": float(os.environ.get("TEMPERATURE", "0.0")),
-        "postgres_uri": os.environ.get(
-            "POSTGRES_URI",
-            "postgresql://postgres:postgres@localhost:5432/dbt_llm_agent",
-        ),
+        "postgres_uri": os.environ.get("POSTGRES_URI", None),
+        # Keep postgres_connection_string for backward compatibility but
+        # default to postgres_uri if available
         "postgres_connection_string": os.environ.get(
             "POSTGRES_CONNECTION_STRING",
-            os.environ.get(
-                "POSTGRES_URI",
-                "postgresql://postgres:postgres@localhost:5432/dbt_llm_agent",
-            ),
+            os.environ.get("POSTGRES_URI", None),
         ),
-        "vector_db_path": os.environ.get("VECTOR_DB_PATH", "./data/vector_db"),
-        "dbt_project_path": os.environ.get("DBT_PROJECT_PATH", ""),
+        "openai_api_key": os.environ.get("OPENAI_API_KEY", None),
+        "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4-turbo"),
+        "openai_embedding_model": os.environ.get(
+            "OPENAI_EMBEDDING_MODEL", "text-embedding-3-small"
+        ),
+        "temperature": float(os.environ.get("TEMPERATURE", 0.0)),
+        "vector_db_path": os.environ.get("VECTOR_DB_PATH", "data/vector_db"),
+        "dbt_project_path": os.environ.get("DBT_PROJECT_PATH", None),
         "slack_bot_token": os.environ.get("SLACK_BOT_TOKEN", ""),
         "slack_app_token": os.environ.get("SLACK_APP_TOKEN", ""),
         "slack_signing_secret": os.environ.get("SLACK_SIGNING_SECRET", ""),
     }
-
     return config
 
 

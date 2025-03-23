@@ -303,7 +303,7 @@ class DBTProjectParser:
                 documentation += "### Columns\n\n"
                 for col_name, col in columns.items():
                     if col.description:
-                        documentation += f"- **{col_name}**: {col.description}\n"
+                        documentation += f"- {col_name}: {col.description}\n"
 
             # Create model (without SQL yet)
             model = DBTModel(

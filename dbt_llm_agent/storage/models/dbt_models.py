@@ -29,8 +29,8 @@ class ModelTable(Base):
     yml_columns = Column(JSONB, nullable=True, comment="Columns from YML documentation")
     meta = Column(JSONB, nullable=True)
     raw_sql = Column(Text, nullable=True)
-    interpretation = Column(
-        Text, nullable=True, comment="LLM-generated interpretation of the model"
+    interpreted_description = Column(
+        Text, nullable=True, comment="LLM-generated description of the model"
     )
     interpreted_columns = Column(
         JSONB, nullable=True, comment="LLM-interpreted column descriptions"

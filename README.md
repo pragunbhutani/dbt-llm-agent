@@ -27,11 +27,16 @@ The agent uses a combination of:
 
 ### Prerequisites
 
-- Python 3.9+
-- Poetry
-- PostgreSQL database with pgvector extension (or Supabase account)
-- A dbt project
-- OpenAI API key
+- **Python 3.9+**
+- **PostgreSQL 13+** with the [pgvector](https://github.com/pgvector/pgvector) extension
+- **OpenAI API key** (or compatible API)
+- **dbt project**
+
+### Key Environment Variables
+
+- **OpenAI API Key**: For generating responses
+- **PostgreSQL URI**: For storing model metadata and vector embeddings
+- **DBT Project Path**: Path to your dbt project
 
 ### Setup
 
@@ -52,10 +57,6 @@ The agent uses a combination of:
    ```
    OPENAI_API_KEY=your_openai_api_key
    POSTGRES_URI=postgresql://user:password@localhost:5432/dbt_llm_agent
-   POSTGRES_CONNECTION_STRING=postgresql://user:password@host:port/dbname
-   # For Supabase
-   SUPABASE_URL=your_supabase_url
-   SUPABASE_KEY=your_supabase_key
    DBT_PROJECT_PATH=/path/to/your/dbt/project
    SLACK_BOT_TOKEN=your_slack_bot_token
    SLACK_SIGNING_SECRET=your_slack_signing_secret
@@ -74,6 +75,15 @@ poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing
 
 # Embed specific models in vector database
 poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
+
+# Interpret a single model and generate documentation
+poetry run dbt-llm-agent interpret customer_orders
+
+# Interpret multiple models using dbt selector syntax
+poetry run dbt-llm-agent interpret --select "tag:marketing"
+
+# Interpret and embed in one step
+poetry run dbt-llm-agent interpret customer_orders --embed
 
 # Run database migrations
 poetry run dbt-llm-agent migrate --verbose
@@ -164,7 +174,6 @@ The agent requires the following configuration:
 
 - **OpenAI API Key**: For generating responses
 - **PostgreSQL URI**: For storing model metadata
-- **PostgreSQL Connection String**: For storing vector embeddings with pgvector
 - **DBT Project Path**: Path to your dbt project
 
 You can configure these settings using the `setup` command.

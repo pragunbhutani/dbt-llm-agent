@@ -9,6 +9,7 @@ import sys
 import logging
 from typing import Optional, Any
 import pathlib
+import json
 
 # Set up logging
 from dbt_llm_agent.utils.logging import setup_logging, get_logger, COLORS
@@ -236,11 +237,6 @@ def parse(project_path, postgres_uri, select, force, verbose):
 )
 @click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option(
-    "--postgres-connection-string",
-    help="PostgreSQL connection string for vector database",
-    envvar="POSTGRES_CONNECTION_STRING",
-)
-@click.option(
     "--embedding-model", help="Embedding model to use", default="text-embedding-ada-002"
 )
 @click.option("--force", is_flag=True, help="Force re-embedding of models")
@@ -251,138 +247,170 @@ def parse(project_path, postgres_uri, select, force, verbose):
     help="Only embed documentation (not interpretation)",
 )
 @click.option(
-    "--interpretation-only",
+    "--interpret",
     is_flag=True,
-    help="Only embed interpretation (not documentation)",
+    help="Interpret models if their interpretation is missing and include interpretations in the embedding. Will create embeddings even for models without documentation.",
 )
 def embed(
     select,
     postgres_uri,
-    postgres_connection_string,
     embedding_model,
     force,
     verbose,
     documentation_only,
-    interpretation_only,
+    interpret,
 ):
-    """
-    Embed selected models in the vector database.
+    """Embed model documentation in the vector database.
 
-    By default, both documentation and interpretation embeddings are stored if available.
-    Use --documentation-only or --interpretation-only to store only one type of embedding.
+    This command creates vector embeddings for model documentation
+    to enable semantic search capabilities.
+
+    Models can be selected using dbt selector syntax with the --select option.
+
+    Use --interpret to generate interpretations for models that don't have one
+    and include them in the embedding for improved semantic search results.
+    This uses the OpenAI API to generate interpretations. When a model has no
+    documentation but has an interpretation (either existing or newly generated),
+    a placeholder documentation will be created from the interpretation.
     """
+    set_logging_level(verbose)
+
+    # Import modules
+    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+    from dbt_llm_agent.storage.vector_store import PostgresVectorStore
+    from dbt_llm_agent.utils.model_selector import ModelSelector
+    from dbt_llm_agent.core.agent import DBTAgent
+
+    # Load configuration
+    if not postgres_uri:
+        postgres_uri = get_env_var("POSTGRES_URI")
+
+    # Validate configuration
+    if not postgres_uri:
+        logger.error(
+            "PostgreSQL URI not provided. Use --postgres-uri or set POSTGRES_URI env var."
+        )
+        sys.exit(1)
+
     try:
-        # Set logging level based on verbosity
-        if verbose:
-            logging.basicConfig(level=logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
-
-        # Load environment variables from .env file
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-            logger.info("Loaded environment variables from .env file")
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
-
-        # Import here to avoid circular imports
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-        from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-        from dbt_llm_agent.utils.model_selector import ModelSelector
-
-        # Get PostgreSQL URI
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
-
-        # Get PostgreSQL connection string for vector database
-        if not postgres_connection_string:
-            postgres_connection_string = get_env_var("POSTGRES_CONNECTION_STRING")
-            if not postgres_connection_string:
-                postgres_connection_string = postgres_uri
-                logger.info("Using POSTGRES_URI for vector database connection string")
-
-        # Initialize storage
+        # Initialize storage and model selector
         logger.info(f"Connecting to PostgreSQL database: {postgres_uri}")
         postgres = PostgresStorage(postgres_uri)
 
-        # Initialize vector store
-        logger.info(f"Connecting to vector database: {postgres_connection_string}")
+        # Initialize vector store using the same postgres URI
+        logger.info(f"Connecting to vector database: {postgres_uri}")
         vector_store = PostgresVectorStore(
-            connection_string=postgres_connection_string,
+            connection_string=postgres_uri,
             embedding_model=embedding_model,
         )
 
-        # Get all models from the database
+        # Get all models
+        logger.info("Retrieving models from database")
         all_models = postgres.get_all_models()
-        logger.info(f"Found {len(all_models)} models in the database")
+        if not all_models:
+            logger.error("No models found in database")
+            sys.exit(1)
 
-        # Create model selector
+        # Create model dictionary for selector
+        model_dict = {model.name: model for model in all_models}
+
+        # Select models to embed
         logger.info(f"Selecting models with selector: {select}")
-        models_dict = {model.name: model for model in all_models}
-        selector = ModelSelector(models_dict)
+        selector = ModelSelector(model_dict)
         selected_model_names = selector.select(select)
 
         if not selected_model_names:
-            logger.warning(f"No models matched the selector: {select}")
-            return 0
+            logger.error(f"No models matched the selector: {select}")
+            sys.exit(1)
 
         logger.info(f"Selected {len(selected_model_names)} models for embedding")
 
-        # Filter to only selected models
-        selected_models = [
-            model for model in all_models if model.name in selected_model_names
-        ]
+        # Initialize DBTAgent if interpret flag is set
+        agent = None
+        if interpret:
+            openai_api_key = get_env_var("OPENAI_API_KEY")
+            openai_model = get_env_var("OPENAI_MODEL", "gpt-4-turbo")
 
-        # Validate embedding flags
-        if documentation_only and interpretation_only:
-            logger.error(
-                "Cannot use both --documentation-only and --interpretation-only together"
+            if not openai_api_key:
+                logger.error("OpenAI API key not provided. Set OPENAI_API_KEY env var.")
+                sys.exit(1)
+
+            logger.info("Initializing DBT Agent for model interpretation")
+            agent = DBTAgent(
+                postgres_storage=postgres,
+                vector_store=vector_store,
+                openai_api_key=openai_api_key,
+                model_name=openai_model,
             )
-            sys.exit(1)
 
-        # Embed each model
-        for model in selected_models:
+        # Create embeddings for each selected model
+        success_count = 0
+        interpret_count = 0
+
+        for model_name in selected_model_names:
             if verbose:
-                logger.debug(f"Processing model {model.name}")
+                logger.debug(f"Processing model: {model_name}")
 
-            # Store documentation embedding if requested
-            if not interpretation_only:
-                model_text = model.get_readable_representation()
+            model = model_dict.get(model_name)
+            if not model:
+                logger.warning(f"Model {model_name} not found, skipping")
+                continue
 
-                # Create metadata
-                metadata = {
-                    "schema": model.schema,
-                    "materialization": model.materialization,
-                }
-                if hasattr(model, "tags") and model.tags:
-                    metadata["tags"] = model.tags
+            # If interpret flag is set and model doesn't have interpretation, interpret it
+            if interpret and agent and not model.interpreted_description:
+                logger.info(
+                    f"Model {model_name} has no interpretation, interpreting now"
+                )
 
+                # Interpret the model
+                result = agent.interpret_model(model_name)
+
+                if "success" in result and result["success"]:
+                    # Save the interpretation
+                    save_result = agent.save_interpreted_documentation(
+                        model_name,
+                        result["yaml_documentation"],
+                        embed=False,  # Don't embed yet, we'll do it below
+                    )
+
+                    if save_result["success"]:
+                        interpret_count += 1
+                        logger.info(f"Successfully interpreted model {model_name}")
+
+                        # Refresh model from database since it was updated
+                        model = postgres.get_model(model_name)
+                    else:
+                        logger.warning(
+                            f"Failed to save interpretation for model {model_name}"
+                        )
+                else:
+                    logger.warning(f"Failed to interpret model {model_name}")
+
+            # Store documentation embedding if available
+            if model.documentation:
                 logger.info(f"Storing documentation embedding for model {model.name}")
-                vector_store.store_model(model.name, model_text, metadata)
-
-            # Store interpretation embedding if requested and available
-            if not documentation_only and model.interpretation:
-                logger.info(f"Storing interpretation embedding for model {model.name}")
-                vector_store.store_model_interpretation(
-                    model.name, model.interpretation
+                vector_store.store_model_documentation(
+                    model.name, model.documentation, force=force
                 )
-            elif not documentation_only and verbose:
-                logger.debug(
-                    f"Skipping interpretation embedding for model {model.name} - no interpretation available"
+                success_count += 1
+            # If no documentation but we have interpretation and interpret flag was set, use interpretation for embedding
+            elif model.interpreted_description:
+                logger.info(
+                    f"No documentation available for model {model.name}, using interpretation for embedding"
+                )
+                # Use vector_store.store_model directly to utilize the homogeneous document structure
+                vector_store.store_model(
+                    model.name, model.get_readable_representation()
+                )
+                success_count += 1
+            else:
+                logger.warning(
+                    f"Skipping documentation embedding for model {model.name} - no documentation or interpretation available"
                 )
 
-        logger.info(f"Successfully embedded {len(selected_models)} models")
-        return 0
+        logger.info(f"Successfully embedded {success_count} models")
+        if interpret:
+            logger.info(f"Successfully interpreted {interpret_count} models")
 
     except Exception as e:
         logger.error(f"Error embedding models: {e}")
@@ -396,33 +424,32 @@ def embed(
 @cli.command()
 @click.argument("question")
 @click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-@click.option(
-    "--postgres-connection-string",
-    help="PostgreSQL connection string for vector database",
-    envvar="POSTGRES_CONNECTION_STRING",
-)
 @click.option("--openai-api-key", help="OpenAI API key", envvar="OPENAI_API_KEY")
 @click.option("--openai-model", help="OpenAI model to use", envvar="OPENAI_MODEL")
-@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option(
-    "--use-interpretation",
-    is_flag=True,
-    help="Use model interpretations for search instead of documentation",
+    "--temperature",
+    type=float,
+    default=0.0,
+    help="Temperature for the OpenAI model",
+    envvar="TEMPERATURE",
 )
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--no-color", is_flag=True, help="Disable colored output", default=False)
+@click.option("--json", is_flag=True, help="Output results as JSON", default=False)
 def ask(
     question,
     postgres_uri,
-    postgres_connection_string,
     openai_api_key,
     openai_model,
+    temperature,
     verbose,
-    use_interpretation,
+    no_color,
+    json,
 ):
-    """
-    Ask a question about your dbt project.
+    """Ask a question about the dbt project.
 
-    By default, searches are performed using documentation embeddings.
-    Use --use-interpretation to search using interpretation embeddings.
+    This command allows you to ask questions about your dbt project and get answers
+    based on the information in the model documentation and schema.
     """
     try:
         # Set logging level based on verbosity
@@ -430,7 +457,7 @@ def ask(
             logging.basicConfig(level=logging.DEBUG)
             logger.setLevel(logging.DEBUG)
 
-        # Load environment variables from .env file
+        # Load environment variables from .env file (if not already loaded)
         try:
             from dotenv import load_dotenv
 
@@ -441,114 +468,105 @@ def ask(
                 "python-dotenv not installed. Environment variables may not be properly loaded."
             )
 
-        # Import here to avoid circular imports
+        # Import necessary modules
         from dbt_llm_agent.storage.postgres_storage import PostgresStorage
         from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-        from dbt_llm_agent.storage.question_service import QuestionTrackingService
         from dbt_llm_agent.core.agent import DBTAgent
+        from dbt_llm_agent.utils.model_selector import ModelSelector
 
-        # Get PostgreSQL URI
+        # Load configuration
         if not postgres_uri:
             postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
 
-        # Get PostgreSQL connection string for vector database
-        if not postgres_connection_string:
-            postgres_connection_string = get_env_var("POSTGRES_CONNECTION_STRING")
-            if not postgres_connection_string:
-                postgres_connection_string = postgres_uri
-                logger.info("Using POSTGRES_URI for vector database connection string")
-
-        # Get OpenAI API key
         if not openai_api_key:
             openai_api_key = get_env_var("OPENAI_API_KEY")
-            if not openai_api_key:
-                logger.error(
-                    "OpenAI API key not provided. Please either:\n"
-                    "1. Add OPENAI_API_KEY to your .env file\n"
-                    "2. Pass it as --openai-api-key argument"
-                )
-                sys.exit(1)
 
-        # Get OpenAI model
         if not openai_model:
-            openai_model = get_env_var("OPENAI_MODEL", "gpt-4-turbo")
+            openai_model = get_env_var("OPENAI_MODEL")
+            if not openai_model:
+                openai_model = "gpt-4-turbo"
 
-        # Initialize storage
-        logger.info(f"Connecting to PostgreSQL database: {postgres_uri}")
-        postgres = PostgresStorage(postgres_uri)
+        # Validate configuration
+        if not postgres_uri:
+            logger.error("PostgreSQL URI not provided and not found in config")
+            sys.exit(1)
 
-        # Initialize vector store
-        logger.info(f"Connecting to vector database: {postgres_connection_string}")
-        vector_store = PostgresVectorStore(connection_string=postgres_connection_string)
+        if not openai_api_key:
+            logger.error("OpenAI API key not provided and not found in config")
+            sys.exit(1)
 
-        # Initialize question tracking
-        question_tracking = QuestionTrackingService(postgres_uri)
-
-        # Initialize agent
-        logger.info(f"Initializing DBT agent with {openai_model} model")
+        # Initialize storage and agent
+        postgres_storage = PostgresStorage(postgres_uri)
+        vector_store = PostgresVectorStore(postgres_uri)
         agent = DBTAgent(
-            postgres_storage=postgres,
+            postgres_storage=postgres_storage,
             vector_store=vector_store,
             openai_api_key=openai_api_key,
             model_name=openai_model,
         )
 
-        # Indicate which embedding type is being used
-        if use_interpretation:
-            logger.info("Using interpretation embeddings for search")
-        else:
-            logger.info("Using documentation embeddings for search")
-
         # Ask the question
-        logger.info(f"Asking: {question}")
-        result = agent.answer_question(question, use_interpretation=use_interpretation)
+        result = agent.answer_question(question)
 
-        # Output the answer
-        colored_echo("\nAnswer:", color="INFO", bold=True)
-        colored_echo(result["answer"])
+        if "error" in result:
+            logger.error(f"Error: {result['error']}")
+            sys.exit(1)
 
-        # List the models used
-        if result["relevant_models"]:
-            colored_echo("\nModels used:", color="INFO", bold=True)
-            for model_data in result["relevant_models"]:
-                # Show which models used interpretation
-                model_info = f"- {model_data['name']}"
-                if (
-                    "used_interpretation" in model_data
-                    and model_data["used_interpretation"]
-                ):
-                    model_info += " (used interpretation)"
-                colored_echo(model_info, color="DEBUG")
+        # Print the answer
+        if not json:
+            try:
+                from rich.markdown import Markdown
+                from rich.console import Console
 
-        # Record the question and answer
-        model_names = [model["name"] for model in result["relevant_models"]]
-        question_id = question_tracking.record_question(
-            question_text=question,
-            answer_text=result["answer"],
-            model_names=model_names,
-        )
+                markdown = True
+                console = Console()
+            except ImportError:
+                markdown = False
+                console = None
 
-        colored_echo(f"\nQuestion ID: {question_id}", color="INFO", bold=True)
-        colored_echo("You can provide feedback on this answer with:", color="INFO")
-        colored_echo(
-            f"  dbt-llm-agent feedback {question_id} --useful=true", color="DEBUG"
-        )
+            if markdown and console:
+                md_answer = result["answer"]
+                md = Markdown(md_answer)
+                console.print(md)
+            else:
+                print(result["answer"])
 
-        return 0
+            # Print models if available
+            if "relevant_models" in result and result["relevant_models"]:
+                print("\nBased on models:")
+                for model_data in result["relevant_models"]:
+                    model_info = f"- {model_data['name']}"
+                    print(model_info)
+
+        # Store the question and answer if there's a result
+        if "answer" in result and "relevant_models" in result:
+            try:
+                from dbt_llm_agent.storage.question_service import (
+                    QuestionTrackingService,
+                )
+
+                # Initialize question tracking service
+                question_tracking = QuestionTrackingService(postgres_uri)
+
+                question_id = question_tracking.record_question(
+                    question_text=question,
+                    answer_text=result["answer"],
+                    model_names=[m["name"] for m in result["relevant_models"]],
+                )
+
+                logger.info(
+                    f"Question and answer stored with ID: {question_id}. "
+                    f"Use 'dbt-llm-agent feedback {question_id} --useful=True/False' to provide feedback."
+                )
+            except Exception as e:
+                logger.error(f"Error storing question: {e}")
 
     except Exception as e:
-        logger.error(f"Error asking question: {e}")
+        logger.error(f"Error: {str(e)}")
         if verbose:
             import traceback
 
-            traceback.print_exc()
+            logger.debug(traceback.format_exc())
         sys.exit(1)
 
 
@@ -784,6 +802,10 @@ def init_db(postgres_uri, verbose):
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 def list(select, postgres_uri, verbose):
     """List selected models from the database."""
+    # Import required modules
+    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+    from dbt_llm_agent.utils.model_selector import ModelSelector
+
     set_logging_level(verbose)
 
     if not postgres_uri:
@@ -808,9 +830,17 @@ def list(select, postgres_uri, verbose):
             colored_echo("No models found in the database", color="YELLOW")
             return
 
+        # Convert the list of models to a dictionary for the selector
+        models_dict = {model.name: model for model in all_models}
+
         # Select models based on the provided selection
-        selector = ModelSelector(all_models)
-        selected_models = selector.select_models(select)
+        selector = ModelSelector(models_dict)
+        selected_model_names = selector.select(select)
+
+        # Get the actual model objects for the selected names
+        selected_models = [
+            models_dict[name] for name in selected_model_names if name in models_dict
+        ]
 
         if not selected_models:
             colored_echo(
@@ -825,9 +855,19 @@ def list(select, postgres_uri, verbose):
         )
 
         for idx, model in enumerate(selected_models, 1):
-            colored_echo(
-                f"{idx}. {model.name} ({model.materialization}, {model.schema})"
-            )
+            # Only show parentheses if either materialization or schema has a value
+            model_info = f"{idx}. {model.name}"
+            if model.materialization or model.schema:
+                mat = model.materialization if model.materialization else ""
+                schema = model.schema if model.schema else ""
+                if mat and schema:
+                    model_info += f" ({mat}, {schema})"
+                elif mat:
+                    model_info += f" ({mat})"
+                elif schema:
+                    model_info += f" ({schema})"
+
+            colored_echo(model_info)
             if verbose:
                 if model.description:
                     colored_echo(f"   Description: {model.description}", color="CYAN")
@@ -849,13 +889,13 @@ def list(select, postgres_uri, verbose):
 
 
 @cli.command()
-@click.argument("model_name", required=True)
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
+@click.argument("model_name", required=False)
 @click.option(
-    "--postgres-connection-string",
-    help="PostgreSQL connection string for vector database",
-    envvar="POSTGRES_CONNECTION_STRING",
+    "--select",
+    help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
+    default=None,
 )
+@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option("--openai-api-key", help="OpenAI API key", envvar="OPENAI_API_KEY")
 @click.option("--openai-model", help="OpenAI model to use", envvar="OPENAI_MODEL")
 @click.option(
@@ -867,8 +907,8 @@ def list(select, postgres_uri, verbose):
 )
 def interpret(
     model_name,
+    select,
     postgres_uri,
-    postgres_connection_string,
     openai_api_key,
     openai_model,
     no_save,
@@ -881,6 +921,9 @@ def interpret(
     to generate documentation in YAML format.
 
     By default, the documentation is saved to the database. Use --no-save to disable this.
+
+    You can interpret a single model by providing MODEL_NAME as an argument
+    or interpret multiple models using the --select option with dbt selector syntax.
     """
     set_logging_level(verbose)
 
@@ -890,15 +933,20 @@ def interpret(
     from dbt_llm_agent.core.agent import DBTAgent
     from dbt_llm_agent.utils.model_selector import ModelSelector
 
+    # Validate that either model_name or select is provided, but not both
+    if model_name and select:
+        logger.error(
+            "Cannot provide both MODEL_NAME and --select. Please use only one."
+        )
+        sys.exit(1)
+
+    if not model_name and not select:
+        logger.error("Must provide either MODEL_NAME or --select option.")
+        sys.exit(1)
+
     # Load configuration and override with command line arguments
     if not postgres_uri:
         postgres_uri = get_config_value("postgres_uri")
-
-    if not postgres_connection_string:
-        postgres_connection_string = get_config_value("postgres_connection_string")
-        if not postgres_connection_string and postgres_uri:
-            # Use postgres_uri as a fallback
-            postgres_connection_string = postgres_uri
 
     if not openai_api_key:
         openai_api_key = get_config_value("openai_api_key")
@@ -913,22 +961,15 @@ def interpret(
         logger.error("PostgreSQL URI not provided and not found in config")
         sys.exit(1)
 
-    if not postgres_connection_string:
-        logger.error(
-            "PostgreSQL connection string not provided and not found in config"
-        )
-        sys.exit(1)
-
     if not openai_api_key:
         logger.error("OpenAI API key not provided and not found in config")
         sys.exit(1)
 
     try:
-        logger.info(f"Interpreting model: {model_name}")
-
         # Initialize storage and agent
         postgres_storage = PostgresStorage(postgres_uri)
-        vector_store = PostgresVectorStore(postgres_connection_string)
+        # Use postgres_uri also for vector store connection
+        vector_store = PostgresVectorStore(postgres_uri)
         agent = DBTAgent(
             postgres_storage=postgres_storage,
             vector_store=vector_store,
@@ -936,56 +977,90 @@ def interpret(
             model_name=openai_model,
         )
 
-        # Check if the model exists
-        model = postgres_storage.get_model(model_name)
-        if not model:
-            logger.error(f"Model '{model_name}' not found in the database")
-            sys.exit(1)
+        # Process model selection if --select is used
+        models_to_interpret = []
+        if select:
+            logger.info(f"Selecting models with selector: {select}")
+            # Get all models from the database
+            all_models = postgres_storage.get_all_models()
+            if not all_models:
+                logger.error(
+                    "No models found in the database. Run 'parse' command first."
+                )
+                sys.exit(1)
 
-        # Interpret the model
-        result = agent.interpret_model(model_name)
+            # Convert models to dictionary format for selector
+            models_dict = {model.name: model for model in all_models}
 
-        if "error" in result:
-            logger.error(f"Error interpreting model: {result['error']}")
-            sys.exit(1)
+            # Use ModelSelector to select models
+            selector = ModelSelector(models_dict)
+            selected_model_names = selector.select(select)
 
-        # If verbose, print the prompt that was used
-        if verbose and "prompt" in result:
-            logger.info("Prompt used for interpretation:")
-            print(result["prompt"])
+            if not selected_model_names:
+                logger.error(f"No models found matching selector: {select}")
+                sys.exit(1)
 
-        # Print the resulting YAML documentation
-        if verbose:
-            logger.info("Generated YAML Documentation:")
-        print(result["yaml_documentation"])
+            logger.info(f"Selected {len(selected_model_names)} models to interpret")
+            models_to_interpret = selected_model_names
+        else:
+            # Check if the single model exists
+            model = postgres_storage.get_model(model_name)
+            if not model:
+                logger.error(f"Model '{model_name}' not found in the database")
+                sys.exit(1)
+            models_to_interpret = [model_name]
 
-        # Save the documentation by default unless --no-save is provided
-        if not no_save:
-            logger.info("Saving documentation to database...")
-            save_result = agent.save_interpreted_documentation(
-                model_name, result["yaml_documentation"]
-            )
+        # Process each model
+        for current_model_name in models_to_interpret:
+            logger.info(f"Interpreting model: {current_model_name}")
 
-            if save_result["success"]:
-                logger.info(f"Documentation saved successfully for model: {model_name}")
+            # Interpret the model
+            result = agent.interpret_model(current_model_name)
 
-                # Embed the interpretation if requested
-                if embed:
-                    logger.info("Embedding interpretation in vector store...")
-                    # Get the updated model with the interpretation
-                    updated_model = postgres_storage.get_model(model_name)
-                    if updated_model and updated_model.interpretation:
-                        vector_store.store_model_interpretation(
-                            model_name, updated_model.interpretation
-                        )
-                        logger.info(
-                            f"Interpretation embedded successfully for model: {model_name}"
-                        )
-                    else:
-                        logger.error("Could not find interpretation to embed")
-            else:
-                error_msg = save_result.get("error", "Unknown error")
-                logger.error(f"Failed to save documentation: {error_msg}")
+            if "error" in result:
+                logger.error(f"Error interpreting model: {result['error']}")
+                continue
+
+            # If verbose, print the prompt that was used
+            if verbose and "prompt" in result:
+                logger.info("Prompt used for interpretation:")
+                print(result["prompt"])
+
+            # Print the resulting YAML documentation
+            if verbose:
+                logger.info(f"Generated YAML Documentation for {current_model_name}:")
+            print(result["yaml_documentation"])
+
+            # Save the documentation by default unless --no-save is provided
+            if not no_save:
+                logger.info("Saving documentation to database...")
+                save_result = agent.save_interpreted_documentation(
+                    current_model_name, result["yaml_documentation"], embed=embed
+                )
+
+                if save_result["success"]:
+                    logger.info(
+                        f"Documentation saved successfully for model: {current_model_name}"
+                    )
+
+                    # Embed the interpretation if requested
+                    if embed:
+                        logger.info("Embedding interpretation in vector store...")
+                        # Get the updated model with the interpretation
+                        updated_model = postgres_storage.get_model(current_model_name)
+                        if updated_model and updated_model.interpreted_description:
+                            vector_store.store_model_interpretation(
+                                current_model_name,
+                                updated_model.interpreted_description,
+                            )
+                            logger.info(
+                                f"Interpretation embedded successfully for model: {current_model_name}"
+                            )
+                        else:
+                            logger.error("Could not find interpretation to embed")
+                else:
+                    error_msg = save_result.get("error", "Unknown error")
+                    logger.error(f"Failed to save documentation: {error_msg}")
 
     except Exception as e:
         logger.error(f"Error interpreting model: {str(e)}")

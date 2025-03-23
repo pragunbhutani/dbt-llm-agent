@@ -101,37 +101,60 @@ class DBTModel:
         Returns:
             Readable representation of the model
         """
-        lines = [
-            f"Model: {self.name}",
-            f"Description: {self.description}",
-            f"Schema: {self.schema}",
-            f"Database: {self.database}",
-            f"Materialization: {self.materialization}",
-        ]
+        # Model header with name
+        embedding_text = f"Model: {self.name}\n"
+
+        # Documentation section
+        embedding_text += "\n## Documentation\n"
+        if self.description and self.description.strip():
+            embedding_text += f"{self.description}\n"
+        else:
+            embedding_text += "No documentation available.\n"
+
+        # Add metadata about the model
+        embedding_text += f"\nSchema: {self.schema}\n"
+        embedding_text += f"Database: {self.database}\n"
+        embedding_text += f"Materialization: {self.materialization}\n"
 
         if self.tags:
-            lines.append(f"Tags: {', '.join(self.tags)}")
+            embedding_text += f"Tags: {', '.join(self.tags)}\n"
 
         if self.depends_on:
-            lines.append(f"Depends on: {', '.join(self.depends_on)}")
+            embedding_text += f"Depends on: {', '.join(self.depends_on)}\n"
 
         if self.all_upstream_models:
-            lines.append(f"All upstream models: {', '.join(self.all_upstream_models)}")
+            embedding_text += (
+                f"All upstream models: {', '.join(self.all_upstream_models)}\n"
+            )
 
-        if self.columns:
-            lines.append("\nColumns:")
+        # Interpretation section
+        embedding_text += "\n## Interpretation\n"
+        if hasattr(self, "interpreted_description") and self.interpreted_description:
+            embedding_text += f"{self.interpreted_description}\n"
+        else:
+            embedding_text += "No interpretation available.\n"
+
+        # Column information section
+        embedding_text += "\n## Columns\n"
+        if hasattr(self, "interpreted_columns") and self.interpreted_columns:
+            for col_name, col_desc in self.interpreted_columns.items():
+                embedding_text += f"- {col_name}: {col_desc}\n"
+        elif self.columns:
             for col_name, col_info in self.columns.items():
-                col_desc = col_info.get("description", "")
-                lines.append(f"  - {col_name}: {col_desc}")
+                col_desc = col_info.get("description", "No description")
+                embedding_text += f"- {col_name}: {col_desc}\n"
+        else:
+            embedding_text += "No column information available.\n"
 
+        # Add test information at the end
         if self.tests:
-            lines.append("\nTests:")
+            embedding_text += "\n## Tests\n"
             for test in self.tests:
                 test_name = test.get("name", "unknown")
                 test_column = test.get("column", "")
                 if test_column:
-                    lines.append(f"  - {test_name} on column {test_column}")
+                    embedding_text += f"- {test_name} on column {test_column}\n"
                 else:
-                    lines.append(f"  - {test_name} on model")
+                    embedding_text += f"- {test_name} on model\n"
 
-        return "\n".join(lines)
+        return embedding_text

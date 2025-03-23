@@ -19,9 +19,6 @@ class ModelEmbedding(Base):
     embedding = Column(
         Vector(1536), nullable=False, comment="Embedding based on model documentation"
     )  # Default dimension for text-embedding-ada-002
-    interpretation_embedding = Column(
-        Vector(1536), nullable=True, comment="Embedding based on model interpretation"
-    )
     model_metadata = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
@@ -31,11 +28,6 @@ class ModelEmbedding(Base):
     # Create vector index for fast similarity search
     __table_args__ = (
         Index("idx_model_embeddings_embedding", embedding, postgresql_using="ivfflat"),
-        Index(
-            "idx_model_embeddings_interpretation",
-            interpretation_embedding,
-            postgresql_using="ivfflat",
-        ),
     )
 
     def __repr__(self):

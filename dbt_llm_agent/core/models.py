@@ -47,7 +47,7 @@ class DBTModel:
     path: str = ""
     unique_id: str = ""
     documentation: str = ""  # Original documentation
-    interpretation: str = ""  # LLM-generated interpretation
+    interpreted_description: str = ""  # LLM-generated description
     interpreted_columns: Dict[str, str] = field(
         default_factory=dict
     )  # LLM-interpreted column descriptions
@@ -74,7 +74,7 @@ class DBTModel:
             "path": self.path,
             "unique_id": self.unique_id,
             "documentation": self.documentation,
-            "interpretation": self.interpretation,
+            "interpreted_description": self.interpreted_description,
             "interpreted_columns": self.interpreted_columns,
         }
 
@@ -97,8 +97,8 @@ class DBTModel:
             f"Description (YML): {self.description or 'No YML description'}\n"
         )
 
-        if self.interpretation:
-            representation += f"Interpretation (LLM): Available\n"
+        if self.interpreted_description:
+            representation += f"Interpretation (LLM): {self.interpreted_description}\n"
         else:
             representation += f"Interpretation (LLM): Not available\n"
 

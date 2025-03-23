@@ -140,7 +140,7 @@ class PostgresStorage:
                 "all_upstream_models": model.all_upstream_models,
                 "meta": model.meta,
                 "raw_sql": model.raw_sql,
-                "interpretation": model.interpretation,
+                "interpreted_description": model.interpreted_description,
                 "interpreted_columns": model.interpreted_columns,
                 "yml_columns": (
                     {
@@ -280,7 +280,7 @@ class PostgresStorage:
             meta=model_record.meta or {},
             raw_sql=model_record.raw_sql,
             documentation="",  # Set a default empty string since field was removed
-            interpretation=model_record.interpretation,
+            interpreted_description=model_record.interpreted_description,
             interpreted_columns=interpreted_columns,
             columns=columns,
         )

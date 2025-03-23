@@ -101,7 +101,7 @@ class DBTAgent:
 
         Args:
             question: The question to answer
-            use_interpretation: Whether to use interpretation embeddings for search
+            use_interpretation: Ignored, kept for backward compatibility
 
         Returns:
             Dict containing the answer and relevant model information
@@ -111,7 +111,7 @@ class DBTAgent:
 
             # Find relevant models using vector search
             search_results = self.vector_store.search_models(
-                query=question, n_results=3, use_interpretation=use_interpretation
+                query=question, n_results=3
             )
 
             if not search_results:
@@ -134,9 +134,6 @@ class DBTAgent:
                     model_info += model.get_readable_representation() + "\n\n"
                     model_dict = model.to_dict()
                     # Add embedding search metadata
-                    model_dict["used_interpretation"] = result.get(
-                        "used_interpretation", False
-                    )
                     model_dict["search_score"] = result.get("score", 0)
                     models_data.append(model_dict)
 
@@ -163,7 +160,6 @@ class DBTAgent:
                 "question": question,
                 "answer": answer,
                 "relevant_models": models_data,
-                "used_interpretation": use_interpretation,
             }
 
         except Exception as e:
@@ -172,7 +168,6 @@ class DBTAgent:
                 "question": question,
                 "answer": f"I encountered an error while processing your question: {str(e)}",
                 "relevant_models": [],
-                "used_interpretation": use_interpretation,
             }
 
     def generate_documentation(self, model_name: str) -> Dict[str, Any]:
@@ -287,7 +282,7 @@ class DBTAgent:
                 formatted_doc += "### Columns\n\n"
                 for col_name, col in model.columns.items():
                     if col.description:
-                        formatted_doc += f"- **{col_name}**: {col.description}\n"
+                        formatted_doc += f"- {col_name}: {col.description}\n"
 
             model.documentation = formatted_doc
 
@@ -454,7 +449,7 @@ class DBTAgent:
             }
 
     def save_interpreted_documentation(
-        self, model_name: str, yaml_documentation: str
+        self, model_name: str, yaml_documentation: str, embed: bool = False
     ) -> Dict[str, Any]:
         """Save the interpreted documentation to the database.
 
@@ -463,6 +458,7 @@ class DBTAgent:
         Args:
             model_name: Name of the model
             yaml_documentation: YAML formatted documentation string
+            embed: Whether to embed the model in the vector store
 
         Returns:
             Dict with status information
@@ -529,32 +525,22 @@ class DBTAgent:
                 logger.debug(f"Tests in existing model: {existing_model.tests}")
 
                 # Update the model with interpreted documentation
-                existing_model.interpretation = yaml_documentation
-                existing_model.interpreted_columns = column_descriptions
-
-                # Format interpretation as markdown for better readability
-                formatted_doc = (
-                    f"## {model_name} (LLM Interpretation)\n\n{model_description}\n\n"
-                )
-
-                if column_descriptions:
-                    formatted_doc += "### Columns\n\n"
-                    for col_name, col_desc in column_descriptions.items():
-                        formatted_doc += f"- **{col_name}**: {col_desc}\n"
-
-                # Save the formatted markdown version along with the YAML
-                existing_model.interpretation = formatted_doc
+                existing_model.interpreted_description = model_description
                 existing_model.interpreted_columns = column_descriptions
 
                 # Save the model
                 success = self.postgres.update_model(existing_model)
 
                 if success:
-                    # Update the vector store with the updated model representation
-                    self.vector_store.store_model(
-                        model_name=model_name,
-                        model_text=existing_model.get_readable_representation(),
-                    )
+                    # Only update the vector store if embed is True
+                    if embed:
+                        logger.info(f"Embedding model {model_name} in vector store")
+                        self.vector_store.store_model(
+                            model_name=model_name,
+                            model_text=existing_model.get_readable_representation(),
+                        )
+                    else:
+                        logger.debug(f"Skipping embedding for model {model_name}")
 
                 return {
                     "model_name": model_name,
