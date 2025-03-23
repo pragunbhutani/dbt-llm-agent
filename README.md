@@ -75,6 +75,12 @@ poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing
 # Embed specific models in vector database
 poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
 
+# Run database migrations
+poetry run dbt-llm-agent migrate --verbose
+
+# Drop old columns after migration (use with caution)
+poetry run dbt-llm-agent migrate --drop-old-columns
+
 # Ask a question
 poetry run dbt-llm-agent ask "What does the model customer_orders do?"
 
@@ -130,6 +136,27 @@ If you were using an earlier version with ChromaDB, you can migrate your data to
 # Migrate from ChromaDB to Postgres with pgvector
 poetry run python -m dbt_llm_agent.scripts.migrate_to_pgvector --connection-string postgresql://user:pass@host:port/dbname
 ```
+
+### Database Schema Migrations
+
+The database schema may evolve with new releases. To update your existing database:
+
+```bash
+# Run migrations to add new columns
+poetry run dbt-llm-agent migrate
+
+# Use verbose mode to see detailed migration logs
+poetry run dbt-llm-agent migrate --verbose
+
+# Optionally drop old columns after migration (use with caution)
+poetry run dbt-llm-agent migrate --drop-old-columns
+```
+
+Migrations will automatically run when the application starts, but you can also run them manually if needed. The migration process:
+
+1. Adds new required columns (if they don't exist)
+2. Migrates data from old columns to new ones
+3. Optionally drops old renamed columns if the `--drop-old-columns` flag is used
 
 ## Configuration
 

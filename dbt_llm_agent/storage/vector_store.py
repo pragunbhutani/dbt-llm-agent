@@ -130,6 +130,44 @@ class PostgresVectorStore:
         finally:
             session.close()
 
+    def store_model_interpretation(
+        self, model_name: str, interpretation_text: str
+    ) -> None:
+        """Store the interpretation embedding for a model.
+
+        Args:
+            model_name: The name of the model
+            interpretation_text: The interpretation text to embed
+        """
+        session = self.Session()
+        try:
+            # Check if model exists
+            existing = (
+                session.query(ModelEmbedding)
+                .filter(ModelEmbedding.model_name == model_name)
+                .first()
+            )
+
+            if not existing:
+                logger.error(f"Model {model_name} not found in vector store")
+                return
+
+            # Get embedding for the interpretation
+            interpretation_embedding = self._get_embedding(interpretation_text)
+
+            # Update the model with the interpretation embedding
+            existing.interpretation_embedding = interpretation_embedding
+            session.commit()
+            logger.info(f"Stored interpretation embedding for model {model_name}")
+        except Exception as e:
+            session.rollback()
+            logger.error(
+                f"Error storing interpretation embedding for model {model_name}: {e}"
+            )
+            raise
+        finally:
+            session.close()
+
     def model_exists(self, model_name: str) -> bool:
         """Check if a model exists in the vector store.
 
@@ -184,7 +222,11 @@ class PostgresVectorStore:
             session.close()
 
     def search_models(
-        self, query: str, n_results: int = 5, filter_metadata: Dict[str, Any] = None
+        self,
+        query: str,
+        n_results: int = 5,
+        filter_metadata: Dict[str, Any] = None,
+        use_interpretation: bool = False,
     ) -> List[Dict[str, Any]]:
         """Search for models similar to a query.
 
@@ -192,6 +234,7 @@ class PostgresVectorStore:
             query: The search query
             n_results: The number of results to return
             filter_metadata: Filter results by metadata
+            use_interpretation: Whether to use interpretation embeddings for search
 
         Returns:
             A list of search results
@@ -202,12 +245,73 @@ class PostgresVectorStore:
             query_embedding = self._get_embedding(query)
 
             # Build query
-            base_query = session.query(
-                ModelEmbedding,
-                ModelEmbedding.embedding.cosine_distance(query_embedding).label(
-                    "distance"
-                ),
-            )
+            if use_interpretation:
+                # Use interpretation embedding if available, fallback to regular embedding
+                logger.info("Searching using model interpretations")
+                base_query = session.query(
+                    ModelEmbedding,
+                    sa.case(
+                        [
+                            (
+                                ModelEmbedding.interpretation_embedding != None,
+                                ModelEmbedding.interpretation_embedding.cosine_distance(
+                                    query_embedding
+                                ),
+                            )
+                        ],
+                        else_=ModelEmbedding.embedding.cosine_distance(query_embedding),
+                    ).label("distance"),
+                )
+
+                # Add a preference for models with interpretation embeddings
+                if n_results > 5:
+                    # Get at least a few models with interpretation embeddings if available
+                    interpretation_query = session.query(
+                        ModelEmbedding,
+                        ModelEmbedding.interpretation_embedding.cosine_distance(
+                            query_embedding
+                        ).label("distance"),
+                    ).filter(ModelEmbedding.interpretation_embedding != None)
+
+                    if filter_metadata:
+                        for key, value in filter_metadata.items():
+                            interpretation_query = interpretation_query.filter(
+                                ModelEmbedding.model_metadata[key].astext == str(value)
+                            )
+
+                    interpretation_results = (
+                        interpretation_query.order_by(sa.text("distance"))
+                        .limit(min(n_results // 2, 3))
+                        .all()
+                    )
+
+                    # Remember these model names to exclude from the main query
+                    interpretation_model_names = [
+                        r.ModelEmbedding.model_name for r in interpretation_results
+                    ]
+
+                    # Exclude these models from the main query
+                    if interpretation_model_names:
+                        base_query = base_query.filter(
+                            ~ModelEmbedding.model_name.in_(interpretation_model_names)
+                        )
+
+                    # Adjust n_results for the main query
+                    main_query_limit = n_results - len(interpretation_results)
+                else:
+                    interpretation_results = []
+                    main_query_limit = n_results
+            else:
+                # Use regular embedding
+                logger.info("Searching using model documentation")
+                base_query = session.query(
+                    ModelEmbedding,
+                    ModelEmbedding.embedding.cosine_distance(query_embedding).label(
+                        "distance"
+                    ),
+                )
+                interpretation_results = []
+                main_query_limit = n_results
 
             # Apply filter if provided
             if filter_metadata:
@@ -217,7 +321,12 @@ class PostgresVectorStore:
                     )
 
             # Order by distance and limit
-            results = base_query.order_by(sa.text("distance")).limit(n_results).all()
+            results = (
+                base_query.order_by(sa.text("distance")).limit(main_query_limit).all()
+            )
+
+            # Combine with interpretation results if any
+            combined_results = interpretation_results + results
 
             # Format results
             return [
@@ -227,8 +336,12 @@ class PostgresVectorStore:
                     "metadata": result.ModelEmbedding.model_metadata,
                     "score": 1
                     - result.distance,  # Convert distance to similarity score
+                    "used_interpretation": (
+                        result.ModelEmbedding.interpretation_embedding is not None
+                        and use_interpretation
+                    ),
                 }
-                for result in results
+                for result in combined_results
             ]
         except Exception as e:
             logger.error(f"Error searching models: {e}")

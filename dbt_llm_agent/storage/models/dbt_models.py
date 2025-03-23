@@ -16,7 +16,9 @@ class ModelTable(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, unique=True, nullable=False, index=True)
     path = Column(String, nullable=False)
-    description = Column(Text, nullable=True)
+    yml_description = Column(
+        Text, nullable=True, comment="Description from YML documentation"
+    )
     schema = Column(String, nullable=True)
     database = Column(String, nullable=True)
     materialization = Column(String, nullable=True)
@@ -24,10 +26,15 @@ class ModelTable(Base):
     depends_on = Column(JSONB, nullable=True)
     tests = Column(JSONB, nullable=True)
     all_upstream_models = Column(JSONB, nullable=True)
-    columns = Column(JSONB, nullable=True)  # Add columns directly to the model table
+    yml_columns = Column(JSONB, nullable=True, comment="Columns from YML documentation")
     meta = Column(JSONB, nullable=True)
     raw_sql = Column(Text, nullable=True)
-    documentation = Column(Text, nullable=True)
+    interpretation = Column(
+        Text, nullable=True, comment="LLM-generated interpretation of the model"
+    )
+    interpreted_columns = Column(
+        JSONB, nullable=True, comment="LLM-interpreted column descriptions"
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

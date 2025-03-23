@@ -47,6 +47,10 @@ def setup_logging(log_level: str = None, log_file: str = None) -> None:
         log_level: Logging level
         log_file: Path to the log file
     """
+    # Check if logging has already been configured
+    if hasattr(setup_logging, "configured") and setup_logging.configured:
+        return
+
     # Get log level from environment or use default
     log_level = log_level or os.environ.get(
         "DBT_LLM_AGENT_LOG_LEVEL", DEFAULT_LOG_LEVEL
@@ -61,8 +65,8 @@ def setup_logging(log_level: str = None, log_file: str = None) -> None:
     os.makedirs(os.path.dirname(log_file), exist_ok=True)
 
     # Format with more whitespace between identifier and message
-    colored_format = "%(asctime)s - %(name)s   -   %(levelname)s   -   %(message)s"
-    standard_format = DEFAULT_LOG_FORMAT
+    colored_format = "%(asctime)s - %(levelname)s   -   %(name)s   -   %(message)s"
+    standard_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
 
     # Configure logging
     logging.config.dictConfig(
@@ -105,6 +109,9 @@ def setup_logging(log_level: str = None, log_file: str = None) -> None:
             },
         }
     )
+
+    # Mark as configured
+    setup_logging.configured = True
 
     # Log configuration
     logging.info(f"Logging configured with level {log_level}")

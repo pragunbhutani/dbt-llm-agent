@@ -30,8 +30,8 @@ class DBTModel:
     """Representation of a dbt model."""
 
     name: str
-    description: str = ""
-    columns: Dict[str, Column] = field(default_factory=dict)
+    description: str = ""  # From YML
+    columns: Dict[str, Column] = field(default_factory=dict)  # From YML
     tests: List[Test] = field(default_factory=list)
     schema: str = ""
     database: str = ""
@@ -46,7 +46,11 @@ class DBTModel:
     all_upstream_models: List[str] = field(default_factory=list)
     path: str = ""
     unique_id: str = ""
-    documentation: str = ""
+    documentation: str = ""  # Original documentation
+    interpretation: str = ""  # LLM-generated interpretation
+    interpreted_columns: Dict[str, str] = field(
+        default_factory=dict
+    )  # LLM-interpreted column descriptions
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert the model to a dictionary.
@@ -70,6 +74,8 @@ class DBTModel:
             "path": self.path,
             "unique_id": self.unique_id,
             "documentation": self.documentation,
+            "interpretation": self.interpretation,
+            "interpreted_columns": self.interpreted_columns,
         }
 
     def get_column_descriptions(self) -> Dict[str, str]:
@@ -87,7 +93,15 @@ class DBTModel:
             A readable representation of the model
         """
         representation = f"Model: {self.name}\n"
-        representation += f"Description: {self.description or 'No description'}\n"
+        representation += (
+            f"Description (YML): {self.description or 'No YML description'}\n"
+        )
+
+        if self.interpretation:
+            representation += f"Interpretation (LLM): Available\n"
+        else:
+            representation += f"Interpretation (LLM): Not available\n"
+
         representation += f"Path: {self.path}\n"
         representation += f"Schema: {self.schema}\n"
         representation += f"Database: {self.database}\n"
@@ -99,20 +113,21 @@ class DBTModel:
         if self.depends_on:
             representation += f"Depends on (via ref): {', '.join(self.depends_on)}\n"
 
-        if hasattr(self, "all_upstream_models") and self.all_upstream_models:
-            representation += (
-                f"All upstream models: {', '.join(self.all_upstream_models)}\n"
-            )
-
+        # Add columns from YML
         if self.columns:
-            representation += "Columns:\n"
-            for column_name, column in self.columns.items():
-                description = column.description or "No description"
-                data_type = column.data_type or "Unknown type"
-                representation += f"  - {column_name} ({data_type}): {description}\n"
+            representation += (
+                f"\nColumns from YML documentation ({len(self.columns)}):\n"
+            )
+            for name, col in self.columns.items():
+                representation += f"- {name}: {col.description or 'No description'}\n"
 
-        if self.raw_sql:
-            representation += f"\nSQL:\n{self.raw_sql}\n"
+        # Add interpreted columns
+        if self.interpreted_columns:
+            representation += (
+                f"\nInterpreted columns from LLM ({len(self.interpreted_columns)}):\n"
+            )
+            for name, description in self.interpreted_columns.items():
+                representation += f"- {name}: {description}\n"
 
         return representation
 

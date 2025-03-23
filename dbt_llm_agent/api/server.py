@@ -71,6 +71,17 @@ class DocumentationResponse(BaseModel):
     error: Optional[str] = None
 
 
+class InterpretModelRequest(BaseModel):
+    model_name: str
+
+
+class InterpretModelResponse(BaseModel):
+    model_name: str
+    yaml_documentation: str
+    success: bool
+    error: Optional[str] = None
+
+
 class ParseProjectRequest(BaseModel):
     project_path: str
     force: bool = False
@@ -235,11 +246,19 @@ async def generate_documentation(
 ):
     """Generate documentation for a model."""
     try:
+        # Call the agent to generate documentation
         result = agent.generate_documentation(request.model_name)
+
+        # Write the documentation to a temporary file for later use
+        with open(f"temp_docs_{request.model_name}.yml", "w") as f:
+            f.write(result.get("full_documentation", ""))
+
         return result
     except Exception as e:
         logger.error(f"Error generating documentation: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Error generating documentation: {str(e)}"
+        )
 
 
 @app.post("/documentation/{model_name}/save")
@@ -273,6 +292,147 @@ async def save_documentation(model_name: str, agent: DBTAgent = Depends(get_agen
     except Exception as e:
         logger.error(f"Error saving documentation: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/documentation/{model_name}/save-yaml")
+async def save_yaml_documentation(
+    model_name: str, agent: DBTAgent = Depends(get_agent)
+):
+    """Save YAML documentation for a model from a temporary file."""
+    try:
+        # Get the current documentation in memory
+        temp_path = f"temp_docs_{model_name}.yml"
+        if not os.path.exists(temp_path):
+            raise HTTPException(
+                status_code=404,
+                detail=f"No temporary documentation found for model {model_name}",
+            )
+
+        with open(temp_path, "r") as f:
+            documentation_content = f.read()
+
+        # Parse the documentation
+        import yaml
+
+        try:
+            yaml_content = yaml.safe_load(documentation_content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid YAML format: {str(e)}"
+            )
+
+        # Find the model definition
+        model_def = None
+        for model in yaml_content.get("models", []):
+            if model.get("name") == model_name:
+                model_def = model
+                break
+
+        if not model_def:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {model_name} not found in the YAML documentation",
+            )
+
+        # Extract model documentation
+        model_description = model_def.get("description", "")
+        column_descriptions = {}
+        for column in model_def.get("columns", []):
+            column_name = column.get("name")
+            column_description = column.get("description", "")
+            column_descriptions[column_name] = column_description
+
+        # Update model in database
+        success = agent.update_model_documentation(
+            model_name,
+            {
+                "model_description": model_description,
+                "column_descriptions": column_descriptions,
+            },
+        )
+
+        # Remove temporary file
+        os.remove(temp_path)
+
+        if success:
+            return {"success": True, "message": "Documentation saved successfully"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save documentation")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving documentation: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error saving documentation: {str(e)}"
+        )
+
+
+@app.post("/interpret", response_model=InterpretModelResponse)
+async def interpret_model(
+    request: InterpretModelRequest, agent: DBTAgent = Depends(get_agent)
+):
+    """Interpret a model and generate documentation for it."""
+    try:
+        # Validate model existence
+        model = agent.postgres.get_model(request.model_name)
+        if not model:
+            raise HTTPException(
+                status_code=404, detail=f"Model {request.model_name} not found"
+            )
+
+        # Call the agent to interpret the model
+        result = agent.interpret_model(request.model_name)
+
+        # Handle errors
+        if "error" in result:
+            raise HTTPException(status_code=500, detail=result["error"])
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error interpreting model: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error interpreting model: {str(e)}"
+        )
+
+
+@app.post("/interpret/{model_name}/save")
+async def save_interpreted_documentation(
+    model_name: str, request: Dict[str, str], agent: DBTAgent = Depends(get_agent)
+):
+    """Save interpreted documentation for a model."""
+    try:
+        if "yaml_documentation" not in request:
+            raise HTTPException(
+                status_code=400, detail="Missing 'yaml_documentation' field in request"
+            )
+
+        yaml_documentation = request["yaml_documentation"]
+
+        # Call the agent to save the interpreted documentation
+        result = agent.save_interpreted_documentation(model_name, yaml_documentation)
+
+        if not result["success"]:
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("error", "Failed to save interpreted documentation"),
+            )
+
+        return {
+            "success": True,
+            "message": "Interpreted documentation saved successfully",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error saving interpreted documentation: {e}")
+        raise HTTPException(
+            status_code=500, detail=f"Error saving interpreted documentation: {str(e)}"
+        )
 
 
 @app.post("/parse", response_model=ParseProjectResponse)

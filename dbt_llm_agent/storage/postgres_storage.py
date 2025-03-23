@@ -34,12 +34,54 @@ class PostgresStorage:
         # Create tables if they don't exist
         self._create_tables()
 
+        # Note: Migrations are no longer automatically applied in constructor
+        # Call apply_migrations() explicitly when needed
+
         logger.info("Initialized PostgreSQL storage")
 
     def _create_tables(self):
         """Create the necessary tables if they don't exist."""
         Base.metadata.create_all(self.engine)
         logger.info("Created model storage tables")
+
+    def apply_migrations(self):
+        """Apply database migrations using Alembic.
+
+        This method should be called explicitly when migrations are needed,
+        typically only from the migrate or init_db commands.
+        """
+        try:
+            import os
+            from alembic.config import Config
+            from alembic import command
+            from dbt_llm_agent.utils.logging import get_logger
+
+            # Get logger
+            logger = get_logger("alembic")
+
+            # Set environment variable for database URL
+            os.environ["POSTGRES_URI"] = str(self.engine.url)
+
+            # Get the project root directory
+            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            alembic_cfg = Config(os.path.join(root_dir, "alembic.ini"))
+
+            # Apply migrations
+            command.upgrade(alembic_cfg, "head")
+            logger.info("Applied database migrations")
+            return True
+        except Exception as e:
+            logger.warning(f"Error applying migrations: {str(e)}")
+            logger.warning("Some schema updates may not have been applied")
+            return False
+
+    # Keeping the old method as deprecated for backward compatibility
+    def _apply_migrations(self):
+        """
+        Deprecated: Use apply_migrations() method instead.
+        This method remains for backward compatibility.
+        """
+        return self.apply_migrations()
 
     def store_model(self, model: DBTModel, force: bool = False) -> int:
         """Store a DBT model in the database.
@@ -62,30 +104,53 @@ class PostgresStorage:
                 logger.debug(f"Model {model.name} already exists, skipping")
                 return existing.id
 
+            # Helper function to safely extract test attributes
+            def safe_test_to_dict(test):
+                """Convert a test object or dict to a standardized dict format."""
+                if isinstance(test, dict):
+                    # If it's already a dict, ensure it has the necessary keys
+                    return {
+                        "name": test.get("name", ""),
+                        "column_name": test.get("column_name", ""),
+                        "test_type": test.get("test_type", ""),
+                        "unique_id": test.get("unique_id", ""),
+                        "meta": test.get("meta", {}),
+                    }
+                else:
+                    # If it's an object with attributes, extract them
+                    return {
+                        "name": getattr(test, "name", ""),
+                        "column_name": getattr(test, "column_name", ""),
+                        "test_type": getattr(test, "test_type", ""),
+                        "unique_id": getattr(test, "unique_id", ""),
+                        "meta": getattr(test, "meta", {}),
+                    }
+
             # Prepare model data
             model_data = {
                 "name": model.name,
                 "path": model.path,
-                "description": model.description,
+                "yml_description": model.description,
                 "schema": model.schema,
                 "database": model.database,
                 "materialization": model.materialization,
                 "tags": model.tags,
                 "depends_on": model.depends_on,
-                "tests": [vars(test) for test in model.tests],
+                "tests": [safe_test_to_dict(test) for test in model.tests],
                 "all_upstream_models": model.all_upstream_models,
                 "meta": model.meta,
                 "raw_sql": model.raw_sql,
-                "documentation": model.documentation,
-                "columns": (
+                "interpretation": model.interpretation,
+                "interpreted_columns": model.interpreted_columns,
+                "yml_columns": (
                     {
-                        col.name: {
+                        col_name: {
                             "name": col.name,
                             "description": col.description,
                             "data_type": col.data_type,
                             "meta": col.meta,
                         }
-                        for col in model.columns.values()
+                        for col_name, col in model.columns.items()
                     }
                     if model.columns
                     else None
@@ -168,34 +233,55 @@ class PostgresStorage:
         Returns:
             The converted DBTModel
         """
-        from dbt_llm_agent.core.models import DBTModel, Column
+        from dbt_llm_agent.core.models import DBTModel, Column, Test
 
         # Convert columns to DBTColumn
         columns = {}
-        if model_record.columns:
-            for col_name, col_data in model_record.columns.items():
+        if model_record.yml_columns:
+            for col_name, col_data in model_record.yml_columns.items():
                 columns[col_name] = Column(
                     name=col_data["name"],
-                    description=col_data.get("description"),
-                    data_type=col_data.get("data_type"),
+                    description=col_data.get("description", ""),
+                    data_type=col_data.get("data_type", ""),
                     meta=col_data.get("meta", {}),
                 )
+
+        # Convert tests to Test objects
+        tests = []
+        if model_record.tests:
+            for test_data in model_record.tests:
+                # Create Test object from the test data
+                test = Test(
+                    name=test_data.get("name", ""),
+                    column_name=test_data.get("column_name", ""),
+                    test_type=test_data.get("test_type", ""),
+                    unique_id=test_data.get("unique_id", ""),
+                    meta=test_data.get("meta", {}),
+                )
+                tests.append(test)
+
+        # Get interpreted columns
+        interpreted_columns = {}
+        if model_record.interpreted_columns:
+            interpreted_columns = model_record.interpreted_columns
 
         # Create DBTModel
         model = DBTModel(
             name=model_record.name,
             path=model_record.path,
-            description=model_record.description,
+            description=model_record.yml_description,
             schema=model_record.schema,
             database=model_record.database,
             materialization=model_record.materialization,
             tags=model_record.tags or [],
             depends_on=model_record.depends_on or [],
-            tests=model_record.tests or [],
+            tests=tests,  # Use the converted Test objects
             all_upstream_models=model_record.all_upstream_models or [],
             meta=model_record.meta or {},
             raw_sql=model_record.raw_sql,
-            documentation=model_record.documentation,
+            documentation="",  # Set a default empty string since field was removed
+            interpretation=model_record.interpretation,
+            interpreted_columns=interpreted_columns,
             columns=columns,
         )
 
