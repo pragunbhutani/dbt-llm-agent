@@ -13,7 +13,6 @@ from dbt_llm_agent.commands.questions_cmd import questions
 from dbt_llm_agent.commands.feedback_cmd import feedback
 from dbt_llm_agent.commands.db_cmd import migrate, init_db
 from dbt_llm_agent.commands.version_cmd import version
-from dbt_llm_agent.commands.utils import format_model_as_yaml
 
 __all__ = [
     "parse",
@@ -27,5 +26,4 @@ __all__ = [
     "migrate",
     "init_db",
     "version",
-    "format_model_as_yaml",
 ]

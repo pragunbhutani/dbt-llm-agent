@@ -7,10 +7,11 @@ import logging
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import (
+from dbt_llm_agent.utils.cli_utils import (
     get_env_var,
     set_logging_level,
-    get_config_value,
+    load_dotenv_once,
+    colored_echo,
 )
 
 # Initialize logger
@@ -49,20 +50,7 @@ def ask(
     """
     try:
         # Set logging level based on verbosity
-        if verbose:
-            logging.basicConfig(level=logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
-
-        # Load environment variables from .env file (if not already loaded)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-            logger.info("Loaded environment variables from .env file")
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
+        set_logging_level(verbose)
 
         # Import necessary modules
         from dbt_llm_agent.storage.postgres_storage import PostgresStorage

@@ -6,11 +6,10 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import (
+from dbt_llm_agent.utils.cli_utils import (
     get_env_var,
     set_logging_level,
     colored_echo,
-    format_model_as_yaml,
 )
 
 # Initialize logger
@@ -68,7 +67,7 @@ def model_details(model_name, postgres_uri, yaml, sql, verbose):
                 )
         elif yaml:
             # Format model as dbt YAML document
-            yaml_output = format_model_as_yaml(model)
+            yaml_output = model.format_as_yaml()
             colored_echo(yaml_output, color="INFO")
         else:
             # Show readable representation

@@ -159,6 +159,83 @@ class DBTModel:
 
         return info
 
+    def format_as_yaml(self) -> str:
+        """Format the model as a dbt YAML document.
+
+        Returns:
+            A string containing the YAML document
+        """
+        # Start the YAML document
+        yaml_lines = ["version: 2", "", "models:", f"  - name: {self.name}"]
+
+        # Add description
+        description = (
+            self.interpreted_description
+            if self.interpreted_description
+            else self.description
+        )
+        if description:
+            # Indent multiline descriptions correctly
+            formatted_desc = description.replace("\n", "\n      ")
+            yaml_lines.append(f"    description: >\n      {formatted_desc}")
+
+        # Add model metadata
+        if self.schema:
+            yaml_lines.append(f"    schema: {self.schema}")
+
+        if self.database:
+            yaml_lines.append(f"    database: {self.database}")
+
+        if self.materialization:
+            yaml_lines.append(f"    config:")
+            yaml_lines.append(f"      materialized: {self.materialization}")
+
+        if self.tags:
+            yaml_lines.append(f"    tags: [{', '.join(self.tags)}]")
+
+        # Add column specifications
+        if self.columns or self.interpreted_columns:
+            yaml_lines.append("    columns:")
+
+            # First try to use YML columns with their full specs
+            if self.columns:
+                for col_name, col in self.columns.items():
+                    yaml_lines.append(f"      - name: {col_name}")
+                    if col.description:
+                        # Indent multiline descriptions correctly
+                        col_desc = col.description.replace("\n", "\n          ")
+                        yaml_lines.append(
+                            f"        description: >\n          {col_desc}"
+                        )
+                    if col.data_type:
+                        yaml_lines.append(f"        data_type: {col.data_type}")
+            # Fall back to interpreted columns if available
+            elif self.interpreted_columns:
+                for col_name, description in self.interpreted_columns.items():
+                    yaml_lines.append(f"      - name: {col_name}")
+                    # Indent multiline descriptions correctly
+                    col_desc = description.replace("\n", "\n          ")
+                    yaml_lines.append(f"        description: >\n          {col_desc}")
+
+        # Add tests if available
+        if self.tests:
+            test_lines = []
+            for test in self.tests:
+                if test.column_name:
+                    # This is a column-level test, which should go under the column definition
+                    continue
+                else:
+                    # This is a model-level test
+                    test_name = test.test_type or test.name
+                    if test_name:
+                        test_lines.append(f"      - {test_name}")
+
+            if test_lines:
+                yaml_lines.append("    tests:")
+                yaml_lines.extend(test_lines)
+
+        return "\n".join(yaml_lines)
+
 
 @dataclass
 class DBTProject:

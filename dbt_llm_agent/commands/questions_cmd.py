@@ -6,7 +6,7 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import get_env_var, colored_echo
+from dbt_llm_agent.utils.cli_utils import get_env_var, colored_echo
 
 # Initialize logger
 logger = get_logger(__name__)

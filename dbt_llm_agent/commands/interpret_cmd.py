@@ -6,7 +6,7 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import (
+from dbt_llm_agent.utils.cli_utils import (
     get_env_var,
     set_logging_level,
     get_config_value,

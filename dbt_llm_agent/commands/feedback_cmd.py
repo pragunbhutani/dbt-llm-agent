@@ -6,7 +6,7 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import get_env_var, colored_echo
+from dbt_llm_agent.utils.cli_utils import get_env_var, colored_echo
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -22,16 +22,6 @@ def feedback(question_id, useful, feedback, postgres_uri):
     Provide feedback on an answer.
     """
     try:
-        # Load environment variables from .env file
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
-
         # Import here to avoid circular imports
         from dbt_llm_agent.storage.question_service import QuestionTrackingService
 

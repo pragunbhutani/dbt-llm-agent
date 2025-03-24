@@ -6,8 +6,8 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import (
-    get_config_value,
+from dbt_llm_agent.utils.cli_utils import (
+    get_env_var,
     set_logging_level,
     colored_echo,
 )
@@ -33,7 +33,7 @@ def list_models(select, postgres_uri, verbose):
     set_logging_level(verbose)
 
     if not postgres_uri:
-        postgres_uri = get_config_value("postgres_uri")
+        postgres_uri = get_env_var("POSTGRES_URI")
 
     if not postgres_uri:
         colored_echo(

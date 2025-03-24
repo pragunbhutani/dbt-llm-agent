@@ -3,7 +3,7 @@ Version command for dbt-llm-agent CLI.
 """
 
 import click
-from dbt_llm_agent.commands.utils import colored_echo
+from dbt_llm_agent.utils.cli_utils import colored_echo
 
 
 @click.command()

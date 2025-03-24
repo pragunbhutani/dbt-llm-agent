@@ -6,7 +6,7 @@ import click
 import sys
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.commands.utils import get_config_value, set_logging_level
+from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
 
 # Initialize logger
 logger = get_logger(__name__)
