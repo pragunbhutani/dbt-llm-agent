@@ -1,114 +1,208 @@
-# dbt-llm-tools aka. ragstar
+# dbt-llm-agent
 
-**LLM-based tools for dbt projects**
+An LLM-powered agent for interacting with dbt projects.
 
-dbt-llm-tools, also known as ragstar, provides a suite of tools powered by Large Language Models (LLMs) to enhance your dbt project workflow. It allows you to ask questions about your data and generate documentation for your models.
+## Features
 
-**Here is a quick demo of how the Chatbot works:**
+- **Question Answering**: Ask questions about your dbt project in natural language
+- **Documentation Generation**: Automatically generate documentation for missing models
+- **Slack Integration**: Ask questions and receive answers directly in Slack
+- **FastAPI Server**: Interact with the agent programmatically via REST API
+- **Postgres with pgvector**: Store model embeddings in Postgres using pgvector (supports Supabase)
+- **dbt Model Selection**: Use dbt's model selection syntax to specify which models to work with
+- **Question Tracking**: Track questions, answers, and feedback for continuous improvement
 
-https://www.loom.com/share/abb0612c4e884d4cb8fabc22af964e7e?sid=f5f8c0e6-51f5-4afc-a7bf-51e9e182c2e7
+## Architecture
 
-### Key functionalities
+The agent uses a combination of:
 
-* **Chatbot:** Ask questions about your data directly using the chatbot. It leverages your dbt model documentation to provide insightful answers.
-* **Documentation Generator:** Generate comprehensive documentation for your dbt models, including descriptions and lineage information.
+- **dbt Project Parsing**: Extract information from your dbt project including models, sources, and documentation
+- **PostgreSQL with pgvector**: Store both structured metadata and vector embeddings for semantic search
+- **Model Selection**: Selectively parse and embed models using dbt's selection syntax
+- **LLM Integration**: Use large language models (like GPT-4) to generate responses and documentation
+- **Question Tracking**: Store a history of questions, answers, and user feedback
 
+## Installation
 
-### Getting Started
+### Prerequisites
 
-To install `dbt-llm-tools` with the UI:
+- **Python 3.10+**
+- **Poetry** for dependency management (install from [Poetry's documentation](https://python-poetry.org/docs/#installation))
+- **PostgreSQL 13+** with the [pgvector](https://github.com/pgvector/pgvector) extension
+- **OpenAI API key** (or compatible API)
+- **dbt project**
+
+### Key Environment Variables
+
+```bash
+# Required
+OPENAI_API_KEY=your_openai_api_key
+POSTGRES_URI=postgresql://user:password@localhost:5432/dbt_llm_agent
+DBT_PROJECT_PATH=/path/to/your/dbt/project
+
+# Optional - for Slack integration
+SLACK_BOT_TOKEN=your_slack_bot_token
+SLACK_SIGNING_SECRET=your_slack_signing_secret
+```
+
+### Setup
 
 1. Clone the repository:
+
    ```bash
-   gh repo clone pragunbhutani/dbt-llm-tools
-   ```
-2. Navigate to the project directory:
-   ```bash
-   cd dbt-llm-tools
-   ```
-3. Install Poetry:
-   ```bash
-   make poetry
-   ```
-   - Add the poetry executable to your PATH and refresh the terminal.
-4. Install the project dependencies:
-   ```bash
-   make install
-   ```
-5. Install an example project (optional):
-   ```bash
-   make fetch_example_project
-   ```
-6. Run the UI:
-   ```bash
-   make run_client
+   git clone https://github.com/yourusername/dbt-llm-agent.git
+   cd dbt-llm-agent
    ```
 
-This will launch the client in your browser at `http://localhost:8501/app`.
+2. Install dependencies with Poetry:
 
-**Note:** An OpenAI API key is required to use the tools.
+   ```bash
+   poetry install
+   ```
 
-### Documentation
+3. Create a `.env` file with your configuration (see environment variables above)
 
-For detailed instructions and API reference, refer to the official documentation: [https://dbt-llm-tools.readthedocs.io/en/latest/](https://dbt-llm-tools.readthedocs.io/en/latest/)
+4. Initialize the database:
 
-### Classes
+   ```bash
+   poetry run dbt-llm-agent migrate
+   ```
 
-* **Chatbot:**
-  - Loads your dbt project information and creates a local vector store.
-  - Allows you to ask questions about your data.
-  - Retrieves relevant models and utilizes ChatGPT to generate responses.
-  - Currently supports OpenAI ChatGPT models.
+## Usage
 
-```python
-from dbt_llm_tools import Chatbot
+### Command Line
 
-# Instantiate a chatbot object
-chatbot = Chatbot(
-	dbt_project_root='/path/to/dbt/project',
-	openai_api_key='YOUR_OPENAI_API_KEY',
-)
+```bash
+# Parse a dbt project (without embedding)
+poetry run dbt-llm-agent parse /path/to/your/dbt/project
 
-# Step 1. Load models information from your dbt ymls into a local vector store
-chatbot.load_models()
+# Parse specific models using dbt selection syntax
+poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing,+downstream_model"
 
-# Step 2. Ask the chatbot a question
-response = chatbot.ask_question(
-	'How can I obtain the number of customers who upgraded to a paid plan in the last 3 months?'
-)
-print(response)
+# Embed specific models in vector database
+poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
+
+# Interpret a single model and generate documentation
+poetry run dbt-llm-agent interpret customer_orders
+
+# Interpret multiple models using dbt selector syntax
+poetry run dbt-llm-agent interpret --select "tag:marketing"
+
+# Interpret and embed in one step
+poetry run dbt-llm-agent interpret customer_orders --embed
+
+# Run database migrations
+poetry run dbt-llm-agent migrate --verbose
+
+# Drop old columns after migration (use with caution)
+poetry run dbt-llm-agent migrate --drop-old-columns
+
+# Ask a question
+poetry run dbt-llm-agent ask "What does the model customer_orders do?"
+
+# Provide feedback on an answer
+poetry run dbt-llm-agent feedback 123 --useful=true --feedback="The answer was clear and helpful"
+
+# List past questions and answers
+poetry run dbt-llm-agent questions --limit=20 --useful=true
+
+# Start the API server
+poetry run dbt-llm-agent api
+
+# Start the Slack bot
+poetry run dbt-llm-agent slack
 ```
 
-* **Documentation Generator:**
-  - Generates documentation for your dbt models and their dependencies.
-  - Requires your OpenAI API key.
+### Model Selection Syntax
 
-```python
-from dbt_llm_tools import DocumentationGenerator
+The agent supports dbt's model selection syntax:
 
-# Instantiate a Documentation Generator object
-doc_gen = DocumentationGenerator(
-	dbt_project_root="YOUR_DBT_PROJECT_PATH",
-	openai_api_key="YOUR_OPENAI_API_KEY",
-)
+- `*` - Select all models
+- `model_name` - Select a specific model
+- `+model_name` - Select a model and all its children (downstream dependencies)
+- `@model_name` - Select a model and all its parents (upstream dependencies)
+- `tag:marketing` - Select all models with the tag "marketing"
+- `config.materialized:table` - Select all models materialized as tables
+- `path/to/models` - Select models in a specific path
+- `!model_name` - Exclude a specific model
 
-# Generate documentation for a model and all its upstream models
-doc_gen.generate_documentation(
-	model_name='dbt_model_name',
-	write_documentation_to_yaml=False
-)
+You can combine selectors with commas, e.g. `tag:marketing,+downstream_model`.
+
+### API Usage
+
+The agent provides a REST API for programmatic usage:
+
+```bash
+# Start the API server
+poetry run dbt-llm-agent api
 ```
 
-#### How it works
+#### Endpoints:
 
-The Chatbot is based on the concept of Retrieval Augmented Generation and basically works as follows:
+- `POST /ask` - Ask a question
+- `POST /embed` - Embed specific models
+- `POST /questions/{question_id}/feedback` - Provide feedback on an answer
+- `GET /questions` - List past questions and answers
 
-- When you call the `chatbot.load_models()` method, the bot scans all the folders in the locations specified by you for dbt YML files.
-- It then converts all the models into a text description, which are stored as embeddings in a vector database. The bot currently only supports [ChromaDB](https://www.trychroma.com/) as a vector db, which is persisted in a file on your local machine.
-- When you ask a query, it fetches 3 models whose description is found to be the most relevant for your query.
-- These models are then fed into ChatGPT as a prompt, along with some basic instructions and your question.
-- The response is returned to you as a string.
+### Database Schema Migrations
 
-## Partners
+The database schema may evolve with new releases. To update your existing database:
 
-* [JIIT's Open Source Developers Community](https://github.com/osdc)
+```bash
+# Run migrations to add new columns
+poetry run dbt-llm-agent migrate
+
+# Use verbose mode to see detailed migration logs
+poetry run dbt-llm-agent migrate --verbose
+
+# Optionally drop old columns after migration (use with caution)
+poetry run dbt-llm-agent migrate --drop-old-columns
+```
+
+Migrations will automatically run when the application starts, but you can also run them manually if needed.
+
+## Development
+
+### Project Structure
+
+```
+dbt_llm_agent/
+├── api/                   # API server implementation
+├── commands/              # CLI command implementations
+├── core/                  # Core functionality
+├── integrations/          # External integrations (Slack, etc.)
+├── storage/              # Storage implementations
+├── utils/                # Utility functions
+├── cli.py                # Command line interface
+└── __init__.py           # Package initialization
+```
+
+### Testing
+
+```bash
+# Run tests
+poetry run pytest
+
+# Run tests with coverage
+poetry run pytest --cov=dbt_llm_agent
+```
+
+### Code Quality
+
+The project uses several tools for code quality:
+
+```bash
+# Format code
+poetry run black .
+poetry run isort .
+
+# Type checking
+poetry run mypy .
+
+# Linting
+poetry run ruff check .
+```
+
+## License
+
+MIT
