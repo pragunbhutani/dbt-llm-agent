@@ -54,19 +54,23 @@ def questions(limit, offset, useful, postgres_uri):
             limit=limit, offset=offset, was_useful=useful
         )
 
+        print("\n")
+
         if not questions:
             colored_echo("No questions found", color="WARNING")
             return 0
 
-        colored_echo(f"Found {len(questions)} questions:", color="INFO", bold=True)
+        colored_echo(f"Found {len(questions)} questions:\n", color="INFO", bold=True)
         for q in questions:
             colored_echo(f"\nID: {q['id']}", color="INFO", bold=True)
             colored_echo(f"Question: {q['question_text']}", color="INFO")
-            colored_echo(f"Answer: {q['answer_text'][:100]}...", color="DEBUG")
+            colored_echo(f"Answer: {q['answer_text']}", color="DEBUG")
             # Use different colors based on usefulness
             usefulness_color = "INFO" if q["was_useful"] else "WARNING"
             colored_echo(f"Was useful: {q['was_useful']}", color=usefulness_color)
-            colored_echo(f"Models: {', '.join(q['models'])}", color="DEBUG")
+            # Get model names from the dictionary
+            model_names = [m["name"] for m in q["models"]]
+            colored_echo(f"Models: {', '.join(model_names)}", color="DEBUG")
             colored_echo(f"Created at: {q['created_at']}", color="DEBUG")
 
         return 0
