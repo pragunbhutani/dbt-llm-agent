@@ -42,7 +42,4 @@ ENV/
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
-
-# Chainlit
-.chainlit/config.toml 
+Thumbs.db 
