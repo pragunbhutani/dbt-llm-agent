@@ -1,34 +1,42 @@
-"""FastAPI server for dbt-llm-agent."""
+"""FastAPI server for the dbt-llm-agent."""
 
 import os
+import tempfile
+import json
+import shutil
 import logging
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Callable, Union
+from pathlib import Path
 
+import uvicorn
 from fastapi import (
     FastAPI,
     Depends,
     HTTPException,
-    BackgroundTasks,
     File,
     UploadFile,
-    Query,
+    BackgroundTasks,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-import uvicorn
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-import tempfile
-import shutil
 
-from dbt_llm_agent.core.dbt_parser import DBTProjectParser
+# Import agent
 from dbt_llm_agent.core.agent import DBTAgent
+from dbt_llm_agent.core.dbt_parser import DBTProjectParser
 from dbt_llm_agent.storage.postgres_storage import PostgresStorage
 from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-from dbt_llm_agent.utils.config import load_config, save_config
 from dbt_llm_agent.storage.question_service import QuestionTrackingService
 from dbt_llm_agent.utils.model_selector import ModelSelector
+from dbt_llm_agent.utils.config import load_config
+from dbt_llm_agent.utils.cli_utils import load_dotenv_once
 
+# Set up logging
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv_once()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -92,18 +100,6 @@ class ParseProjectResponse(BaseModel):
     models_count: int
     models: List[str] = Field(default_factory=list)
     error: Optional[str] = None
-
-
-class ConfigUpdateRequest(BaseModel):
-    openai_api_key: Optional[str] = None
-    openai_model: Optional[str] = None
-    temperature: Optional[float] = None
-    postgres_uri: Optional[str] = None
-    vector_db_path: Optional[str] = None
-    dbt_project_path: Optional[str] = None
-    slack_bot_token: Optional[str] = None
-    slack_app_token: Optional[str] = None
-    slack_signing_secret: Optional[str] = None
 
 
 class ConfigResponse(BaseModel):
@@ -464,11 +460,6 @@ async def parse_project(
         }
         agent.vector_store.store_models(model_texts)
 
-        # Update configuration with the project path
-        config = load_config()
-        config["dbt_project_path"] = os.path.abspath(request.project_path)
-        save_config(config)
-
         # Get model names
         model_names = list(project.models.keys())
 
@@ -570,21 +561,6 @@ async def get_config():
     except Exception as e:
         logger.error(f"Error getting configuration: {e}")
         return {"success": False, "message": str(e), "config": {}}
-
-
-@app.post("/config", response_model=ConfigResponse)
-async def update_config(request: ConfigUpdateRequest):
-    """Update the configuration (DEPRECATED)."""
-    logger.warning(
-        "Configuration updates via API are no longer supported. "
-        "Update your .env file directly."
-    )
-
-    return {
-        "success": False,
-        "message": "Configuration updates via API are no longer supported. Update your .env file directly.",
-        "config": {},
-    }
 
 
 @app.get("/models", response_model=ModelListResponse)

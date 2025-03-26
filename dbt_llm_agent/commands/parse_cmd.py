@@ -12,6 +12,7 @@ from dbt_llm_agent.utils.cli_utils import (
     get_env_var,
     colored_echo,
     set_logging_level,
+    load_dotenv_once,
 )
 
 # Initialize logger
@@ -42,15 +43,7 @@ def parse(project_path, select, force, verbose):
             logger.setLevel(logging.DEBUG)
 
         # Load environment variables from .env file (if not already loaded)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-            logger.info("Loaded environment variables from .env file")
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
+        load_dotenv_once()
 
         # Normalize and validate project path
         project_path = pathlib.Path(project_path).resolve()

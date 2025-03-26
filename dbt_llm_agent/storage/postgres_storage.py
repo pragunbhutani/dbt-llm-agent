@@ -45,43 +45,22 @@ class PostgresStorage:
         logger.info("Created model storage tables")
 
     def apply_migrations(self):
-        """Apply database migrations using Alembic.
+        """Apply database migrations using alembic.
 
-        This method should be called explicitly when migrations are needed,
-        typically only from the migrate or init_db commands.
+        Returns:
+            True if migrations were successful, False otherwise
         """
         try:
-            import os
-            from alembic.config import Config
             from alembic import command
-            from dbt_llm_agent.utils.logging import get_logger
+            from alembic.config import Config
 
-            # Get logger
-            logger = get_logger("alembic")
-
-            # Set environment variable for database URL
-            os.environ["POSTGRES_URI"] = str(self.engine.url)
-
-            # Get the project root directory
-            root_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
-            alembic_cfg = Config(os.path.join(root_dir, "alembic.ini"))
-
-            # Apply migrations
+            alembic_cfg = Config("alembic.ini")
             command.upgrade(alembic_cfg, "head")
-            logger.info("Applied database migrations")
+            logger.info("Database migrations applied successfully")
             return True
         except Exception as e:
-            logger.warning(f"Error applying migrations: {str(e)}")
-            logger.warning("Some schema updates may not have been applied")
+            logger.error(f"Error applying migrations: {e}")
             return False
-
-    # Keeping the old method as deprecated for backward compatibility
-    def _apply_migrations(self):
-        """
-        Deprecated: Use apply_migrations() method instead.
-        This method remains for backward compatibility.
-        """
-        return self.apply_migrations()
 
     def store_model(self, model: DBTModel, force: bool = False) -> int:
         """Store a DBT model in the database.

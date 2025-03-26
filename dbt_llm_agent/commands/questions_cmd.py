@@ -4,9 +4,16 @@ Questions command for dbt-llm-agent CLI.
 
 import click
 import sys
+import json as json_lib
+import logging
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.utils.cli_utils import get_env_var, colored_echo
+from dbt_llm_agent.utils.cli_utils import (
+    get_env_var,
+    colored_echo,
+    set_logging_level,
+    load_dotenv_once,
+)
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -21,33 +28,27 @@ def questions(verbose, limit, json):
 
     This command shows the history of questions asked and their answers.
     """
-    set_logging_level(verbose)
-
-    # Import here to avoid circular imports
-    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-
-    # Load configuration from environment
-    postgres_uri = get_env_var("POSTGRES_URI")
-
-    # Validate configuration
-    if not postgres_uri:
-        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
-        sys.exit(1)
-
     try:
+        if verbose:
+            set_logging_level(True)
+
+        # Import here to avoid circular imports
+        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+
+        # Get PostgreSQL URI from environment
+        postgres_uri = get_env_var("POSTGRES_URI")
+        if not postgres_uri:
+            logger.error(
+                "PostgreSQL URI not provided in environment variables (.env file)"
+            )
+            sys.exit(1)
+
         # Initialize storage
         logger.info(f"Connecting to PostgreSQL database")
         postgres = PostgresStorage(postgres_uri)
 
         # Load environment variables from .env file
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
+        load_dotenv_once()
 
         # Import here to avoid circular imports
         from dbt_llm_agent.storage.question_service import QuestionTrackingService
