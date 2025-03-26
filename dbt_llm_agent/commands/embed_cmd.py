@@ -23,7 +23,6 @@ logger = get_logger(__name__)
     required=True,
     help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
 )
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option(
     "--embedding-model", help="Embedding model to use", default="text-embedding-ada-002"
 )
@@ -41,7 +40,6 @@ logger = get_logger(__name__)
 )
 def embed(
     select,
-    postgres_uri,
     embedding_model,
     force,
     verbose,
@@ -69,15 +67,12 @@ def embed(
     from dbt_llm_agent.utils.model_selector import ModelSelector
     from dbt_llm_agent.core.agent import DBTAgent
 
-    # Load configuration
-    if not postgres_uri:
-        postgres_uri = get_env_var("POSTGRES_URI")
+    # Load configuration from environment
+    postgres_uri = get_env_var("POSTGRES_URI")
 
     # Validate configuration
     if not postgres_uri:
-        logger.error(
-            "PostgreSQL URI not provided. Use --postgres-uri or set POSTGRES_URI env var."
-        )
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:

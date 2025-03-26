@@ -4,6 +4,7 @@ Interpret command for dbt-llm-agent CLI.
 
 import click
 import sys
+import os
 
 from dbt_llm_agent.utils.logging import get_logger
 from dbt_llm_agent.utils.cli_utils import (
@@ -17,80 +18,56 @@ logger = get_logger(__name__)
 
 
 @click.command()
-@click.argument("model_name", required=False)
 @click.option(
     "--select",
+    required=True,
     help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
-    default=None,
-)
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-@click.option("--openai-api-key", help="OpenAI API key", envvar="OPENAI_API_KEY")
-@click.option("--openai-model", help="OpenAI model to use", envvar="OPENAI_MODEL")
-@click.option(
-    "--no-save", is_flag=True, help="Don't save the documentation to the database"
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+@click.option("--force", is_flag=True, help="Force reinterpretation of models")
 @click.option(
-    "--embed", is_flag=True, help="Embed the interpretation in the vector store"
+    "--embed", is_flag=True, help="Embed the interpretations after generating"
 )
-def interpret(
-    model_name,
-    select,
-    postgres_uri,
-    openai_api_key,
-    openai_model,
-    no_save,
-    verbose,
-    embed,
-):
-    """Interpret a model and generate documentation for it.
+@click.option("--save-yml", is_flag=True, help="Save interpretation to YAML files")
+@click.option(
+    "--output-dir",
+    help="Directory for saving YAML files",
+    type=click.Path(file_okay=False),
+)
+def interpret(select, verbose, force, embed, save_yml, output_dir):
+    """Interpret dbt models and generate enhanced documentation.
 
-    This command analyzes the SQL code of a model along with its upstream dependencies
-    to generate documentation in YAML format.
+    This command uses LLMs to generate interpretations for each model,
+    extracting high-level descriptions and contextual information about
+    metrics, dimensions, and relationships.
 
-    By default, the documentation is saved to the database. Use --no-save to disable this.
+    Models can be selected using dbt selector syntax (--select),
+    such as 'tag:metrics' or '+model_name'.
 
-    You can interpret a single model by providing MODEL_NAME as an argument
-    or interpret multiple models using the --select option with dbt selector syntax.
+    By default, interpretations are saved to the database. Use --save-yml
+    to also save them to YAML files in your project directory.
     """
+    # Set logging level
     set_logging_level(verbose)
 
-    # Import necessary modules
+    # Import dependencies here to avoid circular imports
     from dbt_llm_agent.storage.postgres_storage import PostgresStorage
     from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-    from dbt_llm_agent.core.agent import DBTAgent
     from dbt_llm_agent.utils.model_selector import ModelSelector
+    from dbt_llm_agent.core.agent import DBTAgent
 
-    # Validate that either model_name or select is provided, but not both
-    if model_name and select:
-        logger.error(
-            "Cannot provide both MODEL_NAME and --select. Please use only one."
-        )
-        sys.exit(1)
-
-    if not model_name and not select:
-        logger.error("Must provide either MODEL_NAME or --select option.")
-        sys.exit(1)
-
-    # Load configuration and override with command line arguments
-    if not postgres_uri:
-        postgres_uri = get_config_value("postgres_uri")
-
-    if not openai_api_key:
-        openai_api_key = get_config_value("openai_api_key")
-
-    if not openai_model:
-        openai_model = get_config_value("openai_model")
-        if not openai_model:
-            openai_model = "gpt-4-turbo"
+    # Load configuration from environment
+    openai_api_key = get_env_var("OPENAI_API_KEY")
+    openai_model = get_env_var("OPENAI_MODEL", "gpt-4-turbo")
+    postgres_uri = get_env_var("POSTGRES_URI")
 
     # Validate configuration
-    if not postgres_uri:
-        logger.error("PostgreSQL URI not provided and not found in config")
+    if not openai_api_key:
+        logger.error("OpenAI API key not provided in environment variables (.env file)")
         sys.exit(1)
 
-    if not openai_api_key:
-        logger.error("OpenAI API key not provided and not found in config")
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
@@ -159,36 +136,51 @@ def interpret(
                 logger.info(f"Generated YAML Documentation for {current_model_name}:")
             print(result["yaml_documentation"])
 
-            # Save the documentation by default unless --no-save is provided
-            if not no_save:
-                logger.info("Saving documentation to database...")
-                save_result = agent.save_interpreted_documentation(
-                    current_model_name, result["yaml_documentation"], embed=embed
+            # Save the documentation to the database
+            logger.info("Saving documentation to database...")
+            save_result = agent.save_interpreted_documentation(
+                current_model_name, result["yaml_documentation"], embed=embed
+            )
+
+            if save_result["success"]:
+                logger.info(
+                    f"Documentation saved successfully for model: {current_model_name}"
                 )
 
-                if save_result["success"]:
-                    logger.info(
-                        f"Documentation saved successfully for model: {current_model_name}"
-                    )
+                # Embed the interpretation if requested
+                if embed:
+                    logger.info("Embedding interpretation in vector store...")
+                    # Get the updated model with the interpretation
+                    updated_model = postgres_storage.get_model(current_model_name)
+                    if updated_model and updated_model.interpreted_description:
+                        vector_store.store_model_interpretation(
+                            current_model_name,
+                            updated_model.interpreted_description,
+                        )
+                        logger.info(
+                            f"Interpretation embedded successfully for model: {current_model_name}"
+                        )
+                    else:
+                        logger.error("Could not find interpretation to embed")
 
-                    # Embed the interpretation if requested
-                    if embed:
-                        logger.info("Embedding interpretation in vector store...")
-                        # Get the updated model with the interpretation
-                        updated_model = postgres_storage.get_model(current_model_name)
-                        if updated_model and updated_model.interpreted_description:
-                            vector_store.store_model_interpretation(
-                                current_model_name,
-                                updated_model.interpreted_description,
-                            )
-                            logger.info(
-                                f"Interpretation embedded successfully for model: {current_model_name}"
-                            )
-                        else:
-                            logger.error("Could not find interpretation to embed")
-                else:
-                    error_msg = save_result.get("error", "Unknown error")
-                    logger.error(f"Failed to save documentation: {error_msg}")
+                # Save to YAML file if requested
+                if save_yml:
+                    if output_dir:
+                        # Create output directory if it doesn't exist
+                        os.makedirs(output_dir, exist_ok=True)
+                        file_path = os.path.join(
+                            output_dir, f"{current_model_name}.yml"
+                        )
+                    else:
+                        file_path = f"{current_model_name}.yml"
+
+                    logger.info(f"Saving YAML to file: {file_path}")
+                    with open(file_path, "w") as f:
+                        f.write(result["yaml_documentation"])
+                    logger.info(f"YAML file saved: {file_path}")
+            else:
+                error_msg = save_result.get("error", "Unknown error")
+                logger.error(f"Failed to save documentation: {error_msg}")
 
     except Exception as e:
         logger.error(f"Error interpreting model: {str(e)}")

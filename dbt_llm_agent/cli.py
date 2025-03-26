@@ -19,7 +19,7 @@ from dbt_llm_agent.commands import (
     embed,
     ask,
     interpret,
-    list_models,
+    list,
     model_details,
     questions,
     feedback,
@@ -41,7 +41,7 @@ cli.add_command(parse)
 cli.add_command(embed)
 cli.add_command(ask)
 cli.add_command(interpret)
-cli.add_command(list_models, name="list")
+cli.add_command(list)
 cli.add_command(model_details)
 cli.add_command(questions)
 cli.add_command(feedback)

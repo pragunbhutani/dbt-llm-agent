@@ -19,65 +19,49 @@ logger = get_logger(__name__)
 
 
 @click.command()
-@click.argument("question")
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-@click.option("--openai-api-key", help="OpenAI API key", envvar="OPENAI_API_KEY")
-@click.option("--openai-model", help="OpenAI model to use", envvar="OPENAI_MODEL")
+@click.argument("question", required=True)
 @click.option(
-    "--temperature",
-    type=float,
-    default=0.0,
-    help="Temperature for the OpenAI model",
-    envvar="TEMPERATURE",
+    "--context",
+    multiple=True,
+    help="Additional context or model names to include in the response",
 )
+@click.option("--temperature", type=float, default=0.0, help="Model temperature")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-@click.option("--no-color", is_flag=True, help="Disable colored output", default=False)
-@click.option("--json", is_flag=True, help="Output results as JSON", default=False)
-def ask(
-    question,
-    postgres_uri,
-    openai_api_key,
-    openai_model,
-    temperature,
-    verbose,
-    no_color,
-    json,
-):
-    """Ask a question about the dbt project.
+@click.option("--streaming", is_flag=True, help="Stream the response")
+def ask(question, context, temperature, verbose, streaming):
+    """Ask a question about your dbt project and models.
 
-    This command allows you to ask questions about your dbt project and get answers
-    based on the information in the model documentation and schema.
+    The agent will search for relevant models and documentation
+    to provide a detailed answer based on your project's domain knowledge.
+
+    QUESTION is the question you want to ask about your dbt project.
+    Examples:
+    - "What models contain customer data?"
+    - "Explain how we calculate lifetime value"
+    - "What are our main data sources?"
     """
-    try:
-        # Set logging level based on verbosity
-        set_logging_level(verbose)
+    set_logging_level(verbose)
 
+    # Load configuration from environment
+    openai_api_key = get_env_var("OPENAI_API_KEY")
+    openai_model = get_env_var("OPENAI_MODEL", "gpt-4-turbo")
+    postgres_uri = get_env_var("POSTGRES_URI")
+
+    # Validate configuration
+    if not openai_api_key:
+        logger.error("OpenAI API key not provided in environment variables (.env file)")
+        sys.exit(1)
+
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        sys.exit(1)
+
+    try:
         # Import necessary modules
         from dbt_llm_agent.storage.postgres_storage import PostgresStorage
         from dbt_llm_agent.storage.vector_store import PostgresVectorStore
         from dbt_llm_agent.core.agent import DBTAgent
         from dbt_llm_agent.utils.model_selector import ModelSelector
-
-        # Load configuration
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-
-        if not openai_api_key:
-            openai_api_key = get_env_var("OPENAI_API_KEY")
-
-        if not openai_model:
-            openai_model = get_env_var("OPENAI_MODEL")
-            if not openai_model:
-                openai_model = "gpt-4-turbo"
-
-        # Validate configuration
-        if not postgres_uri:
-            logger.error("PostgreSQL URI not provided and not found in config")
-            sys.exit(1)
-
-        if not openai_api_key:
-            logger.error("OpenAI API key not provided and not found in config")
-            sys.exit(1)
 
         # Initialize storage and agent
         postgres_storage = PostgresStorage(postgres_uri)
@@ -97,7 +81,7 @@ def ask(
             sys.exit(1)
 
         # Print the answer
-        if not json:
+        if not streaming:
             try:
                 from rich.markdown import Markdown
                 from rich.console import Console

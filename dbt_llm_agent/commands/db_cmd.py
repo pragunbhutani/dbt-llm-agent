@@ -13,10 +13,9 @@ logger = get_logger(__name__)
 
 
 @click.command()
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option("--revision", help="Target revision (default: head)", default="head")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def migrate(postgres_uri, revision, verbose):
+def migrate(revision, verbose):
     """Update the database schema to the latest version.
 
     This command applies Alembic migrations to update the database schema.
@@ -25,12 +24,11 @@ def migrate(postgres_uri, revision, verbose):
     """
     set_logging_level(verbose)
 
-    # Load configuration if not provided
-    if not postgres_uri:
-        postgres_uri = get_config_value("postgres_uri")
+    # Load configuration from environment
+    postgres_uri = get_config_value("postgres_uri")
 
     if not postgres_uri:
-        logger.error("PostgreSQL URI not provided and not found in config")
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
@@ -60,9 +58,8 @@ def migrate(postgres_uri, revision, verbose):
 
 
 @click.command()
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def init_db(postgres_uri, verbose):
+def init_db(verbose):
     """Initialize the database schema.
 
     This command creates all tables and initializes the database with the latest schema.
@@ -74,12 +71,11 @@ def init_db(postgres_uri, verbose):
     from dbt_llm_agent.storage.models import Base
     from dbt_llm_agent.storage.postgres_storage import PostgresStorage
 
-    # Load configuration if not provided
-    if not postgres_uri:
-        postgres_uri = get_config_value("postgres_uri")
+    # Load configuration from environment
+    postgres_uri = get_config_value("postgres_uri")
 
     if not postgres_uri:
-        logger.error("PostgreSQL URI not provided and not found in config")
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:

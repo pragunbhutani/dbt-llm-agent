@@ -22,7 +22,6 @@ logger = get_logger(__name__)
 @click.argument(
     "project_path", type=click.Path(exists=True, file_okay=False, dir_okay=True)
 )
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option(
     "--select",
     help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
@@ -30,7 +29,7 @@ logger = get_logger(__name__)
 )
 @click.option("--force", is_flag=True, help="Force re-parsing of all models")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def parse(project_path, postgres_uri, select, force, verbose):
+def parse(project_path, select, force, verbose):
     """
     Parse a dbt project and store models in the database.
 
@@ -70,16 +69,13 @@ def parse(project_path, postgres_uri, select, force, verbose):
         from dbt_llm_agent.core.dbt_parser import DBTProjectParser
         from dbt_llm_agent.utils.model_selector import ModelSelector
 
-        # Get PostgreSQL URI from args or env var
+        # Get PostgreSQL URI from environment
+        postgres_uri = get_env_var("POSTGRES_URI")
         if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
+            logger.error(
+                "PostgreSQL URI not provided in environment variables (.env file)"
+            )
+            sys.exit(1)
 
         # Initialize storage
         logger.info(f"Connecting to PostgreSQL database: {postgres_uri}")

@@ -84,8 +84,7 @@ def get_config_value(key: str, default: Any = None) -> Any:
     Returns:
         The configuration value or the default value
     """
-    env_var = f"{key.upper()}"
-    return get_env_var(env_var, default)
+    return get_env_var(key.upper(), default)
 
 
 def load_dotenv_once():

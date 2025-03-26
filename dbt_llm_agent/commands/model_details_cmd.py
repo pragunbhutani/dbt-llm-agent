@@ -18,34 +18,27 @@ logger = get_logger(__name__)
 
 @click.command()
 @click.argument("model_name", required=True)
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-@click.option("--yaml", is_flag=True, help="Output as dbt YAML document")
-@click.option("--sql", is_flag=True, help="Output the raw SQL code")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def model_details(model_name, postgres_uri, yaml, sql, verbose):
-    """
-    Get details for a specific dbt model.
+@click.option("--json", is_flag=True, help="Output as JSON", default=False)
+def model_details(model_name, verbose, json):
+    """Show detailed information about a model.
 
-    MODEL_NAME is the name of the model to view details for.
+    MODEL_NAME is the name of the model to get details for.
     """
+    set_logging_level(verbose)
+
+    # Import here to avoid circular imports
+    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+
+    # Load configuration from environment
+    postgres_uri = get_env_var("POSTGRES_URI")
+
+    # Validate configuration
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        sys.exit(1)
+
     try:
-        # Set logging level based on verbosity
-        set_logging_level(verbose)
-
-        # Import here to avoid circular imports
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-
-        # Get PostgreSQL URI from args or env var
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
-
         # Initialize storage
         logger.info(f"Connecting to PostgreSQL database: {postgres_uri}")
         postgres = PostgresStorage(postgres_uri)
@@ -56,7 +49,7 @@ def model_details(model_name, postgres_uri, yaml, sql, verbose):
             logger.error(f"Model '{model_name}' not found in the database")
             sys.exit(1)
 
-        if sql:
+        if json:
             # Show the raw SQL code
             if model.raw_sql:
                 colored_echo(f"-- SQL for model: {model_name}", color="INFO", bold=True)
@@ -65,10 +58,6 @@ def model_details(model_name, postgres_uri, yaml, sql, verbose):
                 colored_echo(
                     f"No SQL code found for model: {model_name}", color="WARNING"
                 )
-        elif yaml:
-            # Format model as dbt YAML document
-            yaml_output = model.format_as_yaml()
-            colored_echo(yaml_output, color="INFO")
         else:
             # Show readable representation
             colored_echo(model.get_readable_representation(), color="INFO")

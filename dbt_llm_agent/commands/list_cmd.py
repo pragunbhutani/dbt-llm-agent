@@ -16,39 +16,46 @@ from dbt_llm_agent.utils.cli_utils import (
 logger = get_logger(__name__)
 
 
-@click.command(name="list")
+@click.command()
+@click.option(
+    "--type",
+    type=click.Choice(["models", "sources", "all"]),
+    default="models",
+    help="Type of objects to list",
+)
 @click.option(
     "--select",
-    required=True,
-    help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
+    help="dbt selection syntax to filter models (e.g. 'tag:reporting')",
+    default=None,
 )
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def list_models(select, postgres_uri, verbose):
-    """List selected models from the database."""
-    # Import required modules
+@click.option("--json", is_flag=True, help="Output as JSON", default=False)
+def list(type, select, verbose, json):
+    """List models and sources in the database.
+
+    This command shows all models and sources stored in the database.
+    You can filter the results using dbt selection syntax.
+    """
+    set_logging_level(verbose)
+
+    # Import here to avoid circular imports
     from dbt_llm_agent.storage.postgres_storage import PostgresStorage
     from dbt_llm_agent.utils.model_selector import ModelSelector
 
-    set_logging_level(verbose)
+    # Load configuration from environment
+    postgres_uri = get_env_var("POSTGRES_URI")
 
+    # Validate configuration
     if not postgres_uri:
-        postgres_uri = get_env_var("POSTGRES_URI")
-
-    if not postgres_uri:
-        colored_echo(
-            "PostgreSQL URI not provided and not found in config",
-            color="RED",
-            bold=True,
-        )
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
-        # Initialize PostgreSQL storage
-        postgres_storage = PostgresStorage(postgres_uri)
+        # Initialize storage
+        postgres = PostgresStorage(postgres_uri)
 
         # Fetch all models from the database
-        all_models = postgres_storage.get_all_models()
+        all_models = postgres.get_all_models()
 
         if not all_models:
             colored_echo("No models found in the database", color="YELLOW")

@@ -13,15 +13,32 @@ logger = get_logger(__name__)
 
 
 @click.command()
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option("--limit", type=int, default=10, help="Number of questions to show")
-@click.option("--offset", type=int, default=0, help="Offset for pagination")
-@click.option("--useful", type=bool, help="Filter by usefulness")
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-def questions(limit, offset, useful, postgres_uri):
+@click.option("--json", is_flag=True, help="Output as JSON", default=False)
+def questions(verbose, limit, json):
+    """List recent questions and answers.
+
+    This command shows the history of questions asked and their answers.
     """
-    List questions and answers.
-    """
+    set_logging_level(verbose)
+
+    # Import here to avoid circular imports
+    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+
+    # Load configuration from environment
+    postgres_uri = get_env_var("POSTGRES_URI")
+
+    # Validate configuration
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        sys.exit(1)
+
     try:
+        # Initialize storage
+        logger.info(f"Connecting to PostgreSQL database")
+        postgres = PostgresStorage(postgres_uri)
+
         # Load environment variables from .env file
         try:
             from dotenv import load_dotenv
@@ -35,23 +52,12 @@ def questions(limit, offset, useful, postgres_uri):
         # Import here to avoid circular imports
         from dbt_llm_agent.storage.question_service import QuestionTrackingService
 
-        # Get PostgreSQL URI
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
-
         # Initialize question tracking
         question_tracking = QuestionTrackingService(postgres_uri)
 
         # Get questions
         questions = question_tracking.get_all_questions(
-            limit=limit, offset=offset, was_useful=useful
+            limit=limit, offset=0, was_useful=None
         )
 
         print("\n")
