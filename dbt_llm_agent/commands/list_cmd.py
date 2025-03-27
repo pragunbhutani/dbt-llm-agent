@@ -1,119 +1,147 @@
 """
-List command for dbt-llm-agent CLI.
+Command to list available dbt models.
 """
 
 import click
 import sys
+import json
+from typing import Dict, List, Optional
+from rich.console import Console
+from rich.table import Table
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.utils.cli_utils import (
-    get_env_var,
-    set_logging_level,
-    colored_echo,
-)
+from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
+from dbt_llm_agent.utils.model_selector import ModelSelector
 
 # Initialize logger
 logger = get_logger(__name__)
 
+# Initialize console for rich output
+console = Console()
+
 
 @click.command()
 @click.option(
-    "--type",
-    type=click.Choice(["models", "sources", "all"]),
-    default="models",
-    help="Type of objects to list",
-)
-@click.option(
     "--select",
-    help="dbt selection syntax to filter models (e.g. 'tag:reporting')",
-    default=None,
+    "-s",
+    help="Select models to list using dbt-style selectors (e.g., '+tag:marts')",
 )
+@click.option("--json", "output_json", is_flag=True, help="Output in JSON format")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-@click.option("--json", is_flag=True, help="Output as JSON", default=False)
-def list(type, select, verbose, json):
-    """List models and sources in the database.
+def list_models(select, output_json, verbose):
+    """List available dbt models.
 
-    This command shows all models and sources stored in the database.
-    You can filter the results using dbt selection syntax.
+    This command displays all models in the database, with optional filtering
+    using dbt-style selectors.
+
+    Examples:
+        dbt-llm list
+        dbt-llm list --select "tag:marts"
+        dbt-llm list --select "customers" --json
+        dbt-llm list --verbose
     """
     set_logging_level(verbose)
 
-    # Import here to avoid circular imports
-    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-    from dbt_llm_agent.utils.model_selector import ModelSelector
-
     # Load configuration from environment
-    postgres_uri = get_env_var("POSTGRES_URI")
+    postgres_uri = get_config_value("postgres_uri")
 
-    # Validate configuration
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
-        # Initialize storage
-        postgres = PostgresStorage(postgres_uri)
+        # Import necessary modules
+        from dbt_llm_agent.storage.model_storage import ModelStorage
 
-        # Fetch all models from the database
-        all_models = postgres.get_all_models()
+        # Initialize storage
+        model_storage = ModelStorage(postgres_uri)
+
+        # Get all models
+        all_models = model_storage.get_all_models()
 
         if not all_models:
-            colored_echo("No models found in the database", color="YELLOW")
+            console.print("No models found in the database")
+            sys.exit(0)
+
+        # Apply selector if provided
+        if select:
+            models_dict = {model.name: model for model in all_models}
+            selector = ModelSelector(models_dict)
+            selected_model_names = selector.select(select)
+
+            if not selected_model_names:
+                console.print(f"No models matched the selector: {select}")
+                sys.exit(0)
+
+            # Filter models based on selection
+            models = [
+                model for model in all_models if model.name in selected_model_names
+            ]
+        else:
+            models = all_models
+
+        # Sort models by name for consistent output
+        models.sort(key=lambda m: m.name)
+
+        # Output as JSON if requested
+        if output_json:
+            models_json = []
+            for model in models:
+                model_dict = {
+                    "name": model.name,
+                    "schema": model.schema,
+                    "materialization": model.materialization,
+                }
+                # Add selected fields for non-verbose output
+                if verbose:
+                    model_dict.update(
+                        {
+                            "description": model.description,
+                            "tags": model.tags,
+                            "column_count": len(model.columns) if model.columns else 0,
+                        }
+                    )
+                models_json.append(model_dict)
+
+            print(json.dumps(models_json, indent=2))
             return
 
-        # Convert the list of models to a dictionary for the selector
-        models_dict = {model.name: model for model in all_models}
+        # Create table display
+        table = Table(title=f"dbt Models (showing {len(models)} models)")
+        table.add_column("Name", style="cyan")
+        table.add_column("Schema", style="green")
+        table.add_column("Type", style="blue")
 
-        # Select models based on the provided selection
-        selector = ModelSelector(models_dict)
-        selected_model_names = selector.select(select)
+        if verbose:
+            table.add_column("Columns", justify="right")
+            table.add_column("Description")
 
-        # Get the actual model objects for the selected names
-        selected_models = [
-            models_dict[name] for name in selected_model_names if name in models_dict
-        ]
+        for model in models:
+            row = [model.name, model.schema or "", model.materialization or "view"]
 
-        if not selected_models:
-            colored_echo(
-                f"No models selected using '{select}'", color="YELLOW", bold=True
-            )
-            return
+            if verbose:
+                # Add column count
+                column_count = len(model.columns) if model.columns else 0
+                row.append(str(column_count))
 
-        colored_echo(
-            f"Selected {len(selected_models)} model(s) using '{select}':",
-            color="GREEN",
-            bold=True,
+                # Add description (truncated)
+                description = model.description or ""
+                if len(description) > 60:
+                    description = description[:57] + "..."
+                row.append(description)
+
+            table.add_row(*row)
+
+        console.print(table)
+        console.print(f"\nShowing {len(models)} models.")
+        console.print(
+            "Use 'dbt-llm model-details [model_name]' to see details of a specific model."
         )
 
-        for idx, model in enumerate(selected_models, 1):
-            # Only show parentheses if either materialization or schema has a value
-            model_info = f"{idx}. {model.name}"
-            if model.materialization or model.schema:
-                mat = model.materialization if model.materialization else ""
-                schema = model.schema if model.schema else ""
-                if mat and schema:
-                    model_info += f" ({mat}, {schema})"
-                elif mat:
-                    model_info += f" ({mat})"
-                elif schema:
-                    model_info += f" ({schema})"
-
-            colored_echo(model_info)
-            if verbose:
-                if model.description:
-                    colored_echo(f"   Description: {model.description}", color="CYAN")
-                colored_echo(f"   Path: {model.path}", color="CYAN")
-                if model.columns:
-                    colored_echo(f"   Columns:", color="CYAN")
-                    for col_name, col in model.columns.items():
-                        desc = f" - {col.description}" if col.description else ""
-                        colored_echo(f"     - {col_name}{desc}", color="CYAN")
-                colored_echo("")
-
     except Exception as e:
-        colored_echo(f"Error listing models: {str(e)}", color="RED", bold=True)
+        logger.error(f"Error listing models: {str(e)}")
         if verbose:
             import traceback
 
-            colored_echo(traceback.format_exc(), color="RED")
+            logger.debug(traceback.format_exc())
         sys.exit(1)

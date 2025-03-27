@@ -4,9 +4,10 @@ Feedback command for dbt-llm-agent CLI.
 
 import click
 import sys
+import logging
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.utils.cli_utils import get_env_var, colored_echo
+from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -14,42 +15,52 @@ logger = get_logger(__name__)
 
 @click.command()
 @click.argument("question_id", type=int)
-@click.option("--feedback", help="Feedback on the response", required=True)
-@click.option("--rating", help="Rating (1-5)", type=int, default=None)
+@click.option("--useful", is_flag=True, help="Mark the answer as useful")
+@click.option("--not-useful", is_flag=True, help="Mark the answer as not useful")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def feedback(question_id, feedback, rating, verbose):
-    """Provide feedback on a specific answer.
+def feedback(question_id, useful, not_useful, verbose):
+    """Provide feedback on a previous question.
 
-    QUESTION_ID is the ID of the question to provide feedback for.
+    This command allows you to mark a previous question and answer as useful or not useful.
+    You need to provide the question ID, which is displayed when you ask a question.
+
+    Examples:
+        dbt-llm feedback 1 --useful
+        dbt-llm feedback 2 --not-useful
     """
     set_logging_level(verbose)
 
-    # Load configuration from environment
-    postgres_uri = get_env_var("POSTGRES_URI")
-
-    # Validate configuration
-    if not postgres_uri:
-        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+    # Validate arguments
+    if not (useful or not_useful) or (useful and not_useful):
+        logger.error("Please specify either --useful or --not-useful")
         sys.exit(1)
 
-    try:
-        # Import necessary modules
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+    # Load configuration from environment
+    postgres_uri = get_config_value("postgres_uri")
 
-        # Initialize storage and agent
-        logger.info(f"Connecting to PostgreSQL database")
-        postgres_storage = PostgresStorage(postgres_uri)
+    # Import necessary modules
+    from dbt_llm_agent.storage.model_storage import ModelStorage
+    from dbt_llm_agent.storage.question_storage import QuestionStorage
 
-        # Store feedback
-        logger.info(f"Storing feedback for question {question_id}")
-        postgres_storage.store_feedback(question_id, feedback, rating)
+    # Initialize storage
+    model_storage = ModelStorage(postgres_uri)
+    question_storage = QuestionStorage(postgres_uri)
 
-        logger.info("Feedback stored successfully")
+    # Get question
+    question = question_storage.get_question(question_id)
+    if not question:
+        logger.error(f"Question with ID {question_id} not found")
+        sys.exit(1)
 
-    except Exception as e:
-        logger.error(f"Error storing feedback: {str(e)}")
+    # Update feedback
+    was_useful = useful
+    success = question_storage.update_feedback(question_id, was_useful=was_useful)
+
+    if success:
+        logger.info(f"Feedback recorded for question {question_id}")
         if verbose:
-            import traceback
-
-            traceback.print_exc()
+            logger.info(f"Question: {question.question_text}")
+            logger.info(f"Answer: {question.answer_text}")
+    else:
+        logger.error(f"Failed to record feedback for question {question_id}")
         sys.exit(1)

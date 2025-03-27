@@ -9,7 +9,7 @@ import logging
 from dotenv import load_dotenv
 
 # Import our models
-from dbt_llm_agent.storage.models import Base
+from dbt_llm_agent.core.models import Base
 
 # Import our logging setup
 from dbt_llm_agent.utils.logging import get_logger

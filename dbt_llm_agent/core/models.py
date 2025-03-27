@@ -2,8 +2,363 @@
 
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Any, Set
+from sqlalchemy import (
+    Column,
+    Integer,
+    String,
+    Text,
+    DateTime,
+    ForeignKey,
+    JSON,
+    Boolean,
+    Table,
+    TypeDecorator,
+)
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import relationship
+from sqlalchemy.orm import registry
+from sqlalchemy.sql import func
+from datetime import datetime
+import sqlalchemy as sa
+from pgvector.sqlalchemy import Vector
+
+# NOTE: This module serves as the single source of truth for all model definitions
+# in the system. It provides bidirectional conversion between domain models and
+# ORM models through the to_orm() and to_domain() methods.
+#
+# Future improvements could include:
+# 1. Using SQLAlchemy's full ORM mapping capabilities through mapper_registry
+# 2. Further refinement of the conversion methods
+
+# Create a registry for mapping SQLAlchemy models to dataclasses
+mapper_registry = registry()
+Base = declarative_base()
 
 
+# Define SQLAlchemy model classes (storage layer)
+class ModelTable(Base):
+    """SQLAlchemy model for the models table."""
+
+    __tablename__ = "models"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    path = Column(String, nullable=False)
+    schema = Column(String, nullable=True)
+    database = Column(String, nullable=True)
+    materialization = Column(String, nullable=True)
+    tags = Column(JSON, nullable=True)
+    depends_on = Column(JSON, nullable=True)
+    tests = Column(JSON, nullable=True)
+    all_upstream_models = Column(JSON, nullable=True)
+    meta = Column(JSON, nullable=True)
+    raw_sql = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    yml_description = Column(
+        Text, nullable=True, comment="Description from YML documentation"
+    )
+    yml_columns = Column(JSON, nullable=True, comment="Columns from YML documentation")
+    interpreted_columns = Column(
+        JSON, nullable=True, comment="LLM-interpreted column descriptions"
+    )
+    interpreted_description = Column(
+        Text, nullable=True, comment="LLM-generated description of the model"
+    )
+    # Removing compiled_sql, documentation, and unique_id as they're not in the DDL
+
+    def to_domain(self):
+        """Convert ORM model to domain model"""
+
+        # Helper function to convert column JSON to domain objects
+        def convert_columns(cols_json):
+            if not cols_json:
+                return {}
+            return {
+                name: Column(
+                    name=data["name"],
+                    description=data.get("description", ""),
+                    data_type=data.get("data_type", ""),
+                    meta=data.get("meta", {}),
+                )
+                for name, data in cols_json.items()
+            }
+
+        # Helper function to convert tests JSON to domain objects
+        def convert_tests(tests_json):
+            if not tests_json:
+                return []
+            return [
+                Test(
+                    name=test.get("name", ""),
+                    column_name=test.get("column_name", ""),
+                    test_type=test.get("test_type", ""),
+                    unique_id=test.get("unique_id", ""),
+                    meta=test.get("meta", {}),
+                )
+                for test in tests_json
+            ]
+
+        return DBTModel(
+            id=self.id,
+            name=self.name,
+            path=self.path,
+            description=self.yml_description or "",
+            schema=self.schema or "",
+            database=self.database or "",
+            materialization=self.materialization or "",
+            tags=self.tags or [],
+            depends_on=self.depends_on or [],
+            all_upstream_models=self.all_upstream_models or [],
+            meta=self.meta or {},
+            raw_sql=self.raw_sql or "",
+            interpreted_description=self.interpreted_description or "",
+            interpreted_columns=self.interpreted_columns or {},
+            columns=convert_columns(self.yml_columns),
+            tests=convert_tests(self.tests),
+            # Removing compiled_sql, documentation, and unique_id
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, model):
+        """Create an ORM model from a domain model"""
+
+        # Helper function to convert column objects to JSON
+        def convert_columns_to_json(columns):
+            if not columns:
+                return None
+            return {
+                name: {
+                    "name": col.name,
+                    "description": col.description,
+                    "data_type": col.data_type,
+                    "meta": col.meta,
+                }
+                for name, col in columns.items()
+            }
+
+        # Helper function to convert test objects to JSON
+        def convert_tests_to_json(tests):
+            if not tests:
+                return None
+            return [
+                {
+                    "name": test.name,
+                    "column_name": test.column_name,
+                    "test_type": test.test_type,
+                    "unique_id": test.unique_id,
+                    "meta": test.meta,
+                }
+                for test in tests
+            ]
+
+        return cls(
+            id=model.id,
+            name=model.name,
+            path=model.path,
+            yml_description=model.description,
+            schema=model.schema,
+            database=model.database,
+            materialization=model.materialization,
+            tags=model.tags,
+            depends_on=model.depends_on,
+            all_upstream_models=model.all_upstream_models,
+            meta=model.meta,
+            raw_sql=model.raw_sql,
+            # Removing compiled_sql, documentation, and unique_id
+            interpreted_description=model.interpreted_description,
+            interpreted_columns=model.interpreted_columns,
+            yml_columns=convert_columns_to_json(model.columns),
+            tests=convert_tests_to_json(model.tests),
+            created_at=model.created_at,
+            updated_at=model.updated_at,
+        )
+
+
+# Question model relationships
+question_models_assoc = Table(
+    "question_models_assoc",
+    Base.metadata,
+    Column("question_id", Integer, ForeignKey("questions.id"), primary_key=True),
+    Column("model_name", String, primary_key=True),
+    Column("relevance_score", Integer, nullable=True),
+    Column("created_at", DateTime(timezone=True), server_default=func.now()),
+)
+
+
+class QuestionTable(Base):
+    """SQLAlchemy model for storing questions and answers."""
+
+    __tablename__ = "questions"
+
+    id = Column(Integer, primary_key=True)
+    question_text = Column(Text, nullable=False)
+    answer_text = Column(Text, nullable=True)
+    was_useful = Column(Boolean, nullable=True)
+    feedback = Column(Text, nullable=True)
+    question_metadata = Column(JSON, nullable=True)  # For any additional metadata
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Define relationships - this would be customized based on your schema
+    model_assocs = relationship("QuestionModelTable", back_populates="question")
+
+    def to_domain(self):
+        """Convert ORM model to domain model"""
+        models_data = []
+        if self.model_assocs:
+            models_data = [
+                {
+                    "model_name": assoc.model_name,
+                    "relevance_score": assoc.relevance_score,
+                }
+                for assoc in self.model_assocs
+            ]
+
+        return Question(
+            id=self.id,
+            question_text=self.question_text,
+            answer_text=self.answer_text,
+            was_useful=self.was_useful,
+            feedback=self.feedback,
+            question_metadata=self.question_metadata or {},
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            models=models_data,
+        )
+
+    @classmethod
+    def from_domain(cls, question):
+        """Create an ORM model from a domain model"""
+        return cls(
+            id=question.id,
+            question_text=question.question_text,
+            answer_text=question.answer_text,
+            was_useful=question.was_useful,
+            feedback=question.feedback,
+            question_metadata=question.question_metadata,
+            # Note: model_assocs would be handled separately
+        )
+
+
+class QuestionModelTable(Base):
+    """SQLAlchemy model for tracking which models were used for each question."""
+
+    __tablename__ = "question_models"
+
+    question_id = Column(Integer, ForeignKey("questions.id"), primary_key=True)
+    model_name = Column(String, primary_key=True)
+    relevance_score = Column(Integer, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Define relationships
+    question = relationship("QuestionTable", back_populates="model_assocs")
+
+
+class ModelEmbeddingTable(Base):
+    """SQLAlchemy model for storing model embeddings."""
+
+    __tablename__ = "model_embeddings"
+
+    id = Column(Integer, primary_key=True)
+    model_name = Column(String, nullable=False)
+    document = Column(Text, nullable=False)
+    embedding = Column(
+        Vector(1536), nullable=False, comment="Embedding based on model documentation"
+    )
+    model_metadata = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    def to_domain(self):
+        """Convert ORM model to domain model"""
+        return ModelEmbedding(
+            id=self.id,
+            model_name=self.model_name,
+            document=self.document,
+            embedding=self.embedding,
+            model_metadata=self.model_metadata or {},
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
+
+    @classmethod
+    def from_domain(cls, embedding):
+        """Create an ORM model from a domain model"""
+        return cls(
+            id=embedding.id,
+            model_name=embedding.model_name,
+            document=embedding.document,
+            embedding=embedding.embedding,
+            model_metadata=embedding.model_metadata,
+        )
+
+
+class ColumnTable(Base):
+    """SQLAlchemy model for columns in dbt models."""
+
+    __tablename__ = "columns"
+
+    id = Column(Integer, primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    data_type = Column(String, nullable=True)
+    meta = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (sa.UniqueConstraint("model_id", "name", name="uix_model_column"),)
+
+
+class DependencyTable(Base):
+    """SQLAlchemy model for dependencies between dbt models."""
+
+    __tablename__ = "dependencies"
+
+    id = Column(Integer, primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
+    depends_on_name = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        sa.UniqueConstraint("model_id", "depends_on_name", name="uix_model_dependency"),
+    )
+
+
+class TestTable(Base):
+    """SQLAlchemy model for tests in dbt models."""
+
+    __tablename__ = "tests"
+
+    id = Column(Integer, primary_key=True)
+    model_id = Column(Integer, ForeignKey("models.id"), nullable=False)
+    name = Column(String, nullable=False)
+    column_name = Column(String, nullable=True)
+    test_type = Column(String, nullable=True)
+    unique_id = Column(String, nullable=True)
+    meta = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        sa.UniqueConstraint("model_id", "name", "column_name", name="uix_model_test"),
+    )
+
+
+# Define domain model classes
 @dataclass
 class Column:
     """Representation of a column in a dbt model."""
@@ -39,18 +394,18 @@ class DBTModel:
     tags: List[str] = field(default_factory=list)
     meta: Dict[str, Any] = field(default_factory=dict)
     raw_sql: str = ""
-    compiled_sql: str = ""
     # List of model names that this model depends on (names from ref() calls)
     depends_on: List[str] = field(default_factory=list)
     # List of all models upstream in the dependency chain
     all_upstream_models: List[str] = field(default_factory=list)
     path: str = ""
-    unique_id: str = ""
-    documentation: str = ""  # Original documentation
     interpreted_description: str = ""  # LLM-generated description
     interpreted_columns: Dict[str, str] = field(
         default_factory=dict
     )  # LLM-interpreted column descriptions
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert the model to a dictionary.
@@ -69,11 +424,8 @@ class DBTModel:
             "tags": self.tags,
             "meta": self.meta,
             "raw_sql": self.raw_sql,
-            "compiled_sql": self.compiled_sql,
             "depends_on": self.depends_on,
             "path": self.path,
-            "unique_id": self.unique_id,
-            "documentation": self.documentation,
             "interpreted_description": self.interpreted_description,
             "interpreted_columns": self.interpreted_columns,
         }
@@ -236,6 +588,10 @@ class DBTModel:
 
         return "\n".join(yaml_lines)
 
+    def to_orm(self):
+        """Convert domain model to ORM model"""
+        return ModelTable.from_domain(self)
+
 
 @dataclass
 class DBTProject:
@@ -266,17 +622,62 @@ class DBTProject:
 
 
 @dataclass
-class ModelMetadata:
-    """Metadata for a model, used for storage."""
+class Question:
+    """Domain model for a question and its answer."""
 
-    name: str
-    description: str
-    schema: str
-    database: str
-    materialization: str
-    tags: List[str]
-    columns: List[Dict[str, str]]
-    tests: List[Dict[str, str]]
-    depends_on: List[str]
-    path: str
-    unique_id: str
+    question_text: str
+    id: Optional[int] = None
+    answer_text: Optional[str] = None
+    was_useful: Optional[bool] = None
+    feedback: Optional[str] = None
+    question_metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    models: List[Dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to a dictionary for API responses"""
+        return {
+            "id": self.id,
+            "question_text": self.question_text,
+            "answer_text": self.answer_text,
+            "was_useful": self.was_useful,
+            "feedback": self.feedback,
+            "metadata": self.question_metadata,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "models": self.models,
+        }
+
+    def to_orm(self):
+        """Convert domain model to ORM model"""
+        return QuestionTable.from_domain(self)
+
+
+@dataclass
+class ModelEmbedding:
+    """Domain model for a model embedding."""
+
+    model_name: str
+    document: str
+    embedding: Any  # Vector is a custom type
+    id: Optional[int] = None
+    model_metadata: Dict[str, Any] = field(default_factory=dict)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to a dictionary for API responses"""
+        return {
+            "id": self.id,
+            "model_name": self.model_name,
+            "document": self.document,
+            # Embedding is omitted for API responses as it's usually large
+            "model_metadata": self.model_metadata,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+    def to_orm(self):
+        """Convert domain model to ORM model"""
+        return ModelEmbeddingTable.from_domain(self)

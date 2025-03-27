@@ -1,20 +1,20 @@
-"""Service for tracking questions and answers."""
+"""Storage for questions and answers in PostgreSQL."""
 
 import logging
 from typing import Dict, List, Any, Optional
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
 
-from dbt_llm_agent.storage.models import Base, Question, QuestionModel
+from dbt_llm_agent.core.models import Base, Question, QuestionTable, QuestionModelTable
 
 logger = logging.getLogger(__name__)
 
 
-class QuestionTrackingService:
-    """Service for tracking questions and answers."""
+class QuestionStorage:
+    """Storage service for questions and answers."""
 
     def __init__(self, connection_string: str):
-        """Initialize the question tracking service.
+        """Initialize the question storage service.
 
         Args:
             connection_string: SQLAlchemy connection string for PostgreSQL
@@ -25,7 +25,7 @@ class QuestionTrackingService:
         # Create tables if they don't exist
         self._create_tables()
 
-        logger.info("Initialized question tracking service")
+        logger.info("Initialized question storage service")
 
     def _create_tables(self):
         """Create the necessary tables if they don't exist."""
@@ -56,23 +56,28 @@ class QuestionTrackingService:
         """
         session = self.Session()
         try:
-            # Create question
-            question = Question(
+            # Create a domain model first
+            domain_question = Question(
                 question_text=question_text,
                 answer_text=answer_text,
                 was_useful=was_useful,
                 feedback=feedback,
                 question_metadata=metadata or {},
             )
+
+            # Convert to ORM model
+            question = domain_question.to_orm()
             session.add(question)
+            session.flush()  # Get the assigned ID
 
             # Add associated models if provided
             if model_names:
                 for model_name in model_names:
-                    question_model = QuestionModel(
+                    question_model = QuestionModelTable(
+                        question_id=question.id,
                         model_name=model_name,
                     )
-                    question.models.append(question_model)
+                    session.add(question_model)
 
             # Commit changes
             session.commit()
@@ -102,7 +107,9 @@ class QuestionTrackingService:
         try:
             # Get question
             question = (
-                session.query(Question).filter(Question.id == question_id).first()
+                session.query(QuestionTable)
+                .filter(QuestionTable.id == question_id)
+                .first()
             )
             if not question:
                 logger.warning(f"Question with ID {question_id} not found")
@@ -124,54 +131,29 @@ class QuestionTrackingService:
         finally:
             session.close()
 
-    def get_question(self, question_id: int) -> Optional[Dict[str, Any]]:
+    def get_question(self, question_id: int) -> Optional[Question]:
         """Get a question by ID.
 
         Args:
             question_id: The ID of the question
 
         Returns:
-            The question data as a dictionary, or None if not found
+            The domain Question object, or None if not found
         """
         session = self.Session()
         try:
             # Get question
             question = (
-                session.query(Question).filter(Question.id == question_id).first()
+                session.query(QuestionTable)
+                .filter(QuestionTable.id == question_id)
+                .first()
             )
             if not question:
                 logger.warning(f"Question with ID {question_id} not found")
                 return None
 
-            # Get associated models
-            question_models = (
-                session.query(QuestionModel)
-                .filter(QuestionModel.question_id == question_id)
-                .all()
-            )
-
-            # Format response
-            return {
-                "id": question.id,
-                "question_text": question.question_text,
-                "answer_text": question.answer_text,
-                "was_useful": question.was_useful,
-                "feedback": question.feedback,
-                "metadata": question.question_metadata,
-                "created_at": (
-                    question.created_at.isoformat() if question.created_at else None
-                ),
-                "updated_at": (
-                    question.updated_at.isoformat() if question.updated_at else None
-                ),
-                "models": [
-                    {
-                        "name": qm.model_name,
-                        "relevance_score": qm.relevance_score,
-                    }
-                    for qm in question_models
-                ],
-            }
+            # Convert to domain model using to_domain method
+            return question.to_domain()
         except Exception as e:
             logger.error(f"Error getting question: {e}")
             return None
@@ -180,7 +162,7 @@ class QuestionTrackingService:
 
     def get_all_questions(
         self, limit: int = 100, offset: int = 0, was_useful: Optional[bool] = None
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Question]:
         """Get all questions.
 
         Args:
@@ -189,44 +171,27 @@ class QuestionTrackingService:
             was_useful: Filter by usefulness
 
         Returns:
-            A list of questions
+            A list of domain Question objects
         """
         session = self.Session()
         try:
             # Build query
-            query = session.query(Question)
+            query = session.query(QuestionTable)
 
             # Apply filter if provided
             if was_useful is not None:
-                query = query.filter(Question.was_useful == was_useful)
+                query = query.filter(QuestionTable.was_useful == was_useful)
 
             # Apply pagination
             questions = (
-                query.order_by(Question.created_at.desc())
-                .limit(limit)
+                query.order_by(QuestionTable.created_at.desc())
                 .offset(offset)
+                .limit(limit)
                 .all()
             )
 
-            # Format response
-            return [
-                {
-                    "id": q.id,
-                    "question_text": q.question_text,
-                    "answer_text": q.answer_text,
-                    "was_useful": q.was_useful,
-                    "feedback": q.feedback,
-                    "created_at": q.created_at.isoformat() if q.created_at else None,
-                    "models": [
-                        {
-                            "name": qm.model_name,
-                            "relevance_score": qm.relevance_score,
-                        }
-                        for qm in q.models
-                    ],
-                }
-                for q in questions
-            ]
+            # Convert to domain models
+            return [q.to_domain() for q in questions]
         except Exception as e:
             logger.error(f"Error getting questions: {e}")
             return []

@@ -34,13 +34,13 @@ def migrate(revision, verbose):
     try:
         logger.info("Running database migrations...")
 
-        # Initialize PostgresStorage and apply migrations explicitly
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+        # Initialize ModelStorage and apply migrations explicitly
+        from dbt_llm_agent.storage.model_storage import ModelStorage
 
-        postgres_storage = PostgresStorage(postgres_uri)
+        model_storage = ModelStorage(postgres_uri)
 
         # Apply migrations using the storage class method
-        success = postgres_storage.apply_migrations()
+        success = model_storage.apply_migrations()
 
         if success:
             logger.info("Migrations completed successfully")
@@ -68,8 +68,8 @@ def init_db(verbose):
 
     # Import necessary modules
     import sqlalchemy as sa
-    from dbt_llm_agent.storage.models import Base
-    from dbt_llm_agent.storage.postgres_storage import PostgresStorage
+    from dbt_llm_agent.core.models import Base
+    from dbt_llm_agent.storage.model_storage import ModelStorage
 
     # Load configuration from environment
     postgres_uri = get_config_value("postgres_uri")
@@ -82,10 +82,10 @@ def init_db(verbose):
         logger.info("Initializing database schema...")
 
         # Create the storage instance
-        postgres_storage = PostgresStorage(postgres_uri)
+        model_storage = ModelStorage(postgres_uri)
 
         # Apply migrations explicitly
-        success = postgres_storage.apply_migrations()
+        success = model_storage.apply_migrations()
 
         if success:
             logger.info("Database initialization completed successfully")

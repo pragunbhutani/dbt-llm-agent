@@ -87,6 +87,19 @@ def get_config_value(key: str, default: Any = None) -> Any:
     return get_env_var(key.upper(), default)
 
 
+def format_model_reference(model_name: str) -> str:
+    """
+    Format a model name as a model reference.
+
+    Args:
+        model_name: The model name to format
+
+    Returns:
+        A formatted model reference string
+    """
+    return f"ref('{model_name}')"
+
+
 def load_dotenv_once():
     """Load environment variables from .env file if not already loaded.
     This function should be called only once at the beginning of the application.
