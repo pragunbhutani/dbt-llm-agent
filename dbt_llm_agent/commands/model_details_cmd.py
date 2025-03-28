@@ -57,64 +57,18 @@ def model_details(model_name, verbose, output_json):
 
         # Output as JSON if requested
         if output_json:
-            model_dict = model.to_dict()
-            print(json.dumps(model_dict, indent=2))
+            # Use the model's own method to convert to embedding-compatible JSON
+            result = model.to_embedding_json()
+
+            # Output as JSON
+            print(json.dumps(result, indent=2))
             return
 
-        # Display model details
-        console.print(f"\n[bold blue]Model:[/bold blue] {model.name}")
+        # Display model details using the same format as embeddings
+        embedding_text = model.to_embedding_text()
+        console.print(embedding_text)
 
-        if model.description:
-            console.print("\n[bold]Description:[/bold]")
-            console.print(model.description)
-
-        if model.interpreted_description:
-            console.print("\n[bold]Interpreted Description:[/bold]")
-            console.print(model.interpreted_description)
-
-        # Display materialiation and schema
-        console.print(f"\n[bold]Materialization:[/bold] {model.materialization}")
-        console.print(f"[bold]Schema:[/bold] {model.schema}")
-
-        # Display columns
-        if model.columns:
-            console.print("\n[bold]Columns:[/bold]")
-            columns_table = Table(show_header=True)
-            columns_table.add_column("Name")
-            columns_table.add_column("Description")
-
-            for name, column in model.columns.items():
-                columns_table.add_row(
-                    name, column.description if column.description else ""
-                )
-
-            console.print(columns_table)
-
-        # Display dependencies
-        if model.depends_on:
-            console.print("\n[bold]Depends on:[/bold]")
-            for dep in model.depends_on:
-                console.print(f"- {dep}")
-
-        # Display upstream models
-        if model.all_upstream_models:
-            console.print("\n[bold]All upstream models:[/bold]")
-            for upstream in model.all_upstream_models:
-                console.print(f"- {upstream}")
-
-        # Display tests
-        if model.tests:
-            console.print("\n[bold]Tests:[/bold]")
-            tests_table = Table(show_header=True)
-            tests_table.add_column("Type")
-            tests_table.add_column("Column")
-
-            for test in model.tests:
-                tests_table.add_row(test.test_type or "", test.column_name or "")
-
-            console.print(tests_table)
-
-        # Display raw SQL if verbose
+        # Display raw SQL if verbose (not included in embedding text)
         if verbose and model.raw_sql:
             console.print("\n[bold]SQL:[/bold]")
             console.print(f"```sql\n{model.raw_sql}\n```")

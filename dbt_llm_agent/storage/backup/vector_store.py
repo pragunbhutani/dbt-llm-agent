@@ -71,30 +71,7 @@ class ModelEmbeddingStorage:
     ):
         """Create a homogeneous document structure for model embeddings.
 
-        This ensures all models have the same document structure regardless of
-        what information is available.
-
-        The document structure follows this format:
-        ```
-        Model: <model_name>
-        Description (YML): <model description>
-        Interpretation (LLM): Available/Not Available
-        Path: <file path>
-        Schema: <schema>
-        Database: <database>
-        Materialization: <materialization>
-        Depends on (via ref): <dependencies list>
-
-        Columns from YML documentation (<count>):
-        - <column_name>: <column description>
-        - <column_name>: <column description>
-        ...
-
-        Interpreted columns from LLM (<count>):
-        - <column_name>: <column description>
-        - <column_name>: <column description>
-        ...
-        ```
+        This is a legacy wrapper that uses the DBTModel's to_embedding_text method.
 
         Args:
             model_name: The name of the model
@@ -105,86 +82,21 @@ class ModelEmbeddingStorage:
         Returns:
             A consistently structured document for embeddings
         """
-        # Create a structured document with a consistent format
-        embedding_text = f"Model: {model_name}\n"
+        # Import here to avoid circular imports
+        from dbt_llm_agent.core.models import DBTModel
 
-        # Add model metadata
         if model:
-            # Use documentation_text if provided, otherwise use model description
-            description = (
-                documentation_text
-                if documentation_text and documentation_text.strip()
-                else model.description or ""
+            return model.to_embedding_text(
+                documentation_text=documentation_text,
+                interpretation_text=interpretation_text,
             )
-            embedding_text += f"Description (YML): {description}\n"
 
-            # Use interpretation_text if provided, otherwise check if model has interpretation
-            if interpretation_text and interpretation_text.strip():
-                embedding_text += "Interpretation (LLM): Available\n"
-            elif model.interpreted_description:
-                embedding_text += "Interpretation (LLM): Available\n"
-            else:
-                embedding_text += "Interpretation (LLM): Not Available\n"
-
-            embedding_text += f"Path: {model.path or ''}\n"
-            embedding_text += f"Schema: {model.schema or ''}\n"
-            embedding_text += f"Database: {model.database or ''}\n"
-            embedding_text += f"Materialization: {model.materialization or ''}\n"
-
-            # Add dependencies
-            # Handle different possible structures for depends_on
-            deps = []
-            if hasattr(model, "depends_on"):
-                if isinstance(model.depends_on, list):
-                    deps = model.depends_on
-                elif isinstance(model.depends_on, dict) and "ref" in model.depends_on:
-                    deps = model.depends_on["ref"]
-
-            embedding_text += (
-                f"Depends on (via ref): {', '.join(deps) if deps else ''}\n"
-            )
-        else:
-            embedding_text += "Description (YML): \n"
-            embedding_text += "Interpretation (LLM): Not Available\n"
-            embedding_text += "Path: \n"
-            embedding_text += "Schema: \n"
-            embedding_text += "Database: \n"
-            embedding_text += "Materialization: \n"
-            embedding_text += "Depends on (via ref): \n"
-
-        # Add YML columns section
-        if model and hasattr(model, "columns") and model.columns:
-            column_count = len(model.columns)
-            embedding_text += f"\nColumns from YML documentation ({column_count}):\n"
-
-            # Handle both dictionary of Column objects and dictionary of dictionaries
-            for col_name, col_info in model.columns.items():
-                if hasattr(col_info, "description"):
-                    # This is a Column object
-                    col_desc = col_info.description or ""
-                else:
-                    # This is a dictionary
-                    col_desc = col_info.get("description", "")
-                embedding_text += f"- {col_name}: {col_desc}\n"
-        else:
-            embedding_text += "\nColumns from YML documentation (0):\n"
-
-        # Add interpreted columns section
-        if (
-            model
-            and hasattr(model, "interpreted_columns")
-            and model.interpreted_columns
-        ):
-            interpreted_column_count = len(model.interpreted_columns)
-            embedding_text += (
-                f"\nInterpreted columns from LLM ({interpreted_column_count}):\n"
-            )
-            for col_name, col_desc in model.interpreted_columns.items():
-                embedding_text += f"- {col_name}: {col_desc}\n"
-        else:
-            embedding_text += "\nInterpreted columns from LLM (0):\n"
-
-        return embedding_text
+        # If no model is provided, create a minimal document
+        dummy_model = DBTModel(name=model_name)
+        return dummy_model.to_embedding_text(
+            documentation_text=documentation_text,
+            interpretation_text=interpretation_text,
+        )
 
     def _create_tables(self):
         """Create the necessary tables if they don't exist."""
