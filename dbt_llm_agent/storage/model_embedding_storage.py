@@ -9,7 +9,12 @@ from pgvector.sqlalchemy import Vector
 import numpy as np
 
 from dbt_llm_agent.utils.config import get_config_value
-from dbt_llm_agent.core.models import Base, ModelEmbedding, ModelEmbeddingTable
+from dbt_llm_agent.core.models import (
+    Base,
+    ModelEmbedding,
+    ModelEmbeddingTable,
+    DBTModel,
+)
 from dbt_llm_agent.integrations.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -62,41 +67,6 @@ class ModelEmbeddingStorage:
             f"Initialized model embedding storage with model: {self.embedding_model}"
         )
 
-    def _create_homogeneous_document(
-        self,
-        model_name: str,
-        model=None,
-        documentation_text=None,
-        interpretation_text=None,
-    ):
-        """Create a homogeneous document structure for model embeddings.
-        
-        This is a legacy wrapper that uses the DBTModel's to_embedding_text method.
-        
-        Args:
-            model_name: The name of the model
-            model: Optional DBTModel instance with model information
-            documentation_text: Optional documentation text
-            interpretation_text: Optional interpretation text
-            
-        Returns:
-            A consistently structured document for embeddings
-        """
-        if model:
-            return model.to_embedding_text(
-                documentation_text=documentation_text,
-                interpretation_text=interpretation_text
-            )
-        
-        # If no model is provided, create a minimal document
-        from dbt_llm_agent.core.models import DBTModel
-        
-        dummy_model = DBTModel(name=model_name)
-        return dummy_model.to_embedding_text(
-            documentation_text=documentation_text,
-            interpretation_text=interpretation_text
-        )
-
     def _create_tables(self):
         """Create the necessary tables if they don't exist."""
         # Create pgvector extension if it doesn't exist
@@ -128,16 +98,27 @@ class ModelEmbeddingStorage:
             model_name: The name of the model
             model_text: The model text to embed
             metadata: Optional metadata to store with the model
+
+        Raises:
+            ValueError: If an embedding cannot be generated for the model text
         """
         session = self.Session()
         try:
             # Get embedding for the model
-            embedding = self._get_embedding(model_text)
+            try:
+                embedding = self._get_embedding(model_text)
+            except ValueError as e:
+                logger.error(
+                    f"Failed to generate embedding for model {model_name}: {e}"
+                )
+                raise ValueError(
+                    f"Cannot store model {model_name} - embedding generation failed"
+                ) from e
 
             # Check if model already exists
             existing_model = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
             )
 
@@ -156,7 +137,7 @@ class ModelEmbeddingStorage:
                 existing_model.model_metadata = metadata or {}
             else:
                 # Convert to ORM model and add
-                orm_model = ModelEmbedding.from_domain(domain_embedding)
+                orm_model = domain_embedding.to_orm()
                 session.add(orm_model)
 
             # Commit
@@ -182,8 +163,8 @@ class ModelEmbeddingStorage:
         try:
             # Check if model exists
             exists = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
                 is not None
             )
@@ -207,8 +188,8 @@ class ModelEmbeddingStorage:
         try:
             # Get model
             model = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
             )
             if not model:
@@ -248,9 +229,9 @@ class ModelEmbeddingStorage:
 
             # Build query
             db_query = session.query(
-                ModelEmbedding,
+                ModelEmbeddingTable,
                 sa.func.cosine_distance(
-                    ModelEmbedding.embedding, query_embedding
+                    ModelEmbeddingTable.embedding, query_embedding
                 ).label("distance"),
             )
 
@@ -258,7 +239,7 @@ class ModelEmbeddingStorage:
             if filter_metadata:
                 for key, value in filter_metadata.items():
                     db_query = db_query.filter(
-                        ModelEmbedding.model_metadata[key].astext == str(value)
+                        ModelEmbeddingTable.model_metadata[key].astext == str(value)
                     )
 
             # Get results
@@ -296,8 +277,8 @@ class ModelEmbeddingStorage:
         try:
             # Get model
             model = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
             )
             if not model:
@@ -345,8 +326,8 @@ class ModelEmbeddingStorage:
         try:
             # Check if model already exists
             existing = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
             )
 
@@ -355,25 +336,18 @@ class ModelEmbeddingStorage:
                 domain_model = existing.to_domain()
                 metadata = domain_model.model_metadata or {}
 
-                # Create a new homogeneous document with existing data and new docs
+                # Create a dummy model to generate the document
                 if "dbt_model" in metadata:
-                    from dbt_llm_agent.core.models import DBTModel
-
-                    # Create a new document with the updated documentation
-                    if isinstance(metadata["dbt_model"], dict):
-                        # Legacy format: metadata contains the model as a dict
-                        document = self._create_homogeneous_document(
-                            model_name, metadata["dbt_model"], documentation_text
-                        )
-                    else:
-                        # Newer format: metadata contains the model object
-                        document = self._create_homogeneous_document(
-                            model_name, metadata["dbt_model"], documentation_text
-                        )
+                    # Extract the model from metadata and update with new documentation
+                    dummy_model = DBTModel(name=model_name)
+                    document = dummy_model.to_embedding_text(
+                        documentation_text=documentation_text
+                    )
                 else:
                     # No model available, just create basic document
-                    document = self._create_homogeneous_document(
-                        model_name, None, documentation_text
+                    dummy_model = DBTModel(name=model_name)
+                    document = dummy_model.to_embedding_text(
+                        documentation_text=documentation_text
                     )
 
                 # Update embedding
@@ -390,8 +364,9 @@ class ModelEmbeddingStorage:
                 logger.info(f"Updated documentation for model {model_name}")
             else:
                 # Create a basic document
-                document = self._create_homogeneous_document(
-                    model_name, None, documentation_text
+                dummy_model = DBTModel(name=model_name)
+                document = dummy_model.to_embedding_text(
+                    documentation_text=documentation_text
                 )
 
                 # Create metadata with documentation
@@ -406,7 +381,7 @@ class ModelEmbeddingStorage:
                 )
 
                 # Convert to ORM model and add to session
-                new_model = ModelEmbedding.from_domain(domain_embedding)
+                new_model = domain_embedding.to_orm()
                 session.add(new_model)
                 session.commit()
                 logger.info(f"Stored documentation for model {model_name}")
@@ -432,8 +407,8 @@ class ModelEmbeddingStorage:
         try:
             # Check if model already exists
             existing = (
-                session.query(ModelEmbedding)
-                .filter(ModelEmbedding.model_name == model_name)
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
                 .first()
             )
 
@@ -442,19 +417,18 @@ class ModelEmbeddingStorage:
                 domain_model = existing.to_domain()
                 metadata = domain_model.model_metadata or {}
 
-                # Create a new homogeneous document with existing data and new interpretation
+                # Create a new document with existing data and new interpretation
                 if "dbt_model" in metadata:
                     # Create a new document with the updated interpretation
-                    document = self._create_homogeneous_document(
-                        model_name,
-                        metadata["dbt_model"],
-                        metadata.get("documentation", {}).get("text", ""),
-                        interpretation_text,
+                    dummy_model = DBTModel(name=model_name)
+                    document = dummy_model.to_embedding_text(
+                        interpretation_text=interpretation_text
                     )
                 else:
                     # No model available, just create basic document
-                    document = self._create_homogeneous_document(
-                        model_name, None, None, interpretation_text
+                    dummy_model = DBTModel(name=model_name)
+                    document = dummy_model.to_embedding_text(
+                        interpretation_text=interpretation_text
                     )
 
                 # Update embedding
@@ -471,8 +445,9 @@ class ModelEmbeddingStorage:
                 logger.info(f"Updated interpretation for model {model_name}")
             else:
                 # Create a basic document
-                document = self._create_homogeneous_document(
-                    model_name, None, None, interpretation_text
+                dummy_model = DBTModel(name=model_name)
+                document = dummy_model.to_embedding_text(
+                    interpretation_text=interpretation_text
                 )
 
                 # Create metadata with interpretation
@@ -487,7 +462,7 @@ class ModelEmbeddingStorage:
                 )
 
                 # Convert to ORM and store
-                new_model = ModelEmbedding.from_domain(domain_embedding)
+                new_model = domain_embedding.to_orm()
                 session.add(new_model)
                 session.commit()
                 logger.info(f"Stored interpretation for model {model_name}")

@@ -862,3 +862,18 @@ class ModelEmbedding:
     def to_orm(self):
         """Convert domain model to ORM model"""
         return ModelEmbeddingTable.from_domain(self)
+
+    @classmethod
+    def from_domain(cls, embedding):
+        """Create a domain model from another domain model instance
+        This is added to handle the case where ModelEmbeddingTable.from_domain expects a ModelEmbedding
+        """
+        return cls(
+            id=embedding.id,
+            model_name=embedding.model_name,
+            document=embedding.document,
+            embedding=embedding.embedding,
+            model_metadata=embedding.model_metadata,
+            created_at=embedding.created_at,
+            updated_at=embedding.updated_at,
+        )

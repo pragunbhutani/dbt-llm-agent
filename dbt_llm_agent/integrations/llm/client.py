@@ -59,6 +59,9 @@ class LLMClient:
 
         Returns:
             List of floats representing the embedding
+
+        Raises:
+            ValueError: If the embedding cannot be generated
         """
         try:
             # Use model parameter, otherwise use instance default
@@ -71,12 +74,9 @@ class LLMClient:
             embedding = response.data[0].embedding
             return embedding
         except Exception as e:
-            logger.error(f"Error getting embedding: {e}")
-            # Return a zero embedding as fallback
-            dim = 1536  # Default for text-embedding-3-small
-            if "text-embedding-3" in (model or self.embedding_model):
-                dim = 3072 if "large" in (model or self.embedding_model) else 1536
-            return [0.0] * dim
+            error_msg = f"Error getting embedding: {e}"
+            logger.error(error_msg)
+            raise ValueError(error_msg) from e
 
     def get_completion(
         self,
