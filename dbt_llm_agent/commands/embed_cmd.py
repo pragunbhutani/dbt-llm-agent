@@ -85,14 +85,15 @@ def embed(select, force, verbose):
         logger.info("Initializing vector store...")
         vector_store = ModelEmbeddingStorage(connection_string=postgres_uri)
 
-        # Embed each model
+        # Embed each model individually to track progress
         logger.info("Embedding models...")
-        models_dict = {}
-        metadata_dict = {}
+        total_models = len(selected_models)
 
-        for model in selected_models:
+        for i, model in enumerate(selected_models):
+            model_name = model.name
+            logger.info(f"Embedding model: {model_name} ({i+1}/{total_models})")
+
             model_text = model.get_readable_representation()
-            models_dict[model.name] = model_text
 
             # Create metadata
             metadata = {
@@ -102,11 +103,19 @@ def embed(select, force, verbose):
             if hasattr(model, "tags") and model.tags:
                 metadata["tags"] = model.tags
 
-            metadata_dict[model.name] = metadata
+            # Store model with progress info
+            try:
+                vector_store.store_model(
+                    model_name=model_name, model_text=model_text, metadata=metadata
+                )
+            except Exception as e:
+                logger.error(f"Error embedding model {model_name}: {str(e)}")
+                if verbose:
+                    import traceback
 
-        # Store models in vector database
-        vector_store.store_models(models_dict, metadata_dict)
-        logger.info(f"Successfully embedded {len(selected_models)} models")
+                    logger.debug(traceback.format_exc())
+
+        logger.info(f"Successfully embedded {total_models} models")
 
     except Exception as e:
         logger.error(f"Error embedding models: {str(e)}")

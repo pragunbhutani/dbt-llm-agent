@@ -33,7 +33,12 @@ logger = get_logger(__name__)
 )
 @click.option("--embed", is_flag=True, help="Embed interpreted models in vector store")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def interpret(select, save, embed, verbose):
+@click.option(
+    "--only-when-missing",
+    is_flag=True,
+    help="Only interpret models that don't already have an interpretation",
+)
+def interpret(select, save, embed, verbose, only_when_missing):
     """Interpret dbt models and generate documentation.
 
     This command analyzes selected dbt models using LLM and generates documentation,
@@ -43,6 +48,7 @@ def interpret(select, save, embed, verbose):
         dbt-llm interpret --select "customers"
         dbt-llm interpret --select "+tag:marts" --save
         dbt-llm interpret --select "orders" --save --embed
+        dbt-llm interpret --select "customers" --save --only-when-missing
     """
     set_logging_level(verbose)
 
@@ -102,14 +108,38 @@ def interpret(select, save, embed, verbose):
 
         logger.info(f"Selected {len(selected_model_names)} models for interpretation")
 
+        # Filter models based on existing interpretations if --only-when-missing flag is set
+        if only_when_missing:
+            original_count = len(selected_model_names)
+            filtered_model_names = []
+
+            for model_name in selected_model_names:
+                model = models_dict.get(model_name)
+                if model and not model.interpreted_description:
+                    filtered_model_names.append(model_name)
+                elif model:
+                    logger.info(
+                        f"Skipping model {model_name} as it already has an interpretation"
+                    )
+
+            selected_model_names = filtered_model_names
+            logger.info(
+                f"Filtered to {len(selected_model_names)} models that need interpretation (skipped {original_count - len(selected_model_names)})"
+            )
+
+            if not selected_model_names:
+                logger.info("No models need interpretation, exiting")
+                sys.exit(0)
+
         # Interpret each selected model
-        for model_name in selected_model_names:
+        total_models = len(selected_model_names)
+        for i, model_name in enumerate(selected_model_names):
             model = models_dict.get(model_name)
             if not model:
                 logger.warning(f"Model {model_name} not found in database, skipping")
                 continue
 
-            logger.info(f"Interpreting model: {model_name}")
+            logger.info(f"Interpreting model: {model_name} ({i+1}/{total_models})")
 
             # Get interpretations from the agent
             result = agent.interpret_model(model_name)
@@ -121,7 +151,9 @@ def interpret(select, save, embed, verbose):
                 continue
 
             # Display interpretation
-            print(f"\n=== Interpretation for model: {model_name} ===\n")
+            print(
+                f"\n=== Interpretation for model: {model_name} ({i+1}/{total_models}) ===\n"
+            )
             print(result["yaml_documentation"])
 
             # Save interpretation if requested
