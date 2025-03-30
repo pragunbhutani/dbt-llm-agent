@@ -5,6 +5,7 @@ import logging
 from typing import Dict, List, Any, Optional
 import sqlalchemy as sa
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import cast
 from pgvector.sqlalchemy import Vector
 import numpy as np
 
@@ -227,11 +228,22 @@ class ModelEmbeddingStorage:
             # Get embedding for the query
             query_embedding = self._get_embedding(query)
 
-            # Build query
+            # Check if embedding generation failed
+            if not query_embedding:
+                logger.error(f"Could not generate embedding for query: {query}")
+                return []  # Return empty list if embedding fails
+
+            # Get embedding dimension
+            embedding_dim = len(query_embedding)
+
+            # Build query with explicit cast
             db_query = session.query(
                 ModelEmbeddingTable,
                 sa.func.cosine_distance(
-                    ModelEmbeddingTable.embedding, query_embedding
+                    ModelEmbeddingTable.embedding,
+                    cast(
+                        query_embedding, Vector(embedding_dim)
+                    ),  # Cast to Vector with dimension
                 ).label("distance"),
             )
 

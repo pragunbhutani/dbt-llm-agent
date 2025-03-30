@@ -62,3 +62,27 @@ Make sure to:
 - Format the YAML correctly with proper indentation
 - Add business context where possible
 """
+
+# Prompt for refining user queries for semantic search
+SEARCH_QUERY_REFINEMENT_PROMPT_TEMPLATE = """
+You are an AI assistant helping to refine user questions into effective search queries for a vector database containing dbt model documentation.
+
+The user's original question is:
+{prompt}
+
+Your task is to extract the key entities, metrics, dimensions, and concepts from the user's question and formulate a concise and focused search query. The query should ideally be a few keywords or a short phrase that captures the core semantic meaning relevant to finding dbt models.
+
+Example 1:
+User Question: "how can I find the mrr per month grouped by industry type?"
+Refined Query: "monthly mrr by industry"
+
+Example 2:
+User Question: "show me total sales and number of orders for the retail segment in Q4"
+Refined Query: "Q4 retail sales orders"
+
+Example 3:
+User Question: "which models contain information about customer lifetime value?"
+Refined Query: "customer lifetime value ltv"
+
+Return ONLY the refined search query, without any explanation or preamble.
+"""

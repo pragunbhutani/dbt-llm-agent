@@ -16,6 +16,7 @@ from dbt_llm_agent.utils.cli_utils import (
     set_logging_level,
     format_model_reference,
 )
+from dbt_llm_agent.storage.question_storage import QuestionStorage
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -31,16 +32,7 @@ console = Console()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.argument("question")
 def ask(question, no_history, verbose):
-    """Ask a question about your dbt models.
-
-    This command lets you ask questions about your dbt models in natural language.
-    dbt-llm-agent will use its knowledge of your models to provide an answer.
-
-    Examples:
-        dbt-llm ask "What models do we have related to customers?"
-        dbt-llm ask "How is the orders model related to customers?"
-        dbt-llm ask "What are the primary key columns in orders model?"
-    """
+    """Ask a question about your dbt models using an agentic workflow."""
     set_logging_level(verbose)
 
     # Check for OpenAI API key
@@ -73,90 +65,81 @@ def ask(question, no_history, verbose):
             sys.exit(1)
 
         # Initialize LLM client
-        from dbt_llm_agent.llm.client import LLMClient
+        from dbt_llm_agent.integrations.llm.client import LLMClient
 
         llm = LLMClient(api_key=openai_api_key, model=openai_model)
 
         # Initialize question tracking if we are storing history
-        question_id = None
+        question_tracking = None
         if not no_history:
-            from dbt_llm_agent.storage.question_storage import QuestionStorage
-
             question_tracking = QuestionStorage(postgres_uri)
 
-        # Search for relevant models
-        console.print("[bold]🔍 Searching for relevant models...[/bold]")
-        relevant_results = vector_store.search_models(question, n_results=5)
-        relevant_models = []
-
-        if relevant_results:
-            for result in relevant_results:
-                model_name = result["model_name"]
-                similarity = result["similarity_score"]
-                if similarity > 0.5:  # Only include if reasonably similar
-                    # Get full model details
-                    model = model_storage.get_model(model_name)
-                    if model:
-                        relevant_models.append(
-                            {
-                                "name": model_name,
-                                "description": model.description or "No description",
-                                "similarity": similarity,
-                            }
-                        )
-
-        # Display relevant models if in verbose mode
-        if verbose and relevant_models:
-            console.print("\n[bold]Relevant Models:[/bold]")
-            for model in relevant_models:
-                console.print(
-                    f"- {model['name']} "
-                    f"({model['similarity']:.2f}): {model['description']}"
-                )
-
-        # Generate the answer
-        console.print("[bold]🤔 Generating answer...[/bold]")
-
+        # Initialize the Agent
         from dbt_llm_agent.core.agent import Agent
 
         agent = Agent(
             llm_client=llm,
             model_storage=model_storage,
             vector_store=vector_store,
+            question_storage=question_tracking,
             temperature=temperature,
+            console=console,
+            verbose=verbose,
         )
 
-        answer = agent.answer_question(question, relevant_models)
+        # *** Start of New Agentic Workflow ***
+        console.print("[bold]🚀 Starting agentic workflow...[/bold]")
 
-        # Display the answer
+        # Run the agentic workflow
+        # This method will handle understanding, searching, fetching,
+        # feedback checking, synthesis, validation, and refinement.
+        workflow_result = agent.run_agentic_workflow(question)
+
+        if not workflow_result or not workflow_result.get("final_answer"):
+            console.print(
+                "[bold red]Agent could not generate a satisfactory answer.[/bold red]"
+            )
+            return 1
+
+        final_answer = workflow_result["final_answer"]
+        used_model_names = workflow_result.get("used_model_names", [])
+        conversation_id = workflow_result.get("conversation_id")
+
+        # Display the final answer
         console.print("\n[bold]Question:[/bold]")
         console.print(question)
-        console.print("\n[bold]Answer:[/bold]")
-
-        # Format answer as markdown
-        md = Markdown(answer)
+        console.print("\n[bold]Final Answer:[/bold]")
+        md = Markdown(final_answer)
         console.print(md)
 
-        # Store the question and answer
-        if not no_history:
-            # Extract model names
-            model_names = [model["name"] for model in relevant_models]
-
-            question_id = question_tracking.record_question(
-                question_text=question,
-                answer_text=answer,
-                model_names=model_names,
-            )
-
+        # Handle history saving confirmation (if managed by workflow)
+        if conversation_id and not no_history:
             console.print(
-                f"\n[italic]This conversation has been saved with ID {question_id}.[/italic]"
+                f"\n[italic]This conversation has been saved with ID {conversation_id}.[/italic]"
             )
             console.print(
                 "[italic]You can provide feedback with "
-                f"'dbt-llm feedback {question_id} --useful/--not-useful'[/italic]"
+                f"'dbt-llm feedback {conversation_id} --useful/--not-useful'[/italic]"
             )
+        elif not no_history and not conversation_id and question_tracking:
+            # Fallback if workflow didn't save history
+            # Only try if question_tracking was initialized
+            try:
+                new_id = question_tracking.record_question(
+                    question_text=question,
+                    answer_text=final_answer,
+                    model_names=used_model_names,
+                )
+                console.print(
+                    f"\n[italic]Saved conversation with ID {new_id} (fallback).[/italic]"
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"Could not save question history via fallback: {hist_err}"
+                )
 
         return 0
+        # *** End of New Agentic Workflow ***
 
     except Exception as e:
         logger.error(f"Error asking question: {str(e)}")
