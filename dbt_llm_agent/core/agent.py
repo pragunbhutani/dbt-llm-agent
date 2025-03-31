@@ -715,407 +715,7 @@ class Agent:
             logger.error(f"Error updating model documentation: {e}")
             return False
 
-    def interpret_model(
-        self,
-        model_name: str,
-        recursive: bool = False,
-        force_recursive: bool = False,
-        visited: Optional[Set[str]] = None,
-        _recursive_results: Optional[
-            Dict[str, Dict[str, Any]]
-        ] = None,  # Internal tracking
-    ) -> Dict[str, Any]:
-        """Interpret a model and its columns, potentially recursively.
-
-        Args:
-            model_name: Name of the model to interpret.
-            recursive: Whether to recursively interpret upstream models if they lack interpretation.
-            force_recursive: Whether to force re-interpretation of all upstream models.
-            visited: Set of model names visited in the current recursion path (for cycle detection).
-            _recursive_results: Internal dictionary to store results from recursive calls.
-
-        Returns:
-            Dict containing the interpreted documentation in YAML format and other metadata for the *target* model_name.
-        """
-        if visited is None:
-            visited = set()
-        if _recursive_results is None:
-            _recursive_results = (
-                {}
-            )  # Initialize storage for results from this branch downwards
-
-        # --- Cycle Detection ---
-        if model_name in visited:
-            logger.warning(
-                f"Circular dependency detected: Already processing {model_name}. Skipping further recursion."
-            )
-            # Return a specific indicator or just an error? For now, return error-like dict.
-            return {
-                "model_name": model_name,
-                "error": f"Circular dependency detected involving {model_name}",
-                "success": False,
-                "skipped_circular": True,  # Add a flag
-            }
-        visited.add(model_name)
-
-        try:
-            logger.debug(
-                f"Starting interpretation process for: {model_name} (Recursive: {recursive}, Force: {force_recursive})"
-            )
-
-            model = self.model_storage.get_model(model_name)
-            if not model:
-                return {
-                    "model_name": model_name,
-                    "error": f"Model {model_name} not found",
-                    "success": False,
-                }
-
-            # --- Recursive Interpretation of Upstream Models ---
-            upstream_models_data: Dict[str, DBTModel] = (
-                {}
-            )  # Store fetched upstream models
-            if recursive or force_recursive:
-                logger.debug(f"Processing upstream models for {model_name}")
-                for upstream_name in model.all_upstream_models:
-                    upstream_model = self.model_storage.get_model(upstream_name)
-                    if not upstream_model:
-                        logger.warning(
-                            f"Upstream model {upstream_name} not found for {model_name}. Skipping."
-                        )
-                        continue
-
-                    upstream_models_data[upstream_name] = (
-                        upstream_model  # Store for later use
-                    )
-
-                    # Check if interpretation is needed
-                    needs_interpretation = False
-                    if force_recursive:
-                        needs_interpretation = True
-                        logger.info(
-                            f"Forcing recursive interpretation for upstream model: {upstream_name}"
-                        )
-                    elif (
-                        recursive and not upstream_model.interpreted_description
-                    ):  # Check if interpretation exists
-                        needs_interpretation = True
-                        logger.info(
-                            f"Recursively interpreting upstream model {upstream_name} as it lacks interpretation."
-                        )
-                    else:
-                        logger.debug(
-                            f"Skipping interpretation for upstream model {upstream_name} (already interpreted or flags not set)."
-                        )
-
-                    if needs_interpretation:
-                        # Make recursive call, passing a copy of visited set
-                        logger.debug(
-                            f"Calling interpret_model recursively for {upstream_name}"
-                        )
-                        recursive_result = self.interpret_model(
-                            upstream_name,
-                            recursive=recursive,  # Pass flags down
-                            force_recursive=force_recursive,
-                            visited=visited.copy(),  # Pass copy for independent path tracking
-                            _recursive_results=_recursive_results,  # Pass the shared results dict
-                        )
-
-                        # Store the result (even if failed/skipped) to avoid re-processing and for context building
-                        if upstream_name not in _recursive_results:
-                            _recursive_results[upstream_name] = recursive_result
-
-                        if not recursive_result.get("success"):
-                            # Log error but continue, maybe partial info is better than none
-                            error_msg = recursive_result.get(
-                                "error", "Unknown error during recursive interpretation"
-                            )
-                            if not recursive_result.get(
-                                "skipped_circular"
-                            ):  # Don't log error again for cycles
-                                logger.warning(
-                                    f"Recursive interpretation failed for {upstream_name}: {error_msg}"
-                                )
-
-            # --- Generate Upstream Info String ---
-            # Fetch any upstream models not already fetched during recursion check
-            for upstream_name in model.all_upstream_models:
-                if upstream_name not in upstream_models_data:
-                    um = self.model_storage.get_model(upstream_name)
-                    if um:
-                        upstream_models_data[upstream_name] = um
-                    else:
-                        logger.warning(
-                            f"Upstream model {upstream_name} (needed for context) not found for {model_name}. Skipping."
-                        )
-
-            upstream_info = ""
-            for um_name, um in upstream_models_data.items():
-                upstream_info += f"\n-- Upstream Model: {um.name} --\n"
-                description = "No description available."
-                columns_info = "Columns: No column information available."
-
-                # Priority 1: Use result from the *current* recursive run if available and successful
-                if um_name in _recursive_results and _recursive_results[um_name].get(
-                    "success"
-                ):
-                    logger.debug(
-                        f"Using fresh recursive result for upstream model {um_name}"
-                    )
-                    try:
-                        yaml_doc = _recursive_results[um_name].get(
-                            "yaml_documentation", ""
-                        )
-                        # Minimal parsing needed here, just description and columns
-                        parsed = yaml.safe_load(yaml_doc)
-                        model_data = parsed.get("models", [{}])[0]
-                        description = model_data.get(
-                            "description",
-                            "Description missing in fresh interpretation.",
-                        )
-                        cols = model_data.get("columns", [])
-                        if cols:
-                            columns_info = "Columns (from fresh interpretation):\n"
-                            for col in cols:
-                                col_name = col.get("name", "unknown")
-                                col_desc = col.get("description", "No description")
-                                columns_info += f"  - {col_name}: {col_desc}\n"
-                        else:
-                            columns_info = (
-                                "Columns: None found in fresh interpretation."
-                            )
-
-                    except Exception as e:
-                        logger.warning(
-                            f"Failed to parse fresh recursive result YAML for {um_name}: {e}. Falling back."
-                        )
-                        # Fallback logic starts here if parsing fails
-                        description = (
-                            um.interpreted_description
-                            or um.description
-                            or "No description provided."
-                        )
-                        if um.interpreted_columns:
-                            columns_info = "Columns (from stored interpretation):\n"
-                            for col_name, col_desc in um.interpreted_columns.items():
-                                columns_info += f"  - {col_name}: {col_desc}\n"
-                        elif um.columns:
-                            columns_info = "Columns (from YML):\n"
-                            for col_name, col_obj in um.columns.items():
-                                columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
-
-                # Priority 2: Use stored interpretation if no fresh one exists
-                elif um.interpreted_description or um.interpreted_columns:
-                    logger.debug(
-                        f"Using stored interpretation for upstream model {um_name}"
-                    )
-                    description = (
-                        um.interpreted_description
-                        or "No model description, using YML description if available."
-                    )
-                    # If model description was from interpretation, try using interpreted columns first
-                    if um.interpreted_description and um.interpreted_columns:
-                        columns_info = "Columns (from stored interpretation):\n"
-                        for col_name, col_desc in um.interpreted_columns.items():
-                            columns_info += f"  - {col_name}: {col_desc}\n"
-                    # Fallback to YML columns if no interpreted columns
-                    elif um.columns:
-                        columns_info = "Columns (from YML):\n"
-                        for col_name, col_obj in um.columns.items():
-                            columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
-                    # Use model YML description if no interpreted description was found
-                    if (
-                        description
-                        == "No model description, using YML description if available."
-                    ):
-                        description = um.description or "No description provided."
-
-                # Priority 3: Use YML definition if no interpretation exists
-                elif um.description or um.columns:
-                    logger.debug(f"Using YML definition for upstream model {um_name}")
-                    description = um.description or "No YML description provided."
-                    if um.columns:
-                        columns_info = "Columns (from YML):\n"
-                        for col_name, col_obj in um.columns.items():
-                            columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
-
-                upstream_info += f"Description: {description}\n"
-                upstream_info += columns_info + "\n"  # Add newline for spacing
-                upstream_info += (
-                    f"Raw SQL:\n```sql\n{um.raw_sql or 'SQL not available'}\n```\n"
-                )
-                upstream_info += "-- End Upstream Model --\n"
-
-            # --- Prepare and Call LLM for the Target Model ---
-            prompt = MODEL_INTERPRETATION_PROMPT.format(
-                model_name=model.name,
-                model_sql=model.raw_sql,
-                upstream_info=upstream_info,
-            )
-
-            logger.debug(
-                f"Final interpretation prompt for model {model_name}:\n{prompt}"
-            )
-
-            yaml_documentation = self.llm.get_completion(
-                prompt=f"Interpret and generate YAML documentation for the model {model_name} based on its SQL and upstream dependencies",
-                system_prompt=prompt,
-                max_tokens=2000,  # Consider if this needs adjustment
-            )
-
-            logger.debug(
-                f"Raw LLM response for model {model_name}:\n{yaml_documentation}"
-            )
-
-            # Extract YAML content
-            match = re.search(r"```(?:yaml)?\n(.*?)```", yaml_documentation, re.DOTALL)
-            yaml_content = (
-                match.group(1).strip() if match else yaml_documentation.strip()
-            )
-
-            # Store own result in the recursive results dict as well
-            result_data = {
-                "model_name": model_name,
-                "yaml_documentation": yaml_content,
-                "prompt": prompt,
-                "success": True,
-            }
-            _recursive_results[model_name] = result_data
-            return result_data
-
-        except Exception as e:
-            logger.error(
-                f"Error interpreting model {model_name}: {e}", exc_info=True
-            )  # Add traceback
-            error_result = {
-                "model_name": model_name,
-                "error": f"Error interpreting model: {str(e)}",
-                "success": False,
-            }
-            _recursive_results[model_name] = error_result  # Store error result
-            return error_result
-        finally:
-            # Clean up visited set for this specific path after returning
-            # This is important so siblings in the DAG don't see this node as visited
-            # Note: Because we pass visited.copy() down, this removal only affects the current stack frame upwards
-            if model_name in visited:
-                visited.remove(model_name)
-
-    def save_interpreted_documentation(
-        self, model_name: str, yaml_documentation: str, embed: bool = False
-    ) -> Dict[str, Any]:
-        """Save interpreted documentation for a model.
-
-        Args:
-            model_name: Name of the model
-            yaml_documentation: YAML documentation as a string
-            embed: Whether to embed the model in the vector store
-
-        Returns:
-            Dict containing the result of the operation
-        """
-        try:
-            logger.info(f"Saving interpreted documentation for model {model_name}")
-
-            # Clean the YAML string from markdown code fences
-            lines = yaml_documentation.strip().splitlines()
-            if lines and lines[0].strip().startswith("```yaml"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned_yaml_documentation = "\n".join(lines)
-
-            try:
-                # Use the cleaned string for parsing
-                parsed_yaml = yaml.safe_load(cleaned_yaml_documentation)
-            except Exception as e:
-                logger.error(f"Error parsing YAML: {e}")
-                return {
-                    "model_name": model_name,
-                    "error": f"Invalid YAML format: {str(e)}",
-                    "success": False,
-                }
-
-            model_description = ""
-            column_descriptions = {}
-
-            if (
-                parsed_yaml
-                and "models" in parsed_yaml
-                and isinstance(parsed_yaml["models"], list)
-                and len(parsed_yaml["models"]) > 0
-            ):
-                model_data = parsed_yaml["models"][0]
-                if "description" in model_data:
-                    model_description = model_data["description"]
-
-                if "columns" in model_data and isinstance(model_data["columns"], list):
-                    for column in model_data["columns"]:
-                        # Add a check to ensure 'column' is a dictionary and not None
-                        if (
-                            isinstance(column, dict)
-                            and "name" in column
-                            and "description" in column
-                        ):
-                            column_descriptions[column["name"]] = column["description"]
-                        elif (
-                            column is not None
-                        ):  # Log a warning if it's not a dict but also not None
-                            logger.warning(
-                                f"Skipping invalid column entry in YAML for model {model_name}: {column}"
-                            )
-            else:
-                logger.warning(
-                    f"Missing or invalid YAML structure for model {model_name}"
-                )
-
-            existing_model = self.model_storage.get_model(model_name)
-            if existing_model:
-                logger.debug(
-                    f"Existing model columns: {list(existing_model.columns.keys())}"
-                )
-                logger.debug(f"Tests in existing model: {existing_model.tests}")
-
-                existing_model.interpreted_description = model_description
-                existing_model.interpreted_columns = column_descriptions
-
-                success = self.model_storage.update_model(existing_model)
-
-                if success:
-                    if embed:
-                        logger.info(f"Embedding model {model_name} in vector store")
-                        self.vector_store.store_model(
-                            model_name=model_name,
-                            model_text=existing_model.get_readable_representation(),
-                        )
-                    else:
-                        logger.debug(f"Skipping embedding for model {model_name}")
-
-                return {
-                    "model_name": model_name,
-                    "success": success,
-                    "message": (
-                        "Interpretation saved successfully"
-                        if success
-                        else "Failed to save interpretation"
-                    ),
-                }
-            else:
-                return {
-                    "model_name": model_name,
-                    "error": f"Model {model_name} not found in the database",
-                    "success": False,
-                }
-
-        except Exception as e:
-            logger.error(f"Error saving interpreted documentation: {e}")
-            return {
-                "model_name": model_name,
-                "error": f"Error saving interpreted documentation: {str(e)}",
-                "success": False,
-            }
-
-    def interpret_model_agentic(self, model_name: str) -> Dict[str, Any]:
+    def interpret_model(self, model_name: str) -> Dict[str, Any]:
         """Interpret a model and its columns using an agentic workflow.
 
         This method implements a step-by-step agentic approach to model interpretation:
@@ -1416,6 +1016,7 @@ class Agent:
                 "yaml_documentation": final_yaml_content,
                 "draft_yaml": draft_yaml_content,
                 "verification_result": verification_result,
+                "prompt": prompt,
                 "success": True,
             }
 
@@ -1432,3 +1033,117 @@ class Agent:
                 "success": False,
             }
             return error_result
+
+    def save_interpreted_documentation(
+        self, model_name: str, yaml_documentation: str, embed: bool = False
+    ) -> Dict[str, Any]:
+        """Save interpreted documentation for a model.
+
+        Args:
+            model_name: Name of the model
+            yaml_documentation: YAML documentation as a string
+            embed: Whether to embed the model in the vector store
+
+        Returns:
+            Dict containing the result of the operation
+        """
+        try:
+            logger.info(f"Saving interpreted documentation for model {model_name}")
+
+            # Clean the YAML string from markdown code fences
+            lines = yaml_documentation.strip().splitlines()
+            if lines and lines[0].strip().startswith("```yaml"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned_yaml_documentation = "\n".join(lines)
+
+            try:
+                # Use the cleaned string for parsing
+                parsed_yaml = yaml.safe_load(cleaned_yaml_documentation)
+            except Exception as e:
+                logger.error(f"Error parsing YAML: {e}")
+                return {
+                    "model_name": model_name,
+                    "error": f"Invalid YAML format: {str(e)}",
+                    "success": False,
+                }
+
+            model_description = ""
+            column_descriptions = {}
+
+            if (
+                parsed_yaml
+                and "models" in parsed_yaml
+                and isinstance(parsed_yaml["models"], list)
+                and len(parsed_yaml["models"]) > 0
+            ):
+                model_data = parsed_yaml["models"][0]
+                if "description" in model_data:
+                    model_description = model_data["description"]
+
+                if "columns" in model_data and isinstance(model_data["columns"], list):
+                    for column in model_data["columns"]:
+                        # Add a check to ensure 'column' is a dictionary and not None
+                        if (
+                            isinstance(column, dict)
+                            and "name" in column
+                            and "description" in column
+                        ):
+                            column_descriptions[column["name"]] = column["description"]
+                        elif (
+                            column is not None
+                        ):  # Log a warning if it's not a dict but also not None
+                            logger.warning(
+                                f"Skipping invalid column entry in YAML for model {model_name}: {column}"
+                            )
+            else:
+                logger.warning(
+                    f"Missing or invalid YAML structure for model {model_name}"
+                )
+
+            existing_model = self.model_storage.get_model(model_name)
+            if existing_model:
+                logger.debug(
+                    f"Existing model columns: {list(existing_model.columns.keys())}"
+                )
+                logger.debug(f"Tests in existing model: {existing_model.tests}")
+
+                existing_model.interpreted_description = model_description
+                existing_model.interpreted_columns = column_descriptions
+
+                success = self.model_storage.update_model(existing_model)
+
+                if success:
+                    if embed:
+                        logger.info(f"Embedding model {model_name} in vector store")
+                        self.vector_store.store_model(
+                            model_name=model_name,
+                            model_text=existing_model.get_readable_representation(),
+                        )
+                    else:
+                        logger.debug(f"Skipping embedding for model {model_name}")
+
+                return {
+                    "model_name": model_name,
+                    "success": success,
+                    "message": (
+                        "Interpretation saved successfully"
+                        if success
+                        else "Failed to save interpretation"
+                    ),
+                }
+            else:
+                return {
+                    "model_name": model_name,
+                    "error": f"Model {model_name} not found in the database",
+                    "success": False,
+                }
+
+        except Exception as e:
+            logger.error(f"Error saving interpreted documentation: {e}")
+            return {
+                "model_name": model_name,
+                "error": f"Error saving interpreted documentation: {str(e)}",
+                "success": False,
+            }

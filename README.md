@@ -89,11 +89,8 @@ poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing
 # Embed specific models in vector database
 poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
 
-# Interpret a single model and generate documentation using the agentic workflow (default)
+# Interpret a single model and generate documentation using the agentic workflow
 poetry run dbt-llm-agent interpret customer_orders
-
-# Interpret a model using the legacy (non-agentic) approach
-poetry run dbt-llm-agent interpret customer_orders --legacy
 
 # Interpret multiple models using dbt selector syntax
 poetry run dbt-llm-agent interpret --select "tag:marketing"
@@ -125,9 +122,9 @@ poetry run dbt-llm-agent slack
 
 ### Model Interpretation
 
-The agent supports two approaches for interpreting dbt models:
+The agent uses an agentic workflow to interpret dbt models:
 
-#### Agentic Workflow (Default)
+#### Agentic Workflow
 
 The agentic workflow is a multi-step process that:
 
@@ -141,23 +138,14 @@ The agentic workflow is a multi-step process that:
 This approach results in more accurate and comprehensive interpretations, particularly for complex models with many dependencies.
 
 ```bash
-# Use the agentic workflow (default)
+# Use the agentic workflow
 poetry run dbt-llm-agent interpret customer_orders
 
 # With verbose output to see verification details
 poetry run dbt-llm-agent interpret customer_orders --verbose
 ```
 
-#### Legacy Approach
-
-The legacy approach uses a single-shot interpretation without the verification and refinement steps:
-
-```bash
-# Use the legacy (non-agentic) approach
-poetry run dbt-llm-agent interpret customer_orders --legacy
-```
-
-Both approaches support the same options for saving, embedding, and selecting models using dbt selection syntax.
+All interpretation commands support the same options for saving, embedding, and selecting models using dbt selection syntax.
 
 ### Model Selection Syntax
 

@@ -48,20 +48,15 @@ logger = get_logger(__name__)
     is_flag=True,
     help="Recursively interpret all upstream models, even if they have existing interpretations",
 )
-@click.option(
-    "--legacy",
-    is_flag=True,
-    help="Use the legacy (non-agentic) interpretation approach",
-)
 def interpret(
-    select, save, embed, verbose, only_when_missing, recursive, force_recursive, legacy
+    select, save, embed, verbose, only_when_missing, recursive, force_recursive
 ):
     """Interpret dbt models and generate documentation.
 
     This command analyzes selected dbt models using LLM and generates documentation,
     including model descriptions and column definitions.
 
-    By default, this command uses an agentic workflow that:
+    The command uses an agentic workflow that:
     1. Reads the model source code to identify upstream dependencies
     2. Fetches details of upstream models for context
     3. Creates a draft interpretation
@@ -75,7 +70,6 @@ def interpret(
         dbt-llm interpret --select "customers" --save --only-when-missing
         dbt-llm interpret --select "+fct_orders" --recursive --save
         dbt-llm interpret --select "+fct_orders" --force-recursive --save
-        dbt-llm interpret --select "customers" --legacy  # Use non-agentic approach
     """
     set_logging_level(verbose)
 
@@ -174,16 +168,10 @@ def interpret(
                 continue
 
             logger.info(f"Interpreting model: {model_name} ({i+1}/{total_models})")
+            logger.info(f"Using agentic workflow for {model_name}")
 
-            # Get interpretations from the agent using either legacy or agentic approach
-            if legacy:
-                logger.info(f"Using legacy (non-agentic) approach for {model_name}")
-                result = agent.interpret_model(
-                    model_name, recursive=recursive, force_recursive=force_recursive
-                )
-            else:
-                logger.info(f"Using agentic workflow for {model_name}")
-                result = agent.interpret_model_agentic(model_name)
+            # Get interpretations from the agent
+            result = agent.interpret_model(model_name)
 
             if not result.get("success", False):
                 logger.error(
@@ -201,8 +189,8 @@ def interpret(
                 print(result["prompt"])
                 print("--- End Prompt ---\n")
 
-            # If verbose and using agentic approach, print verification details
-            if verbose and not legacy and "verification_result" in result:
+            # If verbose, print verification details
+            if verbose and "verification_result" in result:
                 print(f"\n--- Verification for {model_name} ---")
                 print(result["verification_result"])
                 print("--- End Verification ---\n")
