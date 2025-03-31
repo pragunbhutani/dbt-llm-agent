@@ -1114,3 +1114,321 @@ class Agent:
                 "error": f"Error saving interpreted documentation: {str(e)}",
                 "success": False,
             }
+
+    def interpret_model_agentic(self, model_name: str) -> Dict[str, Any]:
+        """Interpret a model and its columns using an agentic workflow.
+
+        This method implements a step-by-step agentic approach to model interpretation:
+        1. Read the source code of the model to interpret
+        2. Identify upstream models that provide context
+        3. Fetch details of the upstream models
+        4. Create a draft interpretation
+        5. Verify the draft against upstream models to ensure completeness and correctness
+
+        Args:
+            model_name: Name of the model to interpret.
+
+        Returns:
+            Dict containing the interpreted documentation in YAML format and metadata.
+        """
+        try:
+            logger.info(
+                f"Starting agentic interpretation workflow for model: {model_name}"
+            )
+
+            # Step 1: Read the source code of the model to interpret
+            model = self.model_storage.get_model(model_name)
+            if not model:
+                return {
+                    "model_name": model_name,
+                    "error": f"Model {model_name} not found",
+                    "success": False,
+                }
+
+            logger.info(f"Retrieved model {model_name} for interpretation")
+
+            # Step 2: Identify upstream models from the model's source code
+            logger.info(f"Analyzing upstream dependencies for {model_name}")
+
+            # Get upstream models from the model's metadata
+            upstream_model_names = model.all_upstream_models
+
+            if not upstream_model_names:
+                logger.warning(
+                    f"No upstream models found for {model_name}. Using depends_on list."
+                )
+                upstream_model_names = model.depends_on
+
+            logger.info(
+                f"Found {len(upstream_model_names)} upstream models for {model_name}"
+            )
+
+            # Step 3: Fetch details of the upstream models for context
+            upstream_models_data = {}
+            upstream_info = ""
+            for upstream_name in upstream_model_names:
+                logger.info(f"Fetching details for upstream model: {upstream_name}")
+                upstream_model = self.model_storage.get_model(upstream_name)
+                if not upstream_model:
+                    logger.warning(
+                        f"Upstream model {upstream_name} not found. Skipping."
+                    )
+                    continue
+
+                upstream_models_data[upstream_name] = upstream_model
+
+                # Add upstream model information to context
+                upstream_info += f"\n-- Upstream Model: {upstream_model.name} --\n"
+                description = (
+                    upstream_model.interpreted_description
+                    or upstream_model.description
+                    or "No description available."
+                )
+                upstream_info += f"Description: {description}\n"
+
+                # Add column information from either interpreted columns or YML columns
+                if upstream_model.interpreted_columns:
+                    upstream_info += "Columns (from LLM interpretation):\n"
+                    for (
+                        col_name,
+                        col_desc,
+                    ) in upstream_model.interpreted_columns.items():
+                        upstream_info += f"  - {col_name}: {col_desc}\n"
+                elif upstream_model.columns:
+                    upstream_info += "Columns (from YML):\n"
+                    for col_name, col_obj in upstream_model.columns.items():
+                        upstream_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
+                else:
+                    upstream_info += "Columns: No column information available.\n"
+
+                # Add SQL for context
+                upstream_info += f"Raw SQL:\n```sql\n{upstream_model.raw_sql or 'SQL not available'}\n```\n"
+                upstream_info += "-- End Upstream Model --\n"
+
+            # Step 4: Create a draft interpretation using the model SQL and upstream info
+            logger.info(f"Creating draft interpretation for {model_name}")
+
+            prompt = MODEL_INTERPRETATION_PROMPT.format(
+                model_name=model.name,
+                model_sql=model.raw_sql,
+                upstream_info=upstream_info,
+            )
+
+            draft_yaml_documentation = self.llm.get_completion(
+                prompt=f"Interpret and generate YAML documentation for the model {model_name} based on its SQL and upstream dependencies",
+                system_prompt=prompt,
+                max_tokens=2000,
+            )
+
+            logger.debug(
+                f"Draft interpretation for {model_name}:\n{draft_yaml_documentation}"
+            )
+
+            # Extract YAML content from the response
+            match = re.search(
+                r"```(?:yaml)?\n(.*?)```", draft_yaml_documentation, re.DOTALL
+            )
+            if match:
+                draft_yaml_content = match.group(1).strip()
+            else:
+                # If no code block found, use the whole response but check for YAML tags
+                draft_yaml_content = draft_yaml_documentation.strip()
+                # Remove any potential YAML code fence markers at the beginning or end
+                if draft_yaml_content.startswith("```yaml"):
+                    draft_yaml_content = draft_yaml_content[7:]
+                if draft_yaml_content.endswith("```"):
+                    draft_yaml_content = draft_yaml_content[:-3]
+                draft_yaml_content = draft_yaml_content.strip()
+
+            logger.debug(
+                f"Cleaned draft YAML content for {model_name}:\n{draft_yaml_content}"
+            )
+
+            # Parse the draft YAML to get column information
+            try:
+                # Additional safety check to ensure YAML content is clean
+                if draft_yaml_content.startswith("```") or draft_yaml_content.endswith(
+                    "```"
+                ):
+                    # Further cleaning if needed
+                    lines = draft_yaml_content.strip().splitlines()
+                    if lines and (
+                        lines[0].startswith("```") or lines[0].startswith("---")
+                    ):
+                        lines = lines[1:]
+                    if lines and (lines[-1] == "```" or lines[-1] == "---"):
+                        lines = lines[:-1]
+                    draft_yaml_content = "\n".join(lines).strip()
+
+                draft_parsed = yaml.safe_load(draft_yaml_content)
+                if draft_parsed is None:
+                    logger.warning(
+                        f"Draft YAML for {model_name} parsed as None, using empty dict"
+                    )
+                    draft_parsed = {}
+
+                draft_model_data = draft_parsed.get("models", [{}])[0]
+                draft_columns = draft_model_data.get("columns", [])
+                if draft_columns is None:
+                    draft_columns = []
+
+                draft_column_names = [
+                    col.get("name")
+                    for col in draft_columns
+                    if col and isinstance(col, dict) and "name" in col
+                ]
+
+                logger.info(
+                    f"Draft interpretation contains {len(draft_column_names)} columns"
+                )
+            except Exception as e:
+                logger.error(f"Error parsing draft YAML: {str(e)}")
+                draft_columns = []
+                draft_column_names = []
+
+            # Step 5: Verify the draft interpretation against upstream models
+            logger.info(
+                f"Verifying draft interpretation for {model_name} against upstream models"
+            )
+
+            # Prepare a representation of columns for verification
+            column_representation = "No columns found in draft"
+            if draft_column_names:
+                column_representation = ", ".join(draft_column_names)
+            elif draft_yaml_content:
+                # If we couldn't parse columns but have YAML content, include raw content
+                column_representation = f"YAML parsing failed, raw content available but columns couldn't be extracted."
+
+            verification_prompt = f"""
+            You are validating a dbt model interpretation against its upstream model definitions to ensure it's complete and accurate.
+            
+            The model being interpreted is: {model_name}
+            
+            The draft interpretation contains these columns:
+            {column_representation}
+            
+            Draft YAML content:
+            {draft_yaml_content}
+            
+            Here is information about the upstream models:
+            {upstream_info}
+            
+            Based on the SQL and upstream model information, verify:
+            1. Does the draft interpretation correctly identify all columns from the model's SQL?
+            2. Are there any missing columns that should be included based on the SQL and upstream references?
+            3. Is the description of each column accurate based on upstream models?
+            
+            If everything is correct, respond with "VERIFIED: The interpretation is complete and accurate."
+            If there are issues, provide specific feedback on what needs to be fixed, including any missing columns or inaccuracies.
+            """
+
+            verification_result = self.llm.get_completion(
+                prompt=verification_prompt,
+                system_prompt="You are an AI assistant specialized in verifying dbt model interpretations.",
+                max_tokens=1000,
+            )
+
+            logger.debug(
+                f"Verification result for {model_name}:\n{verification_result}"
+            )
+
+            # If verification identified issues, refine the interpretation
+            if "VERIFIED" not in verification_result:
+                logger.info(
+                    f"Refining interpretation for {model_name} based on verification feedback"
+                )
+
+                refinement_prompt = f"""
+                You are refining a dbt model interpretation based on verification feedback.
+                
+                Original model: {model_name}
+                
+                Original SQL:
+                ```sql
+                {model.raw_sql}
+                ```
+                
+                Draft interpretation:
+                ```yaml
+                {draft_yaml_content}
+                ```
+                
+                Verification feedback:
+                {verification_result}
+                
+                Upstream model information:
+                {upstream_info}
+                
+                Please create an improved YAML interpretation that addresses all the issues identified in the verification feedback.
+                Use the exact same YAML format as the draft interpretation but with corrected content.
+                """
+
+                refined_yaml_documentation = self.llm.get_completion(
+                    prompt=refinement_prompt,
+                    system_prompt="You are an AI assistant specialized in refining dbt model interpretations.",
+                    max_tokens=2000,
+                )
+
+                logger.debug(
+                    f"Refined interpretation for {model_name}:\n{refined_yaml_documentation}"
+                )
+
+                # Extract YAML content from the refined response
+                match = re.search(
+                    r"```(?:yaml)?\n(.*?)```", refined_yaml_documentation, re.DOTALL
+                )
+                if match:
+                    final_yaml_content = match.group(1).strip()
+                else:
+                    # If no code block found, use the whole response but check for YAML tags
+                    final_yaml_content = refined_yaml_documentation.strip()
+                    # Remove any potential YAML code fence markers at the beginning or end
+                    if final_yaml_content.startswith("```yaml"):
+                        final_yaml_content = final_yaml_content[7:]
+                    if final_yaml_content.endswith("```"):
+                        final_yaml_content = final_yaml_content[:-3]
+                    final_yaml_content = final_yaml_content.strip()
+
+                # Additional safety check for YAML content
+                if final_yaml_content.startswith("```") or final_yaml_content.endswith(
+                    "```"
+                ):
+                    # Further cleaning if needed
+                    lines = final_yaml_content.strip().splitlines()
+                    if lines and (
+                        lines[0].startswith("```") or lines[0].startswith("---")
+                    ):
+                        lines = lines[1:]
+                    if lines and (lines[-1] == "```" or lines[-1] == "---"):
+                        lines = lines[:-1]
+                    final_yaml_content = "\n".join(lines).strip()
+
+                logger.debug(
+                    f"Cleaned final YAML content for {model_name}:\n{final_yaml_content}"
+                )
+            else:
+                logger.info(f"Interpretation for {model_name} verified successfully")
+                final_yaml_content = draft_yaml_content
+
+            # Prepare the result
+            result_data = {
+                "model_name": model_name,
+                "yaml_documentation": final_yaml_content,
+                "draft_yaml": draft_yaml_content,
+                "verification_result": verification_result,
+                "success": True,
+            }
+
+            return result_data
+
+        except Exception as e:
+            logger.error(
+                f"Error in agentic interpretation of model {model_name}: {e}",
+                exc_info=True,
+            )
+            error_result = {
+                "model_name": model_name,
+                "error": f"Error in agentic interpretation: {str(e)}",
+                "success": False,
+            }
+            return error_result

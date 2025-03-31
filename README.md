@@ -12,6 +12,7 @@ An LLM-powered agent for interacting with dbt projects.
 
 - **Question Answering**: Ask questions about your dbt project in natural language
 - **Documentation Generation**: Automatically generate documentation for missing models
+- **Agentic Model Interpretation**: Intelligently interpret models using a step-by-step approach that verifies interpretations against upstream models
 - **Slack Integration**: Ask questions and receive answers directly in Slack
 - **FastAPI Server**: Interact with the agent programmatically via REST API
 - **Postgres with pgvector**: Store model embeddings in Postgres using pgvector (supports Supabase)
@@ -88,8 +89,11 @@ poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing
 # Embed specific models in vector database
 poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
 
-# Interpret a single model and generate documentation
+# Interpret a single model and generate documentation using the agentic workflow (default)
 poetry run dbt-llm-agent interpret customer_orders
+
+# Interpret a model using the legacy (non-agentic) approach
+poetry run dbt-llm-agent interpret customer_orders --legacy
 
 # Interpret multiple models using dbt selector syntax
 poetry run dbt-llm-agent interpret --select "tag:marketing"
@@ -118,6 +122,42 @@ poetry run dbt-llm-agent api
 # Start the Slack bot
 poetry run dbt-llm-agent slack
 ```
+
+### Model Interpretation
+
+The agent supports two approaches for interpreting dbt models:
+
+#### Agentic Workflow (Default)
+
+The agentic workflow is a multi-step process that:
+
+1. Reads the source code of the model to interpret
+2. Identifies upstream models that provide context
+3. Fetches details of the upstream models
+4. Creates a draft interpretation
+5. Verifies the draft against upstream models to ensure completeness and correctness
+6. Refines the interpretation if needed based on verification feedback
+
+This approach results in more accurate and comprehensive interpretations, particularly for complex models with many dependencies.
+
+```bash
+# Use the agentic workflow (default)
+poetry run dbt-llm-agent interpret customer_orders
+
+# With verbose output to see verification details
+poetry run dbt-llm-agent interpret customer_orders --verbose
+```
+
+#### Legacy Approach
+
+The legacy approach uses a single-shot interpretation without the verification and refinement steps:
+
+```bash
+# Use the legacy (non-agentic) approach
+poetry run dbt-llm-agent interpret customer_orders --legacy
+```
+
+Both approaches support the same options for saving, embedding, and selecting models using dbt selection syntax.
 
 ### Model Selection Syntax
 
