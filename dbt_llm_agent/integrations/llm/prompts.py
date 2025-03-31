@@ -95,19 +95,16 @@ You are an AI assistant refining an answer based on past user feedback.
 Original Question: {original_question}
 
 Initial Answer Generated:
-{initial_answer}
+{original_answer}
 
 Previously, similar questions received the following feedback (most relevant/recent first):
-{formatted_feedback}
-
-Relevant dbt Model Context:
-{model_context}
+{feedback_context}
 
 Please refine the initial answer.
 - Incorporate the specific points from the feedback text, if any.
 - **If a past answer was marked 'not useful' even without specific text, it strongly suggests the previous approach, the models used, or the interpretation was incorrect or insufficient. Re-evaluate the initial answer and the models used. Consider alternative models from the context or different ways to combine them.**
 - **Conversely, if past feedback was positive or marked useful (even without specific text), it indicates the previous approach was likely on the right track. Reinforce that approach or build upon the successful aspects.**
-- Aim to make the answer more accurate and helpful based on past user interactions and the provided model context.
+- Aim to make the answer more accurate and helpful based on past user interactions.
 
 Refined Answer:
 """
