@@ -38,7 +38,19 @@ logger = get_logger(__name__)
     is_flag=True,
     help="Only interpret models that don't already have an interpretation",
 )
-def interpret(select, save, embed, verbose, only_when_missing):
+@click.option(
+    "--recursive",
+    is_flag=True,
+    help="Recursively interpret upstream models if they lack interpretation",
+)
+@click.option(
+    "--force-recursive",
+    is_flag=True,
+    help="Recursively interpret all upstream models, even if they have existing interpretations",
+)
+def interpret(
+    select, save, embed, verbose, only_when_missing, recursive, force_recursive
+):
     """Interpret dbt models and generate documentation.
 
     This command analyzes selected dbt models using LLM and generates documentation,
@@ -49,8 +61,17 @@ def interpret(select, save, embed, verbose, only_when_missing):
         dbt-llm interpret --select "+tag:marts" --save
         dbt-llm interpret --select "orders" --save --embed
         dbt-llm interpret --select "customers" --save --only-when-missing
+        dbt-llm interpret --select "+fct_orders" --recursive --save
+        dbt-llm interpret --select "+fct_orders" --force-recursive --save
     """
     set_logging_level(verbose)
+
+    # Add warning if recursive flags are used without save
+    if (recursive or force_recursive) and not save:
+        logger.warning(
+            "Using --recursive or --force-recursive without --save means upstream interpretations "
+            "will only be used for context in this run and not persisted."
+        )
 
     # Load configuration from environment
     postgres_uri = get_config_value("postgres_uri")
@@ -142,7 +163,9 @@ def interpret(select, save, embed, verbose, only_when_missing):
             logger.info(f"Interpreting model: {model_name} ({i+1}/{total_models})")
 
             # Get interpretations from the agent
-            result = agent.interpret_model(model_name)
+            result = agent.interpret_model(
+                model_name, recursive=recursive, force_recursive=force_recursive
+            )
 
             if not result.get("success", False):
                 logger.error(
@@ -154,6 +177,12 @@ def interpret(select, save, embed, verbose, only_when_missing):
             print(
                 f"\n=== Interpretation for model: {model_name} ({i+1}/{total_models}) ===\n"
             )
+            # If verbose, print the prompt used
+            if verbose and "prompt" in result:
+                print(f"\n--- Prompt used for {model_name} ---")
+                print(result["prompt"])
+                print("--- End Prompt ---\n")
+
             print(result["yaml_documentation"])
 
             # Save interpretation if requested

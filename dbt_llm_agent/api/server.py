@@ -140,7 +140,7 @@ class ModelDetailResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    was_useful: bool
+    was_useful: Optional[bool] = None
     feedback: Optional[str] = None
 
 
@@ -626,6 +626,13 @@ def provide_feedback(
     question_tracking: QuestionStorage = Depends(get_question_tracking),
 ):
     try:
+        # Validate that at least some feedback is provided
+        if request.was_useful is None and not request.feedback:
+            raise HTTPException(
+                status_code=400,
+                detail="Feedback must include either 'was_useful' or 'feedback' text.",
+            )
+
         # Get the question to make sure it exists
         question = question_tracking.get_question(question_id)
         if not question:

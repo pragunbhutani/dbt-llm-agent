@@ -5,6 +5,8 @@ import re
 import json
 import yaml
 import sys
+import os  # Import os
+import openai  # Import openai
 from typing import Dict, List, Any, Optional, Union, Set
 
 from rich.console import Console
@@ -16,6 +18,11 @@ from dbt_llm_agent.integrations.llm.client import LLMClient
 from dbt_llm_agent.integrations.llm.prompts import (
     ANSWER_PROMPT_TEMPLATE,
     SEARCH_QUERY_REFINEMENT_PROMPT_TEMPLATE,
+    MODEL_INTERPRETATION_PROMPT,
+    PLANNING_PROMPT_TEMPLATE,
+    ANALYSIS_PROMPT_TEMPLATE,
+    SYNTHESIS_PROMPT_TEMPLATE,
+    FEEDBACK_REFINEMENT_PROMPT_TEMPLATE,
 )
 from dbt_llm_agent.storage.model_storage import ModelStorage
 from dbt_llm_agent.storage.model_embedding_storage import ModelEmbeddingStorage
@@ -23,76 +30,9 @@ from dbt_llm_agent.core.models import DBTModel
 
 logger = logging.getLogger(__name__)
 
-# Define a new prompt template for refining the answer based on feedback
-REFINE_PROMPT_TEMPLATE = """
-You are an AI assistant helping users understand their dbt project.
-The user asked the following question: {question}
-
-Based on the available dbt models, you previously generated this answer:
-{previous_answer}
-
-The user provided the following feedback indicating the answer was not sufficient:
-{user_feedback}
-
-Here is the context about relevant dbt models:
-{model_info}
-
-Based on the user's feedback and the model context, please generate an improved and more complete answer to the original question: {question}
-"""
-
 
 class Agent:
     """Agent for interacting with dbt projects using an agentic workflow."""
-
-    # Placeholder for the new planning prompt
-    PLANNING_PROMPT_TEMPLATE = """
-You are a data analyst assistant planning how to answer a user's question about dbt models.
-User question: "{question}"
-
-1. Identify the primary metric or entity the user is asking about.
-2. Identify any grouping, filtering, or specific dimensions requested.
-3. Based on this, determine the *first* key piece of information to search for in the dbt models.
-4. Formulate a concise search query focused *only* on finding that first piece of information.
-
-Respond with just the search query.
-Search Query: """
-
-    # Placeholder for the new analysis prompt
-    ANALYSIS_PROMPT_TEMPLATE = """You are a data analyst assistant analyzing dbt models to answer a user's question. Be concise.
-Original user question: "{original_question}"
-
-We have already gathered information on these models:
-{already_found_models_summary}
-
-We just searched for "{last_search_query}".
-{newly_found_model_details_section}
-
-Analyze the newly found model(s) if any:
-1. What key information do they provide relevant to the original question?
-2. What key entities (e.g., customer IDs, timestamps, dimensions) do they contain or relate to?
-3. Based on the original question and *all* the models found so far, what is the *single most important* specific piece of information we still need?
-4. If all necessary information seems present across the found models to answer the original question, respond ONLY with `ALL_INFO_FOUND`.
-5. Otherwise, formulate a *concise* search query for the next piece of missing information.
-
-Respond *concisely* with the next search query OR `ALL_INFO_FOUND`.
-Next Step: """
-
-    # Placeholder for the new synthesis prompt
-    SYNTHESIS_PROMPT_TEMPLATE = """You are a data analyst assistant synthesizing an answer to a user's question using information from dbt models. Be concise.
-User question: "{question}"
-
-We have gathered information about the following relevant dbt models:
-{accumulated_model_info}
-
-Based *strictly* and *only* on the provided model information (`accumulated_model_info`), construct a step-by-step answer for the user.
-- Explain how the models can be used together to answer the question.
-- Mention necessary joins (including join keys) between models *if applicable and derivable from the provided info*.
-- Describe any required calculations or aggregations.
-- If possible, provide a sample SQL query demonstrating the process, using *only* models and columns present in the provided info.
-- **Do not invent table names, column names, or relationships** that are not explicitly present in the provided model information. Do not assume the existence of dimension tables unless they are listed in `accumulated_model_info`.
-- If the gathered models are insufficient to fully answer the question, *clearly state this*. Explain exactly what information (e.g., specific columns, relationships) is missing and which of the provided models contain related partial information. **Do not provide a sample query using hypothetical/invented tables or columns.**
-
-Answer: """
 
     def __init__(
         self,
@@ -103,6 +43,7 @@ Answer: """
         console: Optional[Console] = None,
         temperature: float = 0.0,
         verbose: bool = False,
+        openai_api_key: Optional[str] = None,  # Add API key parameter
     ):
         """Initialize the agent.
 
@@ -110,10 +51,11 @@ Answer: """
             llm_client: LLM client for generating text
             model_storage: Storage for dbt models
             vector_store: Vector store for semantic search
-            question_storage: Storage for question history
+            question_storage: Storage for question history (requires openai_api_key for embedding)
             console: Console for interactive prompts
             temperature: Temperature for LLM generation
             verbose: Whether to print verbose output
+            openai_api_key: OpenAI API key for question embeddings.
         """
         self.llm = llm_client
         self.model_storage = model_storage
@@ -129,9 +71,10 @@ Answer: """
         self.console.print(
             f"[dim] Refining search query for: '{original_query}'...[/dim]"
         )
-        system_prompt = SEARCH_QUERY_REFINEMENT_PROMPT_TEMPLATE
         refined_query = self.llm.get_completion(
-            prompt=original_query, system_prompt=system_prompt, temperature=0.0
+            prompt=original_query,
+            system_prompt=SEARCH_QUERY_REFINEMENT_PROMPT_TEMPLATE,
+            temperature=0.0,
         )
 
         # Basic validation/cleanup
@@ -188,7 +131,7 @@ Answer: """
             if (
                 model_name not in added_models
                 and isinstance(similarity, (int, float))
-                and similarity > 0.4  # Lowered threshold from 0.5 to 0.4
+                and similarity > 0.3  # Lowered threshold from 0.4 to 0.3
             ):
                 model = self.model_storage.get_model(model_name)
                 if model:
@@ -219,17 +162,75 @@ Answer: """
 
     def run_agentic_workflow(self, question: str) -> Dict[str, Any]:
         """Runs the agentic workflow to answer a question with iterative search and analysis."""
-        max_steps = 5  # Max search/analysis steps
+        max_steps = 5
         accumulated_model_info_str = ""
-        found_models_details = []  # List to store dicts of found models
-        found_model_names = set()  # Set to track names of found models
+        found_models_details = []
+        found_model_names = set()
         current_search_query = ""
         original_question = question
-        conversation_id = None  # Keep track for potential history saving
+        conversation_id = None
+        relevant_feedback = []  # Store feedback found
+        previous_search_queries = set()  # Track previous search queries
 
         self.console.print(f"[bold]🚀 Starting agentic workflow for:[/bold] {question}")
 
         try:
+            # --- Feedback Check Step ---
+            question_embedding = None
+            if (
+                self.question_storage
+                and hasattr(self.question_storage, "_get_embedding")
+                and self.question_storage.openai_client
+            ):
+                if self.verbose:
+                    self.console.print(
+                        "\n[blue]🔍 Checking for feedback on similar past questions...[/blue]"
+                    )
+                question_embedding = self.question_storage._get_embedding(
+                    original_question
+                )
+                if question_embedding:
+                    relevant_feedback = (
+                        self.question_storage.find_similar_questions_with_feedback(
+                            query_embedding=question_embedding,
+                            limit=3,  # Limit feedback retrieved
+                            similarity_threshold=0.75,  # Adjust as needed
+                        )
+                    )
+                    if relevant_feedback:
+                        if self.verbose:
+                            self.console.print(
+                                f"[dim] Found {len(relevant_feedback)} potentially relevant feedback item(s):[/dim]"
+                            )
+                            # Print details of each feedback item
+                            for i, feedback_item in enumerate(relevant_feedback):
+                                self.console.print(
+                                    f"[dim] --- Feedback Item {i+1} ---[/dim]"
+                                )
+                                self.console.print(
+                                    f"[dim]   Original Question: {feedback_item.question_text}[/dim]"
+                                )
+                                self.console.print(
+                                    f"[dim]   Original Answer: {feedback_item.answer_text or 'N/A'}[/dim]"
+                                )
+                                self.console.print(
+                                    f"[dim]   Was Useful: {feedback_item.was_useful}[/dim]"
+                                )
+                                self.console.print(
+                                    f"[dim]   Feedback Text: {feedback_item.feedback or 'N/A'}[/dim]"
+                                )
+                        else:
+                            self.console.print(
+                                "[blue]... Found relevant past feedback.[/blue]"
+                            )
+                    elif self.verbose:
+                        self.console.print("[dim] No relevant feedback found.[/dim]")
+                elif self.verbose:
+                    self.console.print(
+                        "[yellow]Could not generate embedding for feedback check.[/yellow]"
+                    )
+            # --- End Feedback Check ---
+
             # 1. Planning Step: Determine the first search query
             if self.verbose:
                 self.console.print(
@@ -237,10 +238,9 @@ Answer: """
                 )
             else:
                 self.console.print("[blue]🧠 Planning initial search...[/blue]")
-            planning_prompt = self.PLANNING_PROMPT_TEMPLATE.format(
+            planning_prompt = PLANNING_PROMPT_TEMPLATE.format(
                 question=original_question
             )
-            # Use the existing LLM client instance
             current_search_query = self.llm.get_completion(
                 prompt=planning_prompt,
                 system_prompt="You are an AI assistant specialized in dbt model analysis.",
@@ -264,149 +264,112 @@ Answer: """
             for step in range(max_steps):
                 if self.verbose:
                     self.console.print(
-                        f"\n[bold magenta]🔍 Step {step + 1}/{max_steps}: Searching for '{current_search_query}'[/bold magenta]"
+                        f"\n[bold blue]🔄 Step {step + 1}/{max_steps}: Searching & Analyzing[/bold blue]"
+                    )
+                    self.console.print(
+                        f"[dim] Current search query: '{current_search_query}'[/dim]"
+                    )
+                else:
+                    self.console.print(
+                        f"[blue]🔄 Step {step + 1}: Searching & Analyzing...[/blue]"
                     )
 
-                # Search for models based on the current query
-                new_model_info_str, new_models_data = self._search_and_fetch_models(
-                    query=current_search_query,
-                    current_context_models=list(
-                        found_model_names
-                    ),  # Pass names of already found models
+                # Search and fetch models based on current query
+                newly_found_model_info_str, newly_found_models_details = (
+                    self._search_and_fetch_models(
+                        current_search_query, list(found_model_names)
+                    )
                 )
 
-                newly_found_model_details_for_prompt = ""
-                if not new_models_data:
-                    if self.verbose:
-                        self.console.print(
-                            "[yellow]No new relevant models found in this step.[/yellow]"
-                        )
-                    newly_found_model_details_for_prompt = "No new models found."
-                else:
-                    # Process newly found models
-                    added_count = 0
-                    current_step_model_names = []
-                    for model_data in new_models_data:
-                        # Ensure model_data is a dict and has a name
-                        if isinstance(model_data, dict):
-                            model_name = model_data.get(
-                                "name"
-                            )  # Prioritize 'name' if available
-                            if (
-                                not model_name and "model_name" in model_data
-                            ):  # Fallback to 'model_name'
-                                model_name = model_data["model_name"]
-
-                            if model_name and model_name not in found_model_names:
-                                # Accumulate full details for synthesis
-                                model_repr = (
-                                    self.model_storage.get_model(
-                                        model_name
-                                    ).get_readable_representation()
-                                    if self.model_storage.get_model(model_name)
-                                    else f"Details for {model_name} not fully available."
-                                )
-                                accumulated_model_info_str += model_repr + "\n\n"
-
-                                # Create concise summary for analysis prompt
-                                columns = model_data.get("columns", [])
-                                column_names = [
-                                    c.get("name", "N/A")
-                                    for c in columns
-                                    if isinstance(c, dict)
-                                ]
-                                model_summary = f"Model: {model_name}\\nDescription: {model_data.get('description', 'N/A')}\\nColumns: {', '.join(column_names)}\\n---"
-                                newly_found_model_details_for_prompt += (
-                                    model_summary + "\\n"
-                                )
-
-                                found_models_details.append(
-                                    model_data
-                                )  # Store the dict
-                                found_model_names.add(model_name)
-                                current_step_model_names.append(model_name)
-                                added_count += 1
-
-                    if self.verbose and added_count > 0:
-                        self.console.print(
-                            f"[green]✅ Added {added_count} models this step: {', '.join(current_step_model_names)}[/green]"
-                        )
-                    elif (
-                        self.verbose and new_models_data and not added_count
-                    ):  # If search returned something but we didn't add new ones (and verbose)
-                        self.console.print(
-                            "[dim]Models found but already in context or invalid format.[/dim]"
-                        )
-                    elif (
-                        not new_models_data and self.verbose
-                    ):  # Explicitly check verbose for no new models log
-                        self.console.print(
-                            "[yellow]No new relevant models found in this step.[/yellow]"
-                        )
-
-                # Analysis Step: Analyze results and determine next step
-                if self.verbose:
-                    self.console.print(
-                        "\n[bold blue]🤔 Analyzing results and planning next step...[/bold blue]"
-                    )
-
-                # Prepare summary of already found models for the prompt
-                # Exclude models that were *just* added in this step from the "already found" summary
+                # Build summary of models found *so far* for analysis prompt
                 already_found_summary = ""
-                models_found_before_this_step = [
-                    m
-                    for m in found_models_details
-                    if m.get("name", m.get("model_name"))
-                    not in current_step_model_names
-                ]
+                if found_models_details:
+                    already_found_summary += "Models found in previous steps:\n"
+                    for model_detail in found_models_details:
+                        columns = model_detail.get("columns", {})
+                        column_names = list(columns.keys())
+                        already_found_summary += f" - {model_detail['name']}: {model_detail.get('description', 'N/A')[:100]}... (Cols: {len(column_names)})\n"
+                else:
+                    already_found_summary = "No models found yet.\n"
 
-                if models_found_before_this_step:
-                    already_found_summary = "Previously found models summary:\\n" + "\\n".join(
-                        f"- {m.get('name', m.get('model_name', 'N/A'))}: {m.get('description', 'N/A')[:100]}..."
-                        for m in models_found_before_this_step
+                # Build details of *newly* found models for analysis prompt
+                newly_found_model_details_for_prompt = ""
+                current_step_model_names = []
+                added_count = 0
+                if newly_found_models_details:
+                    newly_found_model_details_for_prompt = (
+                        "Models found in the latest search:\n"
                     )
-                elif (
-                    not found_models_details
-                ):  # If it's the first step and nothing was found
-                    already_found_summary = "No models found yet."
-                else:  # Only found models this step
-                    already_found_summary = "No *other* models found previously."
+                    for model_data in newly_found_models_details:
+                        model_name = model_data["name"]
+                        if model_name not in found_model_names:
+                            # Accumulate full details for synthesis
+                            model_repr = (
+                                self.model_storage.get_model(
+                                    model_name
+                                ).get_readable_representation()
+                                if self.model_storage.get_model(model_name)
+                                else f"Details for {model_name} not fully available."
+                            )
+                            accumulated_model_info_str += model_repr + "\n\n"
 
-                analysis_prompt = self.ANALYSIS_PROMPT_TEMPLATE.format(
+                            # Create concise summary for analysis prompt
+                            columns = model_data.get("columns", {})
+                            column_names = list(columns.keys())
+                            model_summary = f"Model: {model_name}\nDescription: {model_data.get('description', 'N/A')}\nColumns: {', '.join(column_names)}\n---"
+                            newly_found_model_details_for_prompt += model_summary + "\n"
+
+                            found_models_details.append(model_data)
+                            found_model_names.add(model_name)
+                            current_step_model_names.append(model_name)
+                            added_count += 1
+                else:
+                    newly_found_model_details_for_prompt = (
+                        "No new models found in the latest search.\n"
+                    )
+
+                if self.verbose and added_count > 0:
+                    self.console.print(
+                        f"[dim] -> Added {added_count} new models: {', '.join(current_step_model_names)}[/dim]"
+                    )
+                elif self.verbose and newly_found_models_details:
+                    self.console.print(
+                        "[dim] -> No *new* unique models added from this search.[/dim]"
+                    )
+
+                # Analysis Step
+                if self.verbose:
+                    self.console.print("[bold blue]🧠 Analyzing results...[/bold blue]")
+                else:
+                    self.console.print("[blue]🧠 Analyzing results...[/blue]")
+
+                analysis_prompt = ANALYSIS_PROMPT_TEMPLATE.format(
                     original_question=original_question,
                     already_found_models_summary=already_found_summary,
                     last_search_query=current_search_query,
-                    newly_found_model_details_section=newly_found_model_details_for_prompt
-                    or "No new models found this step.",  # Ensure it's never empty
+                    newly_found_model_details_section=newly_found_model_details_for_prompt,
                 )
-
                 # Use the existing LLM client instance
-                next_step_output = (
-                    self.llm.get_completion(
-                        prompt=analysis_prompt,
-                        system_prompt="You are an AI assistant specialized in dbt model analysis.",
-                        temperature=0.0,
-                        max_tokens=500,  # Increased max_tokens from 150 to 500
-                    )
-                    .strip()
-                    .replace('"', "")
-                )  # Clean quotes often added by LLM
+                next_step_output = self.llm.get_completion(
+                    prompt=analysis_prompt,
+                    system_prompt="You are an AI assistant specialized in analyzing dbt models.",
+                    temperature=0.0,  # Low temp for deterministic analysis
+                    max_tokens=150,  # Allow slightly longer analysis/next query
+                ).strip()
 
                 if self.verbose:
                     self.console.print(
-                        f"[dim] Analysis result: '{next_step_output}'[/dim]"
+                        f"[dim] Analysis result: {next_step_output}[/dim]"
                     )
 
                 # Check for termination condition
                 if "ALL_INFO_FOUND" in next_step_output or not next_step_output:
-                    if (
-                        not found_models_details and step == 0
-                    ):  # Nothing found on first step, analysis couldn't help
+                    if not found_models_details and step == 0:
                         self.console.print(
                             "[yellow]Initial search yielded no results and analysis could not determine next steps.[/yellow]"
                         )
                         final_answer = "I could not find relevant models based on the initial search. Please try rephrasing your question."
-                        return {  # Return early
+                        return {
                             "question": original_question,
                             "final_answer": final_answer,
                             "used_model_names": list(found_model_names),
@@ -416,43 +379,32 @@ Answer: """
                         self.console.print(
                             "[green]✅ Analysis complete. Sufficient information gathered or loop finished.[/green]"
                         )
-                        break  # Exit loop to synthesize answer
+                        break
                 else:
-                    # Update search query for the next iteration
-                    # Extract the query part if the LLM added explanation
-                    query_match = re.search(
-                        r"(?:Next Step|Search Query):\s*(.*)",
-                        next_step_output,
-                        re.IGNORECASE,
-                    )
-                    if query_match:
-                        current_search_query = query_match.group(1).strip()
-                    else:
-                        current_search_query = (
-                            next_step_output  # Assume the whole output is the query
-                        )
-
-                    if (
-                        not current_search_query
-                    ):  # Safety check if regex fails or output is weird
+                    # Check if this search query was already used
+                    if next_step_output in previous_search_queries:
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow]⚠️ Skipping redundant search for query: '{next_step_output}'[/yellow]"
+                            )
                         self.console.print(
-                            "[yellow]⚠️ Analysis did not provide a valid next search query. Stopping iteration.[/yellow]"
+                            "[green]✅ No new information to gather. Proceeding to synthesis.[/green]"
                         )
                         break
+                    else:
+                        # Add to previous queries and prepare for next iteration
+                        previous_search_queries.add(next_step_output)
+                        current_search_query = next_step_output
 
-                    if self.verbose:
-                        self.console.print(
-                            f"[dim] Next search query: '{current_search_query}'[/dim]"
-                        )
-
-                    if step == max_steps - 1:
-                        self.console.print(
-                            "[yellow]⚠️ Max search steps reached. Proceeding with gathered information.[/yellow]"
-                        )
+            # Check if loop finished without finding sufficient info
+            if step == max_steps - 1 and "ALL_INFO_FOUND" not in next_step_output:
+                self.console.print(
+                    "[yellow]⚠️ Reached max search steps. Synthesizing answer with gathered info.[/yellow]"
+                )
+            # --- End Iterative Search & Analysis ---
 
             # 3. Synthesis Step
             if not found_models_details:
-                # This case should ideally be caught earlier, but acts as a final fallback
                 if self.verbose:
                     self.console.print(
                         "[red]❌ No relevant models found after all steps.[/red]"
@@ -463,41 +415,101 @@ Answer: """
                     self.console.print(
                         "\n[bold blue]✍️ Synthesizing the final answer...[/bold blue]"
                     )
-                synthesis_prompt = self.SYNTHESIS_PROMPT_TEMPLATE.format(
+                else:
+                    self.console.print("[blue]✍️ Synthesizing final answer...[/blue]")
+
+                synthesis_prompt = SYNTHESIS_PROMPT_TEMPLATE.format(
                     question=original_question,
-                    accumulated_model_info=accumulated_model_info_str,  # Pass the full, readable details
+                    accumulated_model_info=accumulated_model_info_str,
                 )
-                # Use the existing LLM client instance
                 final_answer = self.llm.get_completion(
                     prompt=synthesis_prompt,
                     system_prompt="You are an AI assistant specialized in dbt model analysis and explanation.",
-                    temperature=self.temperature,  # Use configured temperature
-                    max_tokens=1500,  # Allow longer answer
+                    temperature=self.temperature,
+                    max_tokens=1500,
                 )
 
-            # Save history (optional, keep existing logic if question_storage exists)
+            # --- Feedback Refinement Step (if feedback found) ---
+            refined_answer = final_answer  # Start with the original answer
+            if relevant_feedback:
+                if self.verbose:
+                    self.console.print(
+                        "\n[bold blue]🔄 Refining answer based on past feedback...[/bold blue]"
+                    )
+                    # Print details (including answer) of each feedback item
+                    for i, feedback_item in enumerate(relevant_feedback):
+                        self.console.print(f"[dim] --- Feedback Item {i+1} ---[/dim]")
+                        self.console.print(
+                            f"[dim]   Original Question: {feedback_item.question_text}[/dim]"
+                        )
+                        self.console.print(
+                            f"[dim]   Original Answer: {feedback_item.answer_text or 'N/A'}[/dim]"
+                        )
+                        self.console.print(
+                            f"[dim]   Was Useful: {feedback_item.was_useful}[/dim]"
+                        )
+                        self.console.print(
+                            f"[dim]   Feedback Text: {feedback_item.feedback or 'N/A'}[/dim]"
+                        )
+                else:
+                    self.console.print(
+                        "[blue]🔄 Refining answer based on past feedback...[/blue]"
+                    )
+
+                feedback_context = ""
+                for item in relevant_feedback:
+                    feedback_context += f"Past Question: {item.question_text}\n"
+                    feedback_context += f"Past Answer: {item.answer_text}\n"
+                    feedback_context += f"Feedback: Useful={item.was_useful}, Text={item.feedback or ''}\n---\n"
+
+                refinement_prompt = FEEDBACK_REFINEMENT_PROMPT_TEMPLATE.format(
+                    original_question=original_question,
+                    original_answer=final_answer,
+                    feedback_context=feedback_context,
+                )
+
+                refined_answer = self.llm.get_completion(
+                    prompt=refinement_prompt,
+                    system_prompt="You are an AI assistant refining answers based on feedback.",
+                    temperature=self.temperature,  # Use original temperature
+                    max_tokens=1500,  # Allow longer refined answer
+                )
+
+                if self.verbose:
+                    self.console.print("[dim] -> Refined Answer:[/dim]")
+                    self.console.print(f"[dim]{refined_answer}[/dim]")
+
+            # Use the refined answer if it exists, otherwise use the original final answer
+            final_answer_to_use = refined_answer
+            # --- End Feedback Refinement Step ---
+
+            # 4. Record the final question/answer pair
             if self.question_storage:
                 try:
                     conversation_id = self.question_storage.record_question(
                         question_text=original_question,
-                        answer_text=final_answer,
+                        answer_text=final_answer_to_use,
                         model_names=list(found_model_names),
-                        # Could add more context like search steps later if needed
+                        # Initial recording has no feedback yet
+                        was_useful=None,
+                        feedback=None,
+                        metadata={
+                            "agent_steps": step + 1,
+                            "initial_query": current_search_query,
+                            # Add other relevant metadata
+                        },
                     )
-                    if self.verbose:
-                        self.console.print(
-                            f"[dim] Saved conversation with ID {conversation_id}[/dim]"
-                        )
                 except Exception as e:
-                    logger.warning(f"Could not save question history: {e}")
+                    logger.error(f"Failed to record question/answer: {e}")
+                    self.console.print(
+                        "[yellow]⚠️ Could not record question details to storage.[/yellow]"
+                    )
 
-            # 4. Return results
             return {
                 "question": original_question,
-                "final_answer": final_answer,
+                "final_answer": final_answer_to_use,
                 "used_model_names": list(found_model_names),
                 "conversation_id": conversation_id,
-                # "search_steps": [], # Could potentially return the sequence of queries/results later
             }
 
         except Exception as e:
@@ -508,9 +520,7 @@ Answer: """
             return {
                 "question": question,
                 "final_answer": "An error occurred during the process. Please check logs or try again.",
-                "used_model_names": list(
-                    found_model_names
-                ),  # Return what was found, if any
+                "used_model_names": list(found_model_names),
                 "conversation_id": None,
             }
 
@@ -705,93 +715,291 @@ Answer: """
             logger.error(f"Error updating model documentation: {e}")
             return False
 
-    def interpret_model(self, model_name: str) -> Dict[str, Any]:
-        """Interpret a model and its columns by analyzing the model and its upstream models.
-
-        This method creates a model documentation yaml format based on the model and its
-        upstream dependencies, using an LLM to infer the meaning and structure.
+    def interpret_model(
+        self,
+        model_name: str,
+        recursive: bool = False,
+        force_recursive: bool = False,
+        visited: Optional[Set[str]] = None,
+        _recursive_results: Optional[
+            Dict[str, Dict[str, Any]]
+        ] = None,  # Internal tracking
+    ) -> Dict[str, Any]:
+        """Interpret a model and its columns, potentially recursively.
 
         Args:
-            model_name: Name of the model to interpret
+            model_name: Name of the model to interpret.
+            recursive: Whether to recursively interpret upstream models if they lack interpretation.
+            force_recursive: Whether to force re-interpretation of all upstream models.
+            visited: Set of model names visited in the current recursion path (for cycle detection).
+            _recursive_results: Internal dictionary to store results from recursive calls.
 
         Returns:
-            Dict containing the interpreted documentation in YAML format and other metadata
+            Dict containing the interpreted documentation in YAML format and other metadata for the *target* model_name.
         """
+        if visited is None:
+            visited = set()
+        if _recursive_results is None:
+            _recursive_results = (
+                {}
+            )  # Initialize storage for results from this branch downwards
+
+        # --- Cycle Detection ---
+        if model_name in visited:
+            logger.warning(
+                f"Circular dependency detected: Already processing {model_name}. Skipping further recursion."
+            )
+            # Return a specific indicator or just an error? For now, return error-like dict.
+            return {
+                "model_name": model_name,
+                "error": f"Circular dependency detected involving {model_name}",
+                "success": False,
+                "skipped_circular": True,  # Add a flag
+            }
+        visited.add(model_name)
+
         try:
-            logger.info(f"Interpreting model: {model_name}")
+            logger.debug(
+                f"Starting interpretation process for: {model_name} (Recursive: {recursive}, Force: {force_recursive})"
+            )
 
             model = self.model_storage.get_model(model_name)
             if not model:
                 return {
                     "model_name": model_name,
                     "error": f"Model {model_name} not found",
+                    "success": False,
                 }
 
-            upstream_models = []
-            for upstream_name in model.all_upstream_models:
-                upstream_model = self.model_storage.get_model(upstream_name)
-                if upstream_model:
-                    upstream_models.append(upstream_model)
+            # --- Recursive Interpretation of Upstream Models ---
+            upstream_models_data: Dict[str, DBTModel] = (
+                {}
+            )  # Store fetched upstream models
+            if recursive or force_recursive:
+                logger.debug(f"Processing upstream models for {model_name}")
+                for upstream_name in model.all_upstream_models:
+                    upstream_model = self.model_storage.get_model(upstream_name)
+                    if not upstream_model:
+                        logger.warning(
+                            f"Upstream model {upstream_name} not found for {model_name}. Skipping."
+                        )
+                        continue
 
-            upstream_info = ""
-            for um in upstream_models:
-                upstream_info += f"\nUpstream Model Name: {um.name}\n"
-                upstream_info += f"Upstream Model Description: {um.description or 'No description'}\n"
-                upstream_info += f"Upstream Model SQL:\n```sql\n{um.raw_sql}\n```\n"
-                if um.columns:
-                    upstream_info += "Upstream Model Columns:\n"
-                    for col_name, col in um.columns.items():
-                        upstream_info += (
-                            f"  - {col_name}: {col.description or 'No description'}\n"
+                    upstream_models_data[upstream_name] = (
+                        upstream_model  # Store for later use
+                    )
+
+                    # Check if interpretation is needed
+                    needs_interpretation = False
+                    if force_recursive:
+                        needs_interpretation = True
+                        logger.info(
+                            f"Forcing recursive interpretation for upstream model: {upstream_name}"
+                        )
+                    elif (
+                        recursive and not upstream_model.interpreted_description
+                    ):  # Check if interpretation exists
+                        needs_interpretation = True
+                        logger.info(
+                            f"Recursively interpreting upstream model {upstream_name} as it lacks interpretation."
+                        )
+                    else:
+                        logger.debug(
+                            f"Skipping interpretation for upstream model {upstream_name} (already interpreted or flags not set)."
                         )
 
+                    if needs_interpretation:
+                        # Make recursive call, passing a copy of visited set
+                        logger.debug(
+                            f"Calling interpret_model recursively for {upstream_name}"
+                        )
+                        recursive_result = self.interpret_model(
+                            upstream_name,
+                            recursive=recursive,  # Pass flags down
+                            force_recursive=force_recursive,
+                            visited=visited.copy(),  # Pass copy for independent path tracking
+                            _recursive_results=_recursive_results,  # Pass the shared results dict
+                        )
+
+                        # Store the result (even if failed/skipped) to avoid re-processing and for context building
+                        if upstream_name not in _recursive_results:
+                            _recursive_results[upstream_name] = recursive_result
+
+                        if not recursive_result.get("success"):
+                            # Log error but continue, maybe partial info is better than none
+                            error_msg = recursive_result.get(
+                                "error", "Unknown error during recursive interpretation"
+                            )
+                            if not recursive_result.get(
+                                "skipped_circular"
+                            ):  # Don't log error again for cycles
+                                logger.warning(
+                                    f"Recursive interpretation failed for {upstream_name}: {error_msg}"
+                                )
+
+            # --- Generate Upstream Info String ---
+            # Fetch any upstream models not already fetched during recursion check
+            for upstream_name in model.all_upstream_models:
+                if upstream_name not in upstream_models_data:
+                    um = self.model_storage.get_model(upstream_name)
+                    if um:
+                        upstream_models_data[upstream_name] = um
+                    else:
+                        logger.warning(
+                            f"Upstream model {upstream_name} (needed for context) not found for {model_name}. Skipping."
+                        )
+
+            upstream_info = ""
+            for um_name, um in upstream_models_data.items():
+                upstream_info += f"\n-- Upstream Model: {um.name} --\n"
+                description = "No description available."
+                columns_info = "Columns: No column information available."
+
+                # Priority 1: Use result from the *current* recursive run if available and successful
+                if um_name in _recursive_results and _recursive_results[um_name].get(
+                    "success"
+                ):
+                    logger.debug(
+                        f"Using fresh recursive result for upstream model {um_name}"
+                    )
+                    try:
+                        yaml_doc = _recursive_results[um_name].get(
+                            "yaml_documentation", ""
+                        )
+                        # Minimal parsing needed here, just description and columns
+                        parsed = yaml.safe_load(yaml_doc)
+                        model_data = parsed.get("models", [{}])[0]
+                        description = model_data.get(
+                            "description",
+                            "Description missing in fresh interpretation.",
+                        )
+                        cols = model_data.get("columns", [])
+                        if cols:
+                            columns_info = "Columns (from fresh interpretation):\n"
+                            for col in cols:
+                                col_name = col.get("name", "unknown")
+                                col_desc = col.get("description", "No description")
+                                columns_info += f"  - {col_name}: {col_desc}\n"
+                        else:
+                            columns_info = (
+                                "Columns: None found in fresh interpretation."
+                            )
+
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to parse fresh recursive result YAML for {um_name}: {e}. Falling back."
+                        )
+                        # Fallback logic starts here if parsing fails
+                        description = (
+                            um.interpreted_description
+                            or um.description
+                            or "No description provided."
+                        )
+                        if um.interpreted_columns:
+                            columns_info = "Columns (from stored interpretation):\n"
+                            for col_name, col_desc in um.interpreted_columns.items():
+                                columns_info += f"  - {col_name}: {col_desc}\n"
+                        elif um.columns:
+                            columns_info = "Columns (from YML):\n"
+                            for col_name, col_obj in um.columns.items():
+                                columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
+
+                # Priority 2: Use stored interpretation if no fresh one exists
+                elif um.interpreted_description or um.interpreted_columns:
+                    logger.debug(
+                        f"Using stored interpretation for upstream model {um_name}"
+                    )
+                    description = (
+                        um.interpreted_description
+                        or "No model description, using YML description if available."
+                    )
+                    # If model description was from interpretation, try using interpreted columns first
+                    if um.interpreted_description and um.interpreted_columns:
+                        columns_info = "Columns (from stored interpretation):\n"
+                        for col_name, col_desc in um.interpreted_columns.items():
+                            columns_info += f"  - {col_name}: {col_desc}\n"
+                    # Fallback to YML columns if no interpreted columns
+                    elif um.columns:
+                        columns_info = "Columns (from YML):\n"
+                        for col_name, col_obj in um.columns.items():
+                            columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
+                    # Use model YML description if no interpreted description was found
+                    if (
+                        description
+                        == "No model description, using YML description if available."
+                    ):
+                        description = um.description or "No description provided."
+
+                # Priority 3: Use YML definition if no interpretation exists
+                elif um.description or um.columns:
+                    logger.debug(f"Using YML definition for upstream model {um_name}")
+                    description = um.description or "No YML description provided."
+                    if um.columns:
+                        columns_info = "Columns (from YML):\n"
+                        for col_name, col_obj in um.columns.items():
+                            columns_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
+
+                upstream_info += f"Description: {description}\n"
+                upstream_info += columns_info + "\n"  # Add newline for spacing
+                upstream_info += (
+                    f"Raw SQL:\n```sql\n{um.raw_sql or 'SQL not available'}\n```\n"
+                )
+                upstream_info += "-- End Upstream Model --\n"
+
+            # --- Prepare and Call LLM for the Target Model ---
             prompt = MODEL_INTERPRETATION_PROMPT.format(
                 model_name=model.name,
                 model_sql=model.raw_sql,
                 upstream_info=upstream_info,
             )
 
-            logger.debug(f"Interpretation prompt for model {model_name}:\n{prompt}")
+            logger.debug(
+                f"Final interpretation prompt for model {model_name}:\n{prompt}"
+            )
 
             yaml_documentation = self.llm.get_completion(
                 prompt=f"Interpret and generate YAML documentation for the model {model_name} based on its SQL and upstream dependencies",
                 system_prompt=prompt,
-                max_tokens=2000,
+                max_tokens=2000,  # Consider if this needs adjustment
             )
 
             logger.debug(
                 f"Raw LLM response for model {model_name}:\n{yaml_documentation}"
             )
 
-            if (
-                "```yaml" in yaml_documentation
-                and "```" in yaml_documentation.split("```yaml", 1)[1]
-            ):
-                yaml_documentation = (
-                    yaml_documentation.split("```yaml", 1)[1].split("```", 1)[0].strip()
-                )
-            elif (
-                "```" in yaml_documentation
-                and "```" in yaml_documentation.split("```", 1)[1]
-            ):
-                yaml_documentation = (
-                    yaml_documentation.split("```", 1)[1].split("```", 1)[0].strip()
-                )
+            # Extract YAML content
+            match = re.search(r"```(?:yaml)?\n(.*?)```", yaml_documentation, re.DOTALL)
+            yaml_content = (
+                match.group(1).strip() if match else yaml_documentation.strip()
+            )
 
-            return {
+            # Store own result in the recursive results dict as well
+            result_data = {
                 "model_name": model_name,
-                "yaml_documentation": yaml_documentation,
+                "yaml_documentation": yaml_content,
                 "prompt": prompt,
                 "success": True,
             }
+            _recursive_results[model_name] = result_data
+            return result_data
 
         except Exception as e:
-            logger.error(f"Error interpreting model {model_name}: {e}")
-            return {
+            logger.error(
+                f"Error interpreting model {model_name}: {e}", exc_info=True
+            )  # Add traceback
+            error_result = {
                 "model_name": model_name,
                 "error": f"Error interpreting model: {str(e)}",
                 "success": False,
             }
+            _recursive_results[model_name] = error_result  # Store error result
+            return error_result
+        finally:
+            # Clean up visited set for this specific path after returning
+            # This is important so siblings in the DAG don't see this node as visited
+            # Note: Because we pass visited.copy() down, this removal only affects the current stack frame upwards
+            if model_name in visited:
+                visited.remove(model_name)
 
     def save_interpreted_documentation(
         self, model_name: str, yaml_documentation: str, embed: bool = False
@@ -809,8 +1017,17 @@ Answer: """
         try:
             logger.info(f"Saving interpreted documentation for model {model_name}")
 
+            # Clean the YAML string from markdown code fences
+            lines = yaml_documentation.strip().splitlines()
+            if lines and lines[0].strip().startswith("```yaml"):
+                lines = lines[1:]
+            if lines and lines[-1].strip() == "```":
+                lines = lines[:-1]
+            cleaned_yaml_documentation = "\n".join(lines)
+
             try:
-                parsed_yaml = yaml.safe_load(yaml_documentation)
+                # Use the cleaned string for parsing
+                parsed_yaml = yaml.safe_load(cleaned_yaml_documentation)
             except Exception as e:
                 logger.error(f"Error parsing YAML: {e}")
                 return {

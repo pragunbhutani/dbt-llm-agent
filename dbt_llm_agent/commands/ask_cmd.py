@@ -72,7 +72,9 @@ def ask(question, no_history, verbose):
         # Initialize question tracking if we are storing history
         question_tracking = None
         if not no_history:
-            question_tracking = QuestionStorage(postgres_uri)
+            question_tracking = QuestionStorage(
+                connection_string=postgres_uri, openai_api_key=openai_api_key
+            )
 
         # Initialize the Agent
         from dbt_llm_agent.core.agent import Agent
@@ -85,6 +87,7 @@ def ask(question, no_history, verbose):
             temperature=temperature,
             console=console,
             verbose=verbose,
+            openai_api_key=openai_api_key,
         )
 
         # *** Start of New Agentic Workflow ***

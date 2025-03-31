@@ -67,11 +67,16 @@ def set_logging_level(verbose: bool):
     Args:
         verbose: Whether to enable verbose logging
     """
-    # Set the level of our logger
-    if verbose:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
+    # Set the level for the root logger to affect all handlers
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.getLogger().setLevel(log_level)
+
+    # Optional: You might want to adjust the level of specific handlers
+    # if they have their own level settings, but setting the root logger level
+    # is usually sufficient.
+    logger.info(
+        f"Logging level set to {logging.getLevelName(log_level)}"
+    )  # Log the change
 
 
 def get_config_value(key: str, default: Any = None) -> Any:

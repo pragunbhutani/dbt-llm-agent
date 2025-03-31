@@ -21,6 +21,7 @@ from sqlalchemy.sql import func
 from datetime import datetime
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
+from sqlalchemy.dialects.postgresql import JSONB
 
 # NOTE: This module serves as the single source of truth for all model definitions
 # in the system. It provides bidirectional conversion between domain models and
@@ -180,14 +181,15 @@ class ModelTable(Base):
 
 
 # Question model relationships
-question_models_assoc = Table(
-    "question_models_assoc",
-    Base.metadata,
-    Column("question_id", Integer, ForeignKey("questions.id"), primary_key=True),
-    Column("model_name", String, primary_key=True),
-    Column("relevance_score", Integer, nullable=True),
-    Column("created_at", DateTime(timezone=True), server_default=func.now()),
-)
+# Removing unused association table definition
+# question_models_assoc = Table(
+#     "question_models_assoc",
+#     Base.metadata,
+#     Column("question_id", Integer, ForeignKey("questions.id"), primary_key=True),
+#     Column("model_name", String, primary_key=True),
+#     Column("relevance_score", Integer, nullable=True),
+#     Column("created_at", DateTime(timezone=True), server_default=func.now()),
+# )
 
 
 class QuestionTable(Base):
@@ -198,9 +200,14 @@ class QuestionTable(Base):
     id = Column(Integer, primary_key=True)
     question_text = Column(Text, nullable=False)
     answer_text = Column(Text, nullable=True)
+    question_embedding = Column(
+        Vector(1536),
+        nullable=True,
+        comment="Embedding vector for the question text using text-embedding-ada-002",
+    )
     was_useful = Column(Boolean, nullable=True)
     feedback = Column(Text, nullable=True)
-    question_metadata = Column(JSON, nullable=True)  # For any additional metadata
+    question_metadata = Column(JSONB, nullable=True, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -225,25 +232,13 @@ class QuestionTable(Base):
             id=self.id,
             question_text=self.question_text,
             answer_text=self.answer_text,
+            question_embedding=self.question_embedding,
             was_useful=self.was_useful,
             feedback=self.feedback,
             question_metadata=self.question_metadata or {},
             created_at=self.created_at,
             updated_at=self.updated_at,
             models=models_data,
-        )
-
-    @classmethod
-    def from_domain(cls, question):
-        """Create an ORM model from a domain model"""
-        return cls(
-            id=question.id,
-            question_text=question.question_text,
-            answer_text=question.answer_text,
-            was_useful=question.was_useful,
-            feedback=question.feedback,
-            question_metadata=question.question_metadata,
-            # Note: model_assocs would be handled separately
         )
 
 
@@ -804,16 +799,17 @@ class DBTProject:
 
 @dataclass
 class Question:
-    """Domain model for a question and its answer."""
+    """Domain model for a question and its associated data."""
 
     question_text: str
-    id: Optional[int] = None
     answer_text: Optional[str] = None
+    question_embedding: Optional[List[float]] = None
     was_useful: Optional[bool] = None
     feedback: Optional[str] = None
     question_metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    id: Optional[int] = None
+    created_at: Optional[Any] = None
+    updated_at: Optional[Any] = None
     models: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -830,9 +826,19 @@ class Question:
             "models": self.models,
         }
 
-    def to_orm(self):
+    def to_orm(self) -> QuestionTable:
         """Convert domain model to ORM model"""
-        return QuestionTable.from_domain(self)
+        return QuestionTable(
+            id=self.id,
+            question_text=self.question_text,
+            answer_text=self.answer_text,
+            question_embedding=self.question_embedding,
+            was_useful=self.was_useful,
+            feedback=self.feedback,
+            question_metadata=self.question_metadata,
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+        )
 
 
 @dataclass
