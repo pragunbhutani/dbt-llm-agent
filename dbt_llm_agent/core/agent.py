@@ -1051,8 +1051,19 @@ class Agent:
 
                 if "columns" in model_data and isinstance(model_data["columns"], list):
                     for column in model_data["columns"]:
-                        if "name" in column and "description" in column:
+                        # Add a check to ensure 'column' is a dictionary and not None
+                        if (
+                            isinstance(column, dict)
+                            and "name" in column
+                            and "description" in column
+                        ):
                             column_descriptions[column["name"]] = column["description"]
+                        elif (
+                            column is not None
+                        ):  # Log a warning if it's not a dict but also not None
+                            logger.warning(
+                                f"Skipping invalid column entry in YAML for model {model_name}: {column}"
+                            )
             else:
                 logger.warning(
                     f"Missing or invalid YAML structure for model {model_name}"
