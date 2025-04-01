@@ -1,141 +1,119 @@
 """
-Parse command for dbt-llm-agent CLI.
+Command to parse dbt project files and import models.
 """
 
 import click
-import logging
-import pathlib
 import sys
+import os
+import json
+from pathlib import Path
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from typing import Dict, List, Optional
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.utils.cli_utils import (
-    get_env_var,
-    colored_echo,
-    set_logging_level,
-)
+from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
 
 # Initialize logger
 logger = get_logger(__name__)
 
+# Initialize console for rich output
+console = Console()
+
 
 @click.command()
-@click.argument(
-    "project_path", type=click.Path(exists=True, file_okay=False, dir_okay=True)
-)
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
+@click.argument("project_path", type=click.Path(exists=True), required=False)
 @click.option(
-    "--select",
-    help="Model selection using dbt syntax (e.g. 'tag:marketing,+downstream_model')",
-    default=None,
+    "--manifest", type=click.Path(exists=True), help="Path to dbt manifest.json file"
 )
-@click.option("--force", is_flag=True, help="Force re-parsing of all models")
+@click.option("--force", is_flag=True, help="Force reimport of models")
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-def parse(project_path, postgres_uri, select, force, verbose):
-    """
-    Parse a dbt project and store models in the database.
+def parse(project_path, manifest, force, verbose):
+    """Parse a dbt project and import models.
 
-    PROJECT_PATH is the path to the root of the dbt project.
+    This command parses dbt project files to extract model metadata and SQL,
+    then imports the models into the database.
+
+    You can specify either a dbt project directory or a manifest file.
+
+    Examples:
+        dbt-llm parse /path/to/dbt/project
+        dbt-llm parse --manifest /path/to/manifest.json
+        dbt-llm parse /path/to/dbt/project --force
     """
+    set_logging_level(verbose)
+
+    # Check if we have a project path or manifest path
+    if not project_path and not manifest:
+        # Try to use current directory as project path if not specified
+        if os.path.exists("dbt_project.yml"):
+            project_path = "."
+        else:
+            logger.error("No project path or manifest file provided")
+            console.print("Please specify either a project path or manifest file.")
+            console.print("Example: dbt-llm parse /path/to/dbt/project")
+            console.print("Example: dbt-llm parse --manifest /path/to/manifest.json")
+            sys.exit(1)
+
+    # Load configuration from environment
+    postgres_uri = get_config_value("postgres_uri")
+
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        sys.exit(1)
+
     try:
-        # Set logging level based on verbosity
-        if verbose:
-            logging.basicConfig(level=logging.DEBUG)
-            logger.setLevel(logging.DEBUG)
-
-        # Load environment variables from .env file (if not already loaded)
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv(override=True)
-            logger.info("Loaded environment variables from .env file")
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
-
-        # Normalize and validate project path
-        project_path = pathlib.Path(project_path).resolve()
-        if not project_path.exists():
-            logger.error(f"Project path does not exist: {project_path}")
-            sys.exit(1)
-
-        if not (project_path / "dbt_project.yml").exists():
-            logger.error(
-                f"Not a valid dbt project (no dbt_project.yml found): {project_path}"
-            )
-            sys.exit(1)
-
-        # Import here to avoid circular imports
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-        from dbt_llm_agent.core.dbt_parser import DBTProjectParser
-        from dbt_llm_agent.utils.model_selector import ModelSelector
-
-        # Get PostgreSQL URI from args or env var
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
+        # Import necessary modules
+        from dbt_llm_agent.storage.model_storage import ModelStorage
+        from dbt_llm_agent.parsers.dbt_manifest_parser import DBTManifestParser
 
         # Initialize storage
-        logger.info(f"Connecting to PostgreSQL database: {postgres_uri}")
-        postgres = PostgresStorage(postgres_uri)
+        model_storage = ModelStorage(postgres_uri)
 
-        # Initialize parser
-        logger.info(f"Parsing dbt project at: {project_path}")
-        parser = DBTProjectParser(project_path)
+        # Create spinner for long-running operations
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            # Parse the project
+            parse_task = progress.add_task("Parsing dbt project...", total=None)
 
-        # Parse project
-        project = parser.parse_project()
+            if manifest:
+                logger.info(f"Loading manifest from {manifest}")
+                parser = DBTManifestParser(manifest_path=manifest)
+            else:
+                logger.info(f"Parsing project at {project_path}")
+                parser = DBTManifestParser(project_path=project_path)
 
-        # Create model selector if selection is provided
-        if select:
-            logger.info(f"Filtering models with selector: {select}")
-            selector = ModelSelector(project.models)
-            selected_models = selector.select(select)
-            logger.info(f"Selected {len(selected_models)} models")
+            # Run the parser
+            parser.parse()
+            progress.update(parse_task, completed=True)
 
-            # Filter project.models to only include selected models
-            project.models = {
-                name: model
-                for name, model in project.models.items()
-                if name in selected_models
-            }
-
-        # Store models in database
-        logger.info(f"Found {len(project.models)} models")
-        if force:
-            logger.info("Force flag enabled - re-parsing all models")
-
-        for model_name, model in project.models.items():
-            if verbose:
-                logger.debug(f"Processing model: {model_name}")
-            postgres.store_model(model, force=force)
-
-        logger.info(f"Successfully parsed and stored {len(project.models)} models")
-
-        # Store sources if available
-        if hasattr(project, "sources") and project.sources:
-            logger.info(f"Found {len(project.sources)} sources")
-            for source_name, source in project.sources.items():
-                if verbose:
-                    logger.debug(f"Processing source: {source_name}")
-                postgres.store_source(source, force=force)
-
-            logger.info(
-                f"Successfully parsed and stored {len(project.sources)} sources"
+            # Store models in database
+            store_task = progress.add_task(
+                f"Storing {len(parser.models)} models in database...", total=None
             )
 
-        return 0
+            for model_name, model in parser.models.items():
+                model_storage.store_model(model, force=force)
+
+            progress.update(store_task, completed=True)
+
+        # Display success message
+        console.print(
+            f"[green]Successfully imported {len(parser.models)} models[/green]"
+        )
+        console.print("You can now:")
+        console.print("1. List models: dbt-llm list")
+        console.print("2. Get model details: dbt-llm model-details [model_name]")
+        console.print('3. Embed models for semantic search: dbt-llm embed --select "*"')
+        console.print('4. Ask questions: dbt-llm ask "What models do we have?"')
 
     except Exception as e:
-        logger.error(f"Error parsing dbt project: {e}")
+        logger.error(f"Error parsing project: {str(e)}")
         if verbose:
             import traceback
 
-            traceback.print_exc()
+            logger.debug(traceback.format_exc())
         sys.exit(1)

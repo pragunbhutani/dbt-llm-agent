@@ -1,7 +1,16 @@
-"""Storage modules for dbt-llm-agent."""
+"""Storage module for dbt-llm-agent.
 
-from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-from dbt_llm_agent.storage.question_service import QuestionTrackingService
+This module provides storage functionality for dbt-llm-agent.
+"""
 
-__all__ = ["PostgresStorage", "PostgresVectorStore", "QuestionTrackingService"]
+from dbt_llm_agent.storage.model_storage import ModelStorage
+from dbt_llm_agent.storage.model_embedding_storage import ModelEmbeddingStorage
+from dbt_llm_agent.storage.question_storage import QuestionStorage
+
+# Removed backwards compatibility aliases as they reference non-existent modules
+
+__all__ = [
+    "ModelStorage",
+    "ModelEmbeddingStorage",
+    "QuestionStorage",
+]

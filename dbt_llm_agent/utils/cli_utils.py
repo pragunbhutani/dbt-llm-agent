@@ -67,11 +67,16 @@ def set_logging_level(verbose: bool):
     Args:
         verbose: Whether to enable verbose logging
     """
-    # Set the level of our logger
-    if verbose:
-        logger.setLevel(logging.DEBUG)
-    else:
-        logger.setLevel(logging.INFO)
+    # Set the level for the root logger to affect all handlers
+    log_level = logging.DEBUG if verbose else logging.INFO
+    logging.getLogger().setLevel(log_level)
+
+    # Optional: You might want to adjust the level of specific handlers
+    # if they have their own level settings, but setting the root logger level
+    # is usually sufficient.
+    logger.info(
+        f"Logging level set to {logging.getLevelName(log_level)}"
+    )  # Log the change
 
 
 def get_config_value(key: str, default: Any = None) -> Any:
@@ -84,8 +89,20 @@ def get_config_value(key: str, default: Any = None) -> Any:
     Returns:
         The configuration value or the default value
     """
-    env_var = f"{key.upper()}"
-    return get_env_var(env_var, default)
+    return get_env_var(key.upper(), default)
+
+
+def format_model_reference(model_name: str) -> str:
+    """
+    Format a model name as a model reference.
+
+    Args:
+        model_name: The model name to format
+
+    Returns:
+        A formatted model reference string
+    """
+    return f"ref('{model_name}')"
 
 
 def load_dotenv_once():

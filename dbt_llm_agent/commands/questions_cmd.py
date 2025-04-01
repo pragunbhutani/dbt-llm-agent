@@ -1,80 +1,140 @@
 """
-Questions command for dbt-llm-agent CLI.
+Command to list and manage previously asked questions.
 """
 
 import click
 import sys
+import json
+from rich.console import Console
+from rich.table import Table
+from typing import Dict, List, Optional
 
 from dbt_llm_agent.utils.logging import get_logger
-from dbt_llm_agent.utils.cli_utils import get_env_var, colored_echo
+from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
 
 # Initialize logger
 logger = get_logger(__name__)
 
+# Initialize console for rich output
+console = Console()
+
 
 @click.command()
-@click.option("--limit", type=int, default=10, help="Number of questions to show")
+@click.option(
+    "--limit", type=int, default=10, help="Maximum number of questions to show"
+)
 @click.option("--offset", type=int, default=0, help="Offset for pagination")
-@click.option("--useful", type=bool, help="Filter by usefulness")
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-def questions(limit, offset, useful, postgres_uri):
+@click.option("--useful", is_flag=True, help="Only show questions marked as useful")
+@click.option(
+    "--not-useful", is_flag=True, help="Only show questions marked as not useful"
+)
+@click.option("--json", "output_json", is_flag=True, help="Output in JSON format")
+@click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
+def questions(limit, offset, useful, not_useful, output_json, verbose):
+    """List previously asked questions and their answers.
+
+    This command allows you to view your question history with optional filtering.
+
+    Examples:
+        dbt-llm questions
+        dbt-llm questions --limit 5 --offset 10
+        dbt-llm questions --useful
+        dbt-llm questions --not-useful
     """
-    List questions and answers.
-    """
+    set_logging_level(verbose)
+
+    # Load configuration from environment
+    postgres_uri = get_config_value("postgres_uri")
+
+    if not postgres_uri:
+        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        sys.exit(1)
+
     try:
-        # Load environment variables from .env file
-        try:
-            from dotenv import load_dotenv
+        # Import necessary modules
+        from dbt_llm_agent.storage.model_storage import ModelStorage
+        from dbt_llm_agent.storage.question_storage import QuestionStorage
 
-            load_dotenv(override=True)
-        except ImportError:
-            logger.warning(
-                "python-dotenv not installed. Environment variables may not be properly loaded."
-            )
+        # Initialize storage
+        model_storage = ModelStorage(postgres_uri)
+        question_storage = QuestionStorage(postgres_uri)
 
-        # Import here to avoid circular imports
-        from dbt_llm_agent.storage.question_service import QuestionTrackingService
-
-        # Get PostgreSQL URI
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-            if not postgres_uri:
-                logger.error(
-                    "PostgreSQL URI not provided. Please either:\n"
-                    "1. Add POSTGRES_URI to your .env file\n"
-                    "2. Pass it as --postgres-uri argument"
-                )
-                sys.exit(1)
-
-        # Initialize question tracking
-        question_tracking = QuestionTrackingService(postgres_uri)
+        # Determine filter
+        was_useful = None
+        if useful:
+            was_useful = True
+        elif not_useful:
+            was_useful = False
 
         # Get questions
-        questions = question_tracking.get_all_questions(
-            limit=limit, offset=offset, was_useful=useful
+        results = question_storage.get_all_questions(
+            limit=limit, offset=offset, was_useful=was_useful
         )
 
-        print("\n")
+        if not results:
+            console.print("No questions found")
+            return
 
-        if not questions:
-            colored_echo("No questions found", color="WARNING")
-            return 0
+        # Display results
+        if output_json:
+            # Convert to JSON serializable format
+            questions_json = []
+            for q in results:
+                question_dict = {
+                    "id": q.id,
+                    "question": q.question_text,
+                    "answer": q.answer_text,
+                    "was_useful": q.was_useful,
+                    "feedback": q.feedback,
+                    "created_at": q.created_at.isoformat() if q.created_at else None,
+                }
+                questions_json.append(question_dict)
 
-        colored_echo(f"Found {len(questions)} questions:\n", color="INFO", bold=True)
-        for q in questions:
-            colored_echo(f"\nID: {q['id']}", color="INFO", bold=True)
-            colored_echo(f"Question: {q['question_text']}", color="INFO")
-            colored_echo(f"Answer: {q['answer_text']}", color="DEBUG")
-            # Use different colors based on usefulness
-            usefulness_color = "INFO" if q["was_useful"] else "WARNING"
-            colored_echo(f"Was useful: {q['was_useful']}", color=usefulness_color)
-            # Get model names from the dictionary
-            model_names = [m["name"] for m in q["models"]]
-            colored_echo(f"Models: {', '.join(model_names)}", color="DEBUG")
-            colored_echo(f"Created at: {q['created_at']}", color="DEBUG")
+            print(json.dumps(questions_json, indent=2))
+            return
 
-        return 0
+        # Create table display
+        table = Table(title=f"Questions (showing {len(results)} results)")
+        table.add_column("ID", justify="right", style="cyan")
+        table.add_column("Question", style="green")
+        table.add_column("Useful", justify="center")
+        table.add_column("Created", style="dim")
+
+        for question in results:
+            useful_str = (
+                "✅"
+                if question.was_useful == True
+                else "❌" if question.was_useful == False else "?"
+            )
+            created_str = (
+                question.created_at.strftime("%Y-%m-%d %H:%M")
+                if question.created_at
+                else "unknown"
+            )
+
+            table.add_row(
+                str(question.id),
+                (
+                    question.question_text[:50] + "..."
+                    if len(question.question_text) > 50
+                    else question.question_text
+                ),
+                useful_str,
+                created_str,
+            )
+
+        console.print(table)
+        console.print(
+            f"\nShowing {len(results)} of {limit} results. Use --limit and --offset for pagination."
+        )
+        console.print(
+            "To see details of a specific question, use: dbt-llm question [ID]"
+        )
 
     except Exception as e:
-        logger.error(f"Error listing questions: {e}")
+        logger.error(f"Error listing questions: {str(e)}")
+        if verbose:
+            import traceback
+
+            logger.debug(traceback.format_exc())
         sys.exit(1)

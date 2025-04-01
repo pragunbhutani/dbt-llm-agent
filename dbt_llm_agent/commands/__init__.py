@@ -7,7 +7,7 @@ from dbt_llm_agent.commands.parse_cmd import parse
 from dbt_llm_agent.commands.embed_cmd import embed
 from dbt_llm_agent.commands.ask_cmd import ask
 from dbt_llm_agent.commands.interpret_cmd import interpret
-from dbt_llm_agent.commands.list_cmd import list_models
+from dbt_llm_agent.commands.list_cmd import list_models as list
 from dbt_llm_agent.commands.model_details_cmd import model_details
 from dbt_llm_agent.commands.questions_cmd import questions
 from dbt_llm_agent.commands.feedback_cmd import feedback
@@ -19,7 +19,7 @@ __all__ = [
     "embed",
     "ask",
     "interpret",
-    "list_models",
+    "list",
     "model_details",
     "questions",
     "feedback",

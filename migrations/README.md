@@ -9,11 +9,9 @@ This directory contains database migration scripts using Alembic. Alembic is a d
 To run migrations and update your database to the latest schema version:
 
 ```bash
-# Using the CLI command
+# First make sure your .env file has POSTGRES_URI set correctly
+# Then run the migrate command
 dbt-llm-agent migrate
-
-# Optionally specify a PostgreSQL connection URI
-dbt-llm-agent migrate --postgres-uri "postgresql://user:pass@localhost/dbname"
 
 # Migrate to a specific revision
 dbt-llm-agent migrate --revision "revision_id"
@@ -24,6 +22,7 @@ dbt-llm-agent migrate --revision "revision_id"
 To initialize a new database with the current schema:
 
 ```bash
+# Make sure your .env file has POSTGRES_URI set correctly
 dbt-llm-agent init-db
 ```
 

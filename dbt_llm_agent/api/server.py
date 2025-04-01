@@ -1,34 +1,56 @@
-"""FastAPI server for dbt-llm-agent."""
+"""FastAPI server for the dbt-llm-agent."""
 
 import os
+import tempfile
+import json
+import shutil
 import logging
-from typing import Dict, List, Any, Optional
+from datetime import datetime
+from typing import Dict, List, Optional, Any, Callable, Union
+from pathlib import Path
 
+import uvicorn
 from fastapi import (
     FastAPI,
     Depends,
     HTTPException,
-    BackgroundTasks,
     File,
     UploadFile,
+    BackgroundTasks,
     Query,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
-import uvicorn
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-import tempfile
-import shutil
 
-from dbt_llm_agent.core.dbt_parser import DBTProjectParser
+# Import agent
 from dbt_llm_agent.core.agent import DBTAgent
-from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-from dbt_llm_agent.utils.config import load_config, save_config
-from dbt_llm_agent.storage.question_service import QuestionTrackingService
+from dbt_llm_agent.core.dbt_parser import DBTProjectParser
+from dbt_llm_agent.storage.model_storage import ModelStorage
+from dbt_llm_agent.storage.model_embedding_storage import ModelEmbeddingStorage
+from dbt_llm_agent.storage.question_storage import QuestionStorage
 from dbt_llm_agent.utils.model_selector import ModelSelector
+from dbt_llm_agent.utils.config import load_config
+from dbt_llm_agent.utils.cli_utils import load_dotenv_once
+from dbt_llm_agent.core.models import DBTModel, Question, ModelEmbedding
+from dbt_llm_agent.llm.client import LLMClient, is_openai_api_key_valid
+from dbt_llm_agent.core.agent import Agent
+from dbt_llm_agent.parsers.dbt_manifest_parser import DBTManifestParser
+from dbt_llm_agent.parser.dbt_query_parser import parse_sql
+from dbt_llm_agent.utils.logging import get_logger
 
+# Backward compatibility imports
+from dbt_llm_agent.storage import (
+    PostgresStorage,
+    PostgresVectorStore,
+    QuestionTrackingService,
+)
+
+# Set up logging
 logger = logging.getLogger(__name__)
+
+# Load environment variables
+load_dotenv_once()
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -94,18 +116,6 @@ class ParseProjectResponse(BaseModel):
     error: Optional[str] = None
 
 
-class ConfigUpdateRequest(BaseModel):
-    openai_api_key: Optional[str] = None
-    openai_model: Optional[str] = None
-    temperature: Optional[float] = None
-    postgres_uri: Optional[str] = None
-    vector_db_path: Optional[str] = None
-    dbt_project_path: Optional[str] = None
-    slack_bot_token: Optional[str] = None
-    slack_app_token: Optional[str] = None
-    slack_signing_secret: Optional[str] = None
-
-
 class ConfigResponse(BaseModel):
     success: bool
     message: str
@@ -130,7 +140,7 @@ class ModelDetailResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    was_useful: bool
+    was_useful: Optional[bool] = None
     feedback: Optional[str] = None
 
 
@@ -213,7 +223,7 @@ async def root():
 async def ask_question(
     request: QuestionRequest,
     agent: DBTAgent = Depends(get_agent),
-    question_tracking: QuestionTrackingService = Depends(get_question_tracking),
+    question_tracking: QuestionStorage = Depends(get_question_tracking),
 ):
     """Ask a question to the agent."""
     try:
@@ -464,11 +474,6 @@ async def parse_project(
         }
         agent.vector_store.store_models(model_texts)
 
-        # Update configuration with the project path
-        config = load_config()
-        config["dbt_project_path"] = os.path.abspath(request.project_path)
-        save_config(config)
-
         # Get model names
         model_names = list(project.models.keys())
 
@@ -572,21 +577,6 @@ async def get_config():
         return {"success": False, "message": str(e), "config": {}}
 
 
-@app.post("/config", response_model=ConfigResponse)
-async def update_config(request: ConfigUpdateRequest):
-    """Update the configuration (DEPRECATED)."""
-    logger.warning(
-        "Configuration updates via API are no longer supported. "
-        "Update your .env file directly."
-    )
-
-    return {
-        "success": False,
-        "message": "Configuration updates via API are no longer supported. Update your .env file directly.",
-        "config": {},
-    }
-
-
 @app.get("/models", response_model=ModelListResponse)
 async def list_models(agent: DBTAgent = Depends(get_agent)):
     """List all models."""
@@ -633,9 +623,16 @@ async def get_model_details(model_name: str, agent: DBTAgent = Depends(get_agent
 def provide_feedback(
     question_id: int,
     request: FeedbackRequest,
-    question_tracking: QuestionTrackingService = Depends(get_question_tracking),
+    question_tracking: QuestionStorage = Depends(get_question_tracking),
 ):
     try:
+        # Validate that at least some feedback is provided
+        if request.was_useful is None and not request.feedback:
+            raise HTTPException(
+                status_code=400,
+                detail="Feedback must include either 'was_useful' or 'feedback' text.",
+            )
+
         # Get the question to make sure it exists
         question = question_tracking.get_question(question_id)
         if not question:
@@ -666,7 +663,7 @@ def list_questions(
     limit: int = 10,
     offset: int = 0,
     useful: Optional[bool] = None,
-    question_tracking: QuestionTrackingService = Depends(get_question_tracking),
+    question_tracking: QuestionStorage = Depends(get_question_tracking),
 ):
     try:
         questions = question_tracking.get_all_questions(
@@ -682,8 +679,8 @@ def list_questions(
 @app.post("/embed", response_model=EmbedModelsResponse)
 def embed_models(
     request: EmbedModelsRequest,
-    postgres_storage: PostgresStorage = Depends(get_postgres_storage),
-    vector_store: PostgresVectorStore = Depends(get_vector_store),
+    postgres_storage: ModelStorage = Depends(get_postgres_storage),
+    vector_store: ModelEmbeddingStorage = Depends(get_vector_store),
 ):
     try:
         # Get all models from the database
@@ -734,6 +731,63 @@ def embed_models(
     except Exception as e:
         logger.error(f"Error embedding models: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_postgres_storage():
+    """Get a PostgreSQL storage instance."""
+    global postgres
+    if postgres is None:
+        postgres = ModelStorage(connection_string=config["postgres_uri"], echo=False)
+    return postgres
+
+
+def get_vector_store():
+    """Get a vector store instance."""
+    global vector_store
+    if vector_store is None:
+        vector_store = ModelEmbeddingStorage(
+            connection_string=config["postgres_uri"],
+            collection_name="dbt_models",
+        )
+    return vector_store
+
+
+def get_question_tracking():
+    """Get a question tracking service instance."""
+    global question_tracking
+    if question_tracking is None:
+        question_tracking = QuestionStorage(config["postgres_uri"])
+    return question_tracking
+
+
+async def get_related_models(
+    query: str,
+    postgres_storage: ModelStorage = Depends(get_postgres_storage),
+    vector_store: ModelEmbeddingStorage = Depends(get_vector_store),
+):
+    """Get models related to a query using vector search."""
+    try:
+        # Use vector store to find related models
+        search_results = vector_store.search_models(query, n_results=5)
+
+        # Get full model details for each result
+        related_models = []
+        for result in search_results:
+            model_name = result["model_name"]
+            model = postgres_storage.get_model(model_name)
+            if model:
+                related_models.append(
+                    {
+                        "name": model_name,
+                        "description": model.description,
+                        "similarity": result["similarity_score"],
+                    }
+                )
+
+        return related_models
+    except Exception as e:
+        logger.error(f"Error getting related models: {e}")
+        return []
 
 
 def start_server(host: str = "0.0.0.0", port: int = 8000):

@@ -1,154 +1,158 @@
 """
-Ask command for dbt-llm-agent CLI.
+Command line interface for asking questions to the dbt-llm-agent.
 """
 
 import click
-import logging
 import sys
+import os
+import json
+import textwrap
+from rich.console import Console
+from rich.markdown import Markdown
 
 from dbt_llm_agent.utils.logging import get_logger
 from dbt_llm_agent.utils.cli_utils import (
-    get_env_var,
+    get_config_value,
     set_logging_level,
-    load_dotenv_once,
-    colored_echo,
+    format_model_reference,
 )
+from dbt_llm_agent.storage.question_storage import QuestionStorage
 
 # Initialize logger
 logger = get_logger(__name__)
 
+# Initialize console for rich output
+console = Console()
+
 
 @click.command()
-@click.argument("question")
-@click.option("--postgres-uri", help="PostgreSQL connection URI", envvar="POSTGRES_URI")
-@click.option("--openai-api-key", help="OpenAI API key", envvar="OPENAI_API_KEY")
-@click.option("--openai-model", help="OpenAI model to use", envvar="OPENAI_MODEL")
 @click.option(
-    "--temperature",
-    type=float,
-    default=0.0,
-    help="Temperature for the OpenAI model",
-    envvar="TEMPERATURE",
+    "--no-history", is_flag=True, help="Don't store the question and answer in history"
 )
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
-@click.option("--no-color", is_flag=True, help="Disable colored output", default=False)
-@click.option("--json", is_flag=True, help="Output results as JSON", default=False)
-def ask(
-    question,
-    postgres_uri,
-    openai_api_key,
-    openai_model,
-    temperature,
-    verbose,
-    no_color,
-    json,
-):
-    """Ask a question about the dbt project.
+@click.argument("question")
+def ask(question, no_history, verbose):
+    """Ask a question about your dbt models using an agentic workflow."""
+    set_logging_level(verbose)
 
-    This command allows you to ask questions about your dbt project and get answers
-    based on the information in the model documentation and schema.
-    """
+    # Check for OpenAI API key
+    openai_api_key = get_config_value("openai_api_key")
+    if not openai_api_key:
+        logger.error("OpenAI API key not provided in environment variables (.env file)")
+        sys.exit(1)
+
+    # Load configuration
+    postgres_uri = get_config_value("postgres_uri")
+    vector_db_path = get_config_value("vector_db_path", "~/.dbt-llm-agent/vector_db")
+    temperature = float(get_config_value("temperature", "0.0"))
+    openai_model = get_config_value("openai_model", "gpt-4o")
+
     try:
-        # Set logging level based on verbosity
-        set_logging_level(verbose)
+        # Initialize storage
+        from dbt_llm_agent.storage.model_storage import ModelStorage
+        from dbt_llm_agent.storage.model_embedding_storage import ModelEmbeddingStorage
 
-        # Import necessary modules
-        from dbt_llm_agent.storage.postgres_storage import PostgresStorage
-        from dbt_llm_agent.storage.vector_store import PostgresVectorStore
-        from dbt_llm_agent.core.agent import DBTAgent
-        from dbt_llm_agent.utils.model_selector import ModelSelector
+        model_storage = ModelStorage(postgres_uri)
+        vector_store = ModelEmbeddingStorage(postgres_uri)
 
-        # Load configuration
-        if not postgres_uri:
-            postgres_uri = get_env_var("POSTGRES_URI")
-
-        if not openai_api_key:
-            openai_api_key = get_env_var("OPENAI_API_KEY")
-
-        if not openai_model:
-            openai_model = get_env_var("OPENAI_MODEL")
-            if not openai_model:
-                openai_model = "gpt-4-turbo"
-
-        # Validate configuration
-        if not postgres_uri:
-            logger.error("PostgreSQL URI not provided and not found in config")
+        # First check if we have stored models
+        models = model_storage.get_all_models()
+        if not models:
+            logger.error(
+                "No dbt models found in the database. "
+                "Please run 'dbt-llm parse' first to import your models."
+            )
             sys.exit(1)
 
-        if not openai_api_key:
-            logger.error("OpenAI API key not provided and not found in config")
-            sys.exit(1)
+        # Initialize LLM client
+        from dbt_llm_agent.integrations.llm.client import LLMClient
 
-        # Initialize storage and agent
-        postgres_storage = PostgresStorage(postgres_uri)
-        vector_store = PostgresVectorStore(postgres_uri)
-        agent = DBTAgent(
-            postgres_storage=postgres_storage,
+        llm = LLMClient(api_key=openai_api_key, model=openai_model)
+
+        # Initialize question tracking if we are storing history
+        question_tracking = None
+        if not no_history:
+            question_tracking = QuestionStorage(
+                connection_string=postgres_uri, openai_api_key=openai_api_key
+            )
+
+        # Initialize the Agent
+        from dbt_llm_agent.core.agent import Agent
+
+        agent = Agent(
+            llm_client=llm,
+            model_storage=model_storage,
             vector_store=vector_store,
+            question_storage=question_tracking,
+            temperature=temperature,
+            console=console,
+            verbose=verbose,
             openai_api_key=openai_api_key,
-            model_name=openai_model,
         )
 
-        # Ask the question
-        result = agent.answer_question(question)
+        # *** Start of New Agentic Workflow ***
+        console.print("[bold]🚀 Starting agentic workflow...[/bold]")
 
-        if "error" in result:
-            logger.error(f"Error: {result['error']}")
-            sys.exit(1)
+        # Run the agentic workflow
+        # This method will handle understanding, searching, fetching,
+        # feedback checking, synthesis, validation, and refinement.
+        workflow_result = agent.run_agentic_workflow(question)
 
-        # Print the answer
-        if not json:
+        if not workflow_result or not workflow_result.get("final_answer"):
+            console.print(
+                "[bold red]Agent could not generate a satisfactory answer.[/bold red]"
+            )
+            return 1
+
+        final_answer = workflow_result["final_answer"]
+        used_model_names = workflow_result.get("used_model_names", [])
+        conversation_id = workflow_result.get("conversation_id")
+
+        # Display the final answer
+        console.print("\n[bold]Question:[/bold]")
+        console.print(question)
+        console.print("\n[bold]Final Answer:[/bold]")
+        md = Markdown(final_answer)
+        console.print(md)
+
+        # Handle history saving confirmation (if managed by workflow)
+        if conversation_id and not no_history:
+            console.print(
+                f"\n[italic]This conversation has been saved with ID {conversation_id}.[/italic]"
+            )
+            console.print(
+                "[italic]You can provide feedback with "
+                f"'dbt-llm feedback {conversation_id} --useful/--not-useful'[/italic]"
+            )
+        elif not no_history and not conversation_id and question_tracking:
+            # Fallback if workflow didn't save history
+            # Only try if question_tracking was initialized
             try:
-                from rich.markdown import Markdown
-                from rich.console import Console
-
-                markdown = True
-                console = Console()
-            except ImportError:
-                markdown = False
-                console = None
-
-            if markdown and console:
-                md_answer = result["answer"]
-                md = Markdown(md_answer)
-                console.print(md)
-            else:
-                print(result["answer"])
-
-            # Print models if available
-            if "relevant_models" in result and result["relevant_models"]:
-                print("\nBased on models:")
-                for model_data in result["relevant_models"]:
-                    model_info = f"- {model_data['name']}"
-                    print(model_info)
-
-        # Store the question and answer if there's a result
-        if "answer" in result and "relevant_models" in result:
-            try:
-                from dbt_llm_agent.storage.question_service import (
-                    QuestionTrackingService,
-                )
-
-                # Initialize question tracking service
-                question_tracking = QuestionTrackingService(postgres_uri)
-
-                question_id = question_tracking.record_question(
+                new_id = question_tracking.record_question(
                     question_text=question,
-                    answer_text=result["answer"],
-                    model_names=[m["name"] for m in result["relevant_models"]],
+                    answer_text=final_answer,
+                    model_names=used_model_names,
+                )
+                console.print(
+                    f"\n[italic]Saved conversation with ID {new_id} (fallback).[/italic]"
+                )
+            except Exception as hist_err:
+                logger.warning(
+                    f"Could not save question history via fallback: {hist_err}"
                 )
 
-                logger.info(
-                    f"Question and answer stored with ID: {question_id}. "
-                    f"Use 'dbt-llm-agent feedback {question_id} --useful=True/False' to provide feedback."
-                )
-            except Exception as e:
-                logger.error(f"Error storing question: {e}")
+        return 0
+        # *** End of New Agentic Workflow ***
 
     except Exception as e:
-        logger.error(f"Error: {str(e)}")
+        logger.error(f"Error asking question: {str(e)}")
         if verbose:
             import traceback
 
             logger.debug(traceback.format_exc())
-        sys.exit(1)
+        console.print(f"[bold red]Error:[/bold red] {str(e)}")
+        return 1
+
+
+if __name__ == "__main__":
+    ask()
