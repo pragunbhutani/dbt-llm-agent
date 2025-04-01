@@ -462,17 +462,47 @@ class Agent:
                     feedback_context += f"Past Answer: {item.answer_text}\n"
                     feedback_context += f"Feedback: Useful={item.was_useful}, Text={item.feedback or ''}\n---\n"
 
-                refinement_prompt = FEEDBACK_REFINEMENT_PROMPT_TEMPLATE.format(
-                    original_question=original_question,
-                    original_answer=final_answer,
-                    feedback_context=feedback_context,
-                )
+                refinement_prompt = f"""
+                You are refining a dbt model interpretation based on verification feedback.
+                
+                Original model: {model_name}
+                
+                Original SQL:
+                ```sql
+                {model.raw_sql}
+                ```
+                
+                Current interpretation:
+                ```yaml
+                {current_yaml_content}
+                ```
+                
+                Verification feedback from iteration {iteration+1}:
+                {verification_result}
+                
+                Upstream model information:
+                {detailed_upstream_info}
+                
+                YOUR TASK IS TO CREATE A COMPLETE YAML INTERPRETATION THAT INCLUDES ALL COLUMNS FROM THE MODEL.
+                
+                This is absolutely critical:
+                1. ADD ALL MISSING COLUMNS identified in the verification feedback - you must include EVERY column
+                2. Even if there are 50+ columns to add, you must include all of them in your response
+                3. The most common error is not including all columns from upstream models when SELECT * is used
+                4. Be extremely thorough - lack of completeness is a critical issue
+                5. Remove any incorrect columns identified in COLUMNS_TO_REMOVE
+                6. Update descriptions for columns identified in COLUMNS_TO_MODIFY
+                
+                DO NOT OMIT ANY COLUMNS from your response - completeness is the highest priority.
+                
+                Your output should be complete, valid YAML for this model. Include all columns.
+                """
 
                 refined_answer = self.llm.get_completion(
                     prompt=refinement_prompt,
-                    system_prompt="You are an AI assistant refining answers based on feedback.",
+                    system_prompt="You are an AI assistant specialized in refining dbt model interpretations based on SQL analysis.",
                     temperature=self.temperature,  # Use original temperature
-                    max_tokens=1500,  # Allow longer refined answer
+                    max_tokens=4000,  # Allow longer refined answer
                 )
 
                 if self.verbose:
@@ -715,7 +745,9 @@ class Agent:
             logger.error(f"Error updating model documentation: {e}")
             return False
 
-    def interpret_model(self, model_name: str) -> Dict[str, Any]:
+    def interpret_model(
+        self, model_name: str, max_verification_iterations: int = 1
+    ) -> Dict[str, Any]:
         """Interpret a model and its columns using an agentic workflow.
 
         This method implements a step-by-step agentic approach to model interpretation:
@@ -723,13 +755,19 @@ class Agent:
         2. Identify upstream models that provide context
         3. Fetch details of the upstream models
         4. Create a draft interpretation
-        5. Verify the draft against upstream models to ensure completeness and correctness
+        5. Iteratively verify and refine the interpretation (configurable iterations):
+           - Analyze upstream models' source code directly to ensure all columns are identified
+           - Extract structured recommendations for columns to add, remove, or modify
+           - Refine interpretation based on recommendations until verification passes or iterations complete
+        6. Return final interpretation with column recommendations
 
         Args:
             model_name: Name of the model to interpret.
+            max_verification_iterations: Maximum number of verification iterations to run (default: 1)
 
         Returns:
-            Dict containing the interpreted documentation in YAML format and metadata.
+            Dict containing the interpreted documentation in YAML format and metadata,
+            including structured column recommendations and verification iterations info.
         """
         try:
             logger.info(
@@ -817,7 +855,7 @@ class Agent:
             draft_yaml_documentation = self.llm.get_completion(
                 prompt=f"Interpret and generate YAML documentation for the model {model_name} based on its SQL and upstream dependencies",
                 system_prompt=prompt,
-                max_tokens=2000,
+                max_tokens=4000,
             )
 
             logger.debug(
@@ -899,123 +937,407 @@ class Agent:
                 # If we couldn't parse columns but have YAML content, include raw content
                 column_representation = f"YAML parsing failed, raw content available but columns couldn't be extracted."
 
-            verification_prompt = f"""
-            You are validating a dbt model interpretation against its upstream model definitions to ensure it's complete and accurate.
-            
-            The model being interpreted is: {model_name}
-            
-            The draft interpretation contains these columns:
-            {column_representation}
-            
-            Draft YAML content:
-            {draft_yaml_content}
-            
-            Here is information about the upstream models:
-            {upstream_info}
-            
-            Based on the SQL and upstream model information, verify:
-            1. Does the draft interpretation correctly identify all columns from the model's SQL?
-            2. Are there any missing columns that should be included based on the SQL and upstream references?
-            3. Is the description of each column accurate based on upstream models?
-            
-            If everything is correct, respond with "VERIFIED: The interpretation is complete and accurate."
-            If there are issues, provide specific feedback on what needs to be fixed, including any missing columns or inaccuracies.
-            """
+            # Enhanced verification with multiple iterations
+            current_yaml_content = draft_yaml_content
+            final_yaml_content = draft_yaml_content
 
-            verification_result = self.llm.get_completion(
-                prompt=verification_prompt,
-                system_prompt="You are an AI assistant specialized in verifying dbt model interpretations.",
-                max_tokens=1000,
-            )
-
-            logger.debug(
-                f"Verification result for {model_name}:\n{verification_result}"
-            )
-
-            # If verification identified issues, refine the interpretation
-            if "VERIFIED" not in verification_result:
+            for iteration in range(max_verification_iterations):
                 logger.info(
-                    f"Refining interpretation for {model_name} based on verification feedback"
+                    f"Starting verification iteration {iteration+1}/{max_verification_iterations}"
                 )
 
-                refinement_prompt = f"""
-                You are refining a dbt model interpretation based on verification feedback.
+                # Parse current YAML to get updated column information for verification prompt
+                try:
+                    current_parsed = yaml.safe_load(current_yaml_content)
+                    if current_parsed is None:
+                        logger.warning(
+                            f"Current YAML for {model_name} parsed as None, using empty dict"
+                        )
+                        current_parsed = {}
+
+                    current_model_data = current_parsed.get("models", [{}])[0]
+                    current_columns = current_model_data.get("columns", [])
+                    if current_columns is None:
+                        current_columns = []
+
+                    current_column_names = [
+                        col.get("name")
+                        for col in current_columns
+                        if col and isinstance(col, dict) and "name" in col
+                    ]
+                    current_column_representation = (
+                        ", ".join(current_column_names)
+                        if current_column_names
+                        else "No columns found"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error parsing current YAML in iteration {iteration+1}: {str(e)}"
+                    )
+                    current_column_representation = "Error parsing YAML"
+
+                # Build a more detailed upstream model information with focus on SQL
+                detailed_upstream_info = ""
+                for upstream_name in upstream_model_names:
+                    upstream_model = upstream_models_data.get(upstream_name)
+                    if not upstream_model:
+                        continue
+
+                    detailed_upstream_info += (
+                        f"\n-- Upstream Model: {upstream_model.name} --\n"
+                    )
+
+                    # Emphasize SQL analysis for column extraction
+                    detailed_upstream_info += f"Raw SQL of {upstream_model.name}:\n```sql\n{upstream_model.raw_sql or 'SQL not available'}\n```\n"
+
+                    # This model's columns - just as supplementary info
+                    if upstream_model.interpreted_columns:
+                        detailed_upstream_info += "Previously interpreted columns (for reference, SQL is definitive):\n"
+                        for (
+                            col_name,
+                            col_desc,
+                        ) in upstream_model.interpreted_columns.items():
+                            detailed_upstream_info += f"  - {col_name}: {col_desc}\n"
+                    elif upstream_model.columns:
+                        detailed_upstream_info += (
+                            "YML-defined columns (for reference, SQL is definitive):\n"
+                        )
+                        for col_name, col_obj in upstream_model.columns.items():
+                            detailed_upstream_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
+
+                    detailed_upstream_info += "-- End Upstream Model --\n"
+
+                verification_prompt = f"""
+                You are validating a dbt model interpretation against its upstream model definitions to ensure it's complete and accurate.
                 
-                Original model: {model_name}
+                The model being interpreted is: {model_name}
                 
-                Original SQL:
+                Original SQL of the model:
                 ```sql
                 {model.raw_sql}
                 ```
                 
-                Draft interpretation:
+                The current interpretation contains these columns:
+                {current_column_representation}
+                
+                Current YAML content being verified (iteration {iteration+1}/{max_verification_iterations}):
                 ```yaml
-                {draft_yaml_content}
+                {current_yaml_content}
                 ```
                 
-                Verification feedback:
-                {verification_result}
+                Here is information about the upstream models:
+                {detailed_upstream_info}
                 
-                Upstream model information:
-                {upstream_info}
+                YOUR PRIMARY TASK IS TO COMPREHENSIVELY VERIFY THAT EVERY SINGLE COLUMN FROM THIS MODEL'S SQL OUTPUT IS CORRECTLY DOCUMENTED.
                 
-                Please create an improved YAML interpretation that addresses all the issues identified in the verification feedback.
-                Use the exact same YAML format as the draft interpretation but with corrected content.
+                Follow these specific steps in your verification:
+                
+                1. SQL ANALYSIS:
+                   - Carefully trace the model's SQL to understand ALL columns in its output
+                   - For any SELECT * statements, expand them by examining the source table/CTE's complete column list
+                   - For JOINs, include columns from all joined tables that are in the SELECT
+                   - For CTEs, carefully trace through each step to identify all columns
+                
+                2. UPSTREAM COLUMN VALIDATION:
+                   - When a model uses SELECT * from an upstream model, carefully examine the SQL of that upstream model
+                   - Count the total number of columns in each upstream model referenced with SELECT *
+                   - Compare this count with the columns documented in the interpretation
+                   - Missing columns in upstream models are the most common error - be extremely thorough
+                
+                3. COLUMN COUNT CHECK:
+                   - Roughly estimate how many columns should appear in the output of this model
+                   - Compare this estimate with the number of columns in the interpretation
+                   - A significant discrepancy (e.g., interpretation has 5 columns but SQL output should have 60+) indicates missing columns
+                
+                4. COMPLETENESS CHECK:
+                   - The interpretation must include EVERY column that will appear in the model's output
+                   - Even if there are 50+ columns, all must be properly documented
+                   - Any omission of columns is a critical error
+                
+                Based on your thorough analysis:
+                
+                If everything is correct, respond with "VERIFIED: The interpretation is complete and accurate."
+                
+                If there are issues, provide a structured response with the following format:
+                
+                VERIFICATION_RESULT:
+                [Your general feedback and assessment here]
+                [Include a count of total columns expected vs. documented]
+                
+                COLUMNS_TO_ADD:
+                - name: [column_name_1]
+                  description: [description]
+                  reason: [reason this column should be added, specifically citing where in the SQL it comes from]
+                - name: [column_name_2]
+                  description: [description]
+                  reason: [reason this column should be added, specifically citing where in the SQL it comes from]
+                [List ALL missing columns, even if there are dozens]
+                
+                COLUMNS_TO_REMOVE:
+                - name: [column_name_1]
+                  reason: [reason this column should be removed, specifically citing evidence from the SQL]
+                - name: [column_name_2]
+                  reason: [reason this column should be removed, specifically citing evidence from the SQL]
+                
+                COLUMNS_TO_MODIFY:
+                - name: [column_name_1]
+                  current_description: [current description]
+                  suggested_description: [suggested description]
+                  reason: [reason for the change, with specific reference to the SQL]
+                - name: [column_name_2]
+                  current_description: [current description]
+                  suggested_description: [suggested description]
+                  reason: [reason for the change, with specific reference to the SQL]
+                
+                Only include sections that have actual entries (e.g., omit COLUMNS_TO_REMOVE if no columns need to be removed).
                 """
 
-                refined_yaml_documentation = self.llm.get_completion(
-                    prompt=refinement_prompt,
-                    system_prompt="You are an AI assistant specialized in refining dbt model interpretations.",
-                    max_tokens=2000,
+                verification_result = self.llm.get_completion(
+                    prompt=verification_prompt,
+                    system_prompt="You are an AI assistant specialized in verifying dbt model interpretations. Your task is to carefully analyze SQL code to ensure all columns are correctly documented.",
+                    max_tokens=4000,
                 )
 
                 logger.debug(
-                    f"Refined interpretation for {model_name}:\n{refined_yaml_documentation}"
+                    f"Verification result for {model_name} (iteration {iteration+1}):\n{verification_result}"
                 )
 
-                # Extract YAML content from the refined response
-                match = re.search(
-                    r"```(?:yaml)?\n(.*?)```", refined_yaml_documentation, re.DOTALL
-                )
-                if match:
-                    final_yaml_content = match.group(1).strip()
-                else:
-                    # If no code block found, use the whole response but check for YAML tags
-                    final_yaml_content = refined_yaml_documentation.strip()
-                    # Remove any potential YAML code fence markers at the beginning or end
-                    if final_yaml_content.startswith("```yaml"):
-                        final_yaml_content = final_yaml_content[7:]
-                    if final_yaml_content.endswith("```"):
-                        final_yaml_content = final_yaml_content[:-3]
-                    final_yaml_content = final_yaml_content.strip()
+                # Parse the verification result to extract recommended column changes
+                column_recommendations = {
+                    "columns_to_add": [],
+                    "columns_to_remove": [],
+                    "columns_to_modify": [],
+                }
 
-                # Additional safety check for YAML content
-                if final_yaml_content.startswith("```") or final_yaml_content.endswith(
-                    "```"
-                ):
-                    # Further cleaning if needed
-                    lines = final_yaml_content.strip().splitlines()
-                    if lines and (
-                        lines[0].startswith("```") or lines[0].startswith("---")
+                # Only parse if verification found issues
+                if "VERIFIED" not in verification_result:
+                    logger.info(
+                        f"Verification found issues for {model_name} in iteration {iteration+1}, extracting column recommendations"
+                    )
+
+                    # Extract columns to add
+                    add_match = re.search(
+                        r"COLUMNS_TO_ADD:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_REMOVE|COLUMNS_TO_MODIFY)|\Z)",
+                        verification_result,
+                        re.DOTALL,
+                    )
+                    if add_match:
+                        add_section = add_match.group(1).strip()
+                        # Parse the yaml-like format for columns to add
+                        columns_to_add = []
+                        current_column = {}
+                        for line in add_section.split("\n"):
+                            line = line.strip()
+                            if line.startswith("- name:"):
+                                if current_column and "name" in current_column:
+                                    columns_to_add.append(current_column)
+                                current_column = {
+                                    "name": line.replace("- name:", "").strip()
+                                }
+                            elif line.startswith("description:") and current_column:
+                                current_column["description"] = line.replace(
+                                    "description:", ""
+                                ).strip()
+                            elif line.startswith("reason:") and current_column:
+                                current_column["reason"] = line.replace(
+                                    "reason:", ""
+                                ).strip()
+                        if current_column and "name" in current_column:
+                            columns_to_add.append(current_column)
+                        column_recommendations["columns_to_add"] = columns_to_add
+
+                    # Extract columns to remove
+                    remove_match = re.search(
+                        r"COLUMNS_TO_REMOVE:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_ADD|COLUMNS_TO_MODIFY)|\Z)",
+                        verification_result,
+                        re.DOTALL,
+                    )
+                    if remove_match:
+                        remove_section = remove_match.group(1).strip()
+                        # Parse the yaml-like format for columns to remove
+                        columns_to_remove = []
+                        current_column = {}
+                        for line in remove_section.split("\n"):
+                            line = line.strip()
+                            if line.startswith("- name:"):
+                                if current_column and "name" in current_column:
+                                    columns_to_remove.append(current_column)
+                                current_column = {
+                                    "name": line.replace("- name:", "").strip()
+                                }
+                            elif line.startswith("reason:") and current_column:
+                                current_column["reason"] = line.replace(
+                                    "reason:", ""
+                                ).strip()
+                        if current_column and "name" in current_column:
+                            columns_to_remove.append(current_column)
+                        column_recommendations["columns_to_remove"] = columns_to_remove
+
+                    # Extract columns to modify
+                    modify_match = re.search(
+                        r"COLUMNS_TO_MODIFY:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_ADD|COLUMNS_TO_REMOVE)|\Z)",
+                        verification_result,
+                        re.DOTALL,
+                    )
+                    if modify_match:
+                        modify_section = modify_match.group(1).strip()
+                        # Parse the yaml-like format for columns to modify
+                        columns_to_modify = []
+                        current_column = {}
+                        for line in modify_section.split("\n"):
+                            line = line.strip()
+                            if line.startswith("- name:"):
+                                if current_column and "name" in current_column:
+                                    columns_to_modify.append(current_column)
+                                current_column = {
+                                    "name": line.replace("- name:", "").strip()
+                                }
+                            elif (
+                                line.startswith("current_description:")
+                                and current_column
+                            ):
+                                current_column["current_description"] = line.replace(
+                                    "current_description:", ""
+                                ).strip()
+                            elif (
+                                line.startswith("suggested_description:")
+                                and current_column
+                            ):
+                                current_column["suggested_description"] = line.replace(
+                                    "suggested_description:", ""
+                                ).strip()
+                            elif line.startswith("reason:") and current_column:
+                                current_column["reason"] = line.replace(
+                                    "reason:", ""
+                                ).strip()
+                        if current_column and "name" in current_column:
+                            columns_to_modify.append(current_column)
+                        column_recommendations["columns_to_modify"] = columns_to_modify
+
+                    logger.info(
+                        f"Iteration {iteration+1}: Extracted column recommendations: {len(column_recommendations['columns_to_add'])} to add, "
+                        f"{len(column_recommendations['columns_to_remove'])} to remove, "
+                        f"{len(column_recommendations['columns_to_modify'])} to modify"
+                    )
+
+                    # If issues were found, refine the interpretation
+                    logger.info(
+                        f"Refining interpretation for {model_name} based on verification feedback (iteration {iteration+1})"
+                    )
+
+                    refinement_prompt = f"""
+                    You are refining a dbt model interpretation based on verification feedback.
+                    
+                    Original model: {model_name}
+                    
+                    Original SQL:
+                    ```sql
+                    {model.raw_sql}
+                    ```
+                    
+                    Current interpretation:
+                    ```yaml
+                    {current_yaml_content}
+                    ```
+                    
+                    Verification feedback from iteration {iteration+1}:
+                    {verification_result}
+                    
+                    Upstream model information:
+                    {detailed_upstream_info}
+                    
+                    YOUR TASK IS TO CREATE A COMPLETE YAML INTERPRETATION THAT INCLUDES ALL COLUMNS FROM THE MODEL.
+                    
+                    This is absolutely critical:
+                    1. ADD ALL MISSING COLUMNS identified in the verification feedback - you must include EVERY column
+                    2. Even if there are 50+ columns to add, you must include all of them in your response
+                    3. The most common error is not including all columns from upstream models when SELECT * is used
+                    4. Be extremely thorough - lack of completeness is a critical issue
+                    5. Remove any incorrect columns identified in COLUMNS_TO_REMOVE
+                    6. Update descriptions for columns identified in COLUMNS_TO_MODIFY
+                    
+                    DO NOT OMIT ANY COLUMNS from your response - completeness is the highest priority.
+                    
+                    Your output should be complete, valid YAML for this model. Include all columns.
+                    """
+
+                    refined_yaml_documentation = self.llm.get_completion(
+                        prompt=refinement_prompt,
+                        system_prompt="You are an AI assistant specialized in refining dbt model interpretations based on SQL analysis.",
+                        max_tokens=4000,
+                    )
+
+                    logger.debug(
+                        f"Refined interpretation for {model_name} (iteration {iteration+1}):\n{refined_yaml_documentation}"
+                    )
+
+                    # Extract YAML content from the refined response
+                    match = re.search(
+                        r"```(?:yaml)?\n(.*?)```", refined_yaml_documentation, re.DOTALL
+                    )
+                    if match:
+                        current_yaml_content = match.group(1).strip()
+                    else:
+                        # If no code block found, use the whole response but check for YAML tags
+                        current_yaml_content = refined_yaml_documentation.strip()
+                        # Remove any potential YAML code fence markers at the beginning or end
+                        if current_yaml_content.startswith("```yaml"):
+                            current_yaml_content = current_yaml_content[7:]
+                        if current_yaml_content.endswith("```"):
+                            current_yaml_content = current_yaml_content[:-3]
+                        current_yaml_content = current_yaml_content.strip()
+
+                    # Additional safety check for YAML content
+                    if current_yaml_content.startswith(
+                        "```"
+                    ) or current_yaml_content.endswith("```"):
+                        # Further cleaning if needed
+                        lines = current_yaml_content.strip().splitlines()
+                        if lines and (
+                            lines[0].startswith("```") or lines[0].startswith("---")
+                        ):
+                            lines = lines[1:]
+                        if lines and (lines[-1] == "```" or lines[-1] == "---"):
+                            lines = lines[:-1]
+                        current_yaml_content = "\n".join(lines).strip()
+
+                    final_yaml_content = current_yaml_content
+
+                    # If we found column issues but are not on last iteration, continue
+                    has_column_changes = (
+                        len(column_recommendations["columns_to_add"]) > 0
+                        or len(column_recommendations["columns_to_remove"]) > 0
+                        or len(column_recommendations["columns_to_modify"]) > 0
+                    )
+
+                    if (
+                        has_column_changes
+                        and iteration < max_verification_iterations - 1
                     ):
-                        lines = lines[1:]
-                    if lines and (lines[-1] == "```" or lines[-1] == "---"):
-                        lines = lines[:-1]
-                    final_yaml_content = "\n".join(lines).strip()
+                        logger.info(
+                            f"Moving to next verification iteration to check for additional issues"
+                        )
+                        continue
+                else:
+                    # Verification was successful - no issues found
+                    logger.info(
+                        f"Interpretation for {model_name} verified successfully in iteration {iteration+1}"
+                    )
+                    final_yaml_content = current_yaml_content
+                    break
 
-                logger.debug(
-                    f"Cleaned final YAML content for {model_name}:\n{final_yaml_content}"
-                )
-            else:
-                logger.info(f"Interpretation for {model_name} verified successfully")
-                final_yaml_content = draft_yaml_content
+            # Store the verification history and column recommendations from the final iteration
+            final_verification_result = verification_result
+            final_column_recommendations = column_recommendations
 
             # Prepare the result
             result_data = {
                 "model_name": model_name,
                 "yaml_documentation": final_yaml_content,
                 "draft_yaml": draft_yaml_content,
-                "verification_result": verification_result,
+                "verification_result": final_verification_result,
+                "column_recommendations": final_column_recommendations,
+                "verification_iterations": iteration + 1,
                 "prompt": prompt,
                 "success": True,
             }
@@ -1041,7 +1363,9 @@ class Agent:
 
         Args:
             model_name: Name of the model
-            yaml_documentation: YAML documentation as a string
+            yaml_documentation: YAML documentation as a string. This should include
+                any column additions, removals, or modifications that were recommended
+                during the verification phase.
             embed: Whether to embed the model in the vector store
 
         Returns:

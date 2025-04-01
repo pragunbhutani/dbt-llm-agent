@@ -48,8 +48,22 @@ logger = get_logger(__name__)
     is_flag=True,
     help="Recursively interpret all upstream models, even if they have existing interpretations",
 )
+@click.option(
+    "--iterations",
+    "-i",
+    type=int,
+    default=1,
+    help="Number of verification iterations to run (default: 1, max: 5)",
+)
 def interpret(
-    select, save, embed, verbose, only_when_missing, recursive, force_recursive
+    select,
+    save,
+    embed,
+    verbose,
+    only_when_missing,
+    recursive,
+    force_recursive,
+    iterations,
 ):
     """Interpret dbt models and generate documentation.
 
@@ -60,8 +74,14 @@ def interpret(
     1. Reads the model source code to identify upstream dependencies
     2. Fetches details of upstream models for context
     3. Creates a draft interpretation
-    4. Verifies the interpretation against upstream models
-    5. Refines the interpretation if necessary
+    4. Iteratively verifies the interpretation against upstream models:
+       - Directly analyzes source SQL of upstream models to identify all columns
+       - Provides structured recommendations for columns to add, remove, or modify
+       - Refines the interpretation until verification passes or iterations complete
+    5. Saves the final interpretation if requested
+
+    Use --iterations to control the number of verification iterations (default: 1).
+    Use --verbose to see detailed verification results and column recommendations for each iteration.
 
     Examples:
         dbt-llm interpret --select "customers"
@@ -70,8 +90,21 @@ def interpret(
         dbt-llm interpret --select "customers" --save --only-when-missing
         dbt-llm interpret --select "+fct_orders" --recursive --save
         dbt-llm interpret --select "+fct_orders" --force-recursive --save
+        dbt-llm interpret --select "customers" --iterations 3 --verbose
     """
     set_logging_level(verbose)
+
+    # Validate iterations parameter
+    if iterations < 1:
+        logger.error("Number of iterations must be at least 1")
+        sys.exit(1)
+    elif iterations > 5:
+        logger.warning("Number of iterations is capped at 5")
+        iterations = 5
+
+    logger.info(
+        f"Using {iterations} verification iteration(s) for model interpretation"
+    )
 
     # Add warning if recursive flags are used without save
     if (recursive or force_recursive) and not save:
@@ -171,7 +204,7 @@ def interpret(
             logger.info(f"Using agentic workflow for {model_name}")
 
             # Get interpretations from the agent
-            result = agent.interpret_model(model_name)
+            result = agent.interpret_model(model_name, iterations)
 
             if not result.get("success", False):
                 logger.error(
@@ -183,6 +216,12 @@ def interpret(
             print(
                 f"\n=== Interpretation for model: {model_name} ({i+1}/{total_models}) ===\n"
             )
+
+            # Display iteration configuration
+            if "verification_iterations" in result:
+                total_iterations = result.get("verification_iterations", 1)
+                print(f"Verification iterations: {total_iterations}/{iterations} used")
+
             # If verbose, print the prompt used
             if verbose and "prompt" in result:
                 print(f"\n--- Prompt used for {model_name} ---")
@@ -193,7 +232,70 @@ def interpret(
             if verbose and "verification_result" in result:
                 print(f"\n--- Verification for {model_name} ---")
                 print(result["verification_result"])
+
+                # We now display this information at the top level
+                if (
+                    "verification_iterations" in result
+                    and total_iterations < iterations
+                ):
+                    print(
+                        f"\nVerification completed early after {total_iterations}/{iterations} iteration(s)"
+                    )
+
                 print("--- End Verification ---\n")
+
+                # Display structured column recommendations if available
+                if verbose and "column_recommendations" in result:
+                    recommendations = result["column_recommendations"]
+                    has_recommendations = (
+                        len(recommendations.get("columns_to_add", [])) > 0
+                        or len(recommendations.get("columns_to_remove", [])) > 0
+                        or len(recommendations.get("columns_to_modify", [])) > 0
+                    )
+
+                    if has_recommendations:
+                        print(
+                            f"\n--- Column Recommendations for {model_name} (Final Iteration) ---"
+                        )
+
+                        # Columns to add
+                        columns_to_add = recommendations.get("columns_to_add", [])
+                        if columns_to_add:
+                            print("\nColumns To Add:")
+                            for column in columns_to_add:
+                                print(f"  - {column.get('name', 'Unknown')}")
+                                if "description" in column:
+                                    print(f"    Description: {column['description']}")
+                                if "reason" in column:
+                                    print(f"    Reason: {column['reason']}")
+
+                        # Columns to remove
+                        columns_to_remove = recommendations.get("columns_to_remove", [])
+                        if columns_to_remove:
+                            print("\nColumns To Remove:")
+                            for column in columns_to_remove:
+                                print(f"  - {column.get('name', 'Unknown')}")
+                                if "reason" in column:
+                                    print(f"    Reason: {column['reason']}")
+
+                        # Columns to modify
+                        columns_to_modify = recommendations.get("columns_to_modify", [])
+                        if columns_to_modify:
+                            print("\nColumns To Modify:")
+                            for column in columns_to_modify:
+                                print(f"  - {column.get('name', 'Unknown')}")
+                                if "current_description" in column:
+                                    print(
+                                        f"    Current: {column['current_description']}"
+                                    )
+                                if "suggested_description" in column:
+                                    print(
+                                        f"    Suggested: {column['suggested_description']}"
+                                    )
+                                if "reason" in column:
+                                    print(f"    Reason: {column['reason']}")
+
+                        print("--- End Column Recommendations ---\n")
 
                 if (
                     "draft_yaml" in result

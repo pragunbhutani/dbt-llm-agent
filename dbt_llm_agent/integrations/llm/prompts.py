@@ -35,8 +35,17 @@ Information about upstream models this model depends on:
 
 Based on the SQL code and upstream models, please:
 1. Interpret what this model represents in the business context
-2. Identify and describe each column in the model
+2. Identify and describe EVERY column that will be produced by this model's SQL
 3. Identify any important business logic or transformations
+
+IMPORTANT COLUMN IDENTIFICATION INSTRUCTIONS:
+- Your primary task is to comprehensively identify ALL columns that will be in the output of this model.
+- For any SELECT * in the SQL, you MUST trace through the referenced table/CTE and list EVERY column it contains.
+- When a model references upstream models, carefully examine the upstream models' SQL to identify their columns.
+- Pay special attention to nested CTEs and their transformations - trace the data flow completely.
+- Do not omit any columns! Even if there are many columns, you must identify and document all of them.
+- Be particularly thorough when the SQL contains SELECT * - you must expand this to list every individual column.
+- Remember that dbt models build upon each other, so columns may flow through multiple models.
 
 Please format your response as a valid dbt YAML documentation in this format:
 
@@ -58,9 +67,9 @@ models:
 
 Make sure to:
 - Provide clear, concise, and accurate descriptions
-- Identify **all** columns selected by the final `SELECT` statement. This includes columns explicitly named, columns created through expressions/functions, and **all columns implicitly selected using `*` from upstream models or CTEs**.
-- If the provided column lists for an upstream model seem incomplete or are missing, analyze its Raw SQL to determine the columns implicitly selected by `*`.
-- **Highest priority:** The raw SQL of upstream models is the definitive source for understanding which columns are available from them, especially when `SELECT *` is used. Rely on the SQL over potentially incomplete YML column lists or previous interpretations.
+- Include ALL columns that will be in the model's output, even if there are dozens of them
+- If the upstream model lists seem incomplete, carefully analyze the upstream models' SQL to determine their complete column output
+- Consider the raw SQL of upstream models as the definitive source for identifying columns, especially when SELECT * is used
 - Format the YAML correctly with proper indentation
 - Add business context where possible
 """
