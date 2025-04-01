@@ -72,6 +72,7 @@ SLACK_SIGNING_SECRET=your_slack_signing_secret
 4. Initialize the database:
 
    ```bash
+   poetry run dbt-llm-agent init-db
    poetry run dbt-llm-agent migrate
    ```
 
@@ -80,6 +81,12 @@ SLACK_SIGNING_SECRET=your_slack_signing_secret
 ### Command Line
 
 ```bash
+# Get version information
+poetry run dbt-llm-agent version
+
+# Initialize the database
+poetry run dbt-llm-agent init-db
+
 # Parse a dbt project (without embedding)
 poetry run dbt-llm-agent parse /path/to/your/dbt/project
 
@@ -88,6 +95,12 @@ poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing
 
 # Embed specific models in vector database
 poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
+
+# List all models in the database
+poetry run dbt-llm-agent list
+
+# Get detailed information about a specific model
+poetry run dbt-llm-agent model-details customer_orders
 
 # Interpret a single model and generate documentation using the agentic workflow
 poetry run dbt-llm-agent interpret customer_orders
@@ -112,12 +125,24 @@ poetry run dbt-llm-agent feedback 123 --useful=true --feedback="The answer was c
 
 # List past questions and answers
 poetry run dbt-llm-agent questions --limit=20 --useful=true
+```
 
+### Running the API Server
+
+To start the API server, run:
+
+```bash
 # Start the API server
-poetry run dbt-llm-agent api
+python -m dbt_llm_agent.api.server
+```
 
+### Running the Slack Bot
+
+To start the Slack bot, run:
+
+```bash
 # Start the Slack bot
-poetry run dbt-llm-agent slack
+python -m dbt_llm_agent.integrations.slack_bot
 ```
 
 ### Model Interpretation
@@ -168,15 +193,49 @@ The agent provides a REST API for programmatic usage:
 
 ```bash
 # Start the API server
-poetry run dbt-llm-agent api
+python -m dbt_llm_agent.api.server
 ```
 
 #### Endpoints:
 
-- `POST /ask` - Ask a question
-- `POST /embed` - Embed specific models
+- `GET /` - API status check
+- `POST /ask` - Ask a question about your dbt project
+- `POST /documentation` - Generate documentation for a model
+- `POST /documentation/{model_name}/save` - Save generated documentation
+- `POST /interpret` - Interpret a model using the agentic workflow
+- `POST /interpret/{model_name}/save` - Save interpreted documentation
+- `POST /parse` - Parse a dbt project
+- `GET /config` - Get current configuration
+- `GET /models` - List all models
+- `GET /models/{model_name}` - Get details about a specific model
 - `POST /questions/{question_id}/feedback` - Provide feedback on an answer
 - `GET /questions` - List past questions and answers
+- `POST /embed` - Embed specific models in the vector database
+
+### Slack Bot Usage
+
+The Slack bot provides an interactive way to query your dbt project directly in Slack:
+
+```bash
+# Start the Slack bot
+python -m dbt_llm_agent.integrations.slack_bot
+```
+
+#### Slack Features:
+
+- **Direct Messages**: Send direct messages to the bot to ask questions
+- **App Mentions**: Mention the bot in a channel to ask questions
+- **Slash Commands**: Use `/dbt-doc model_name` to generate documentation for a model
+- **Threaded Conversations**: The bot responds in threads for organized conversations
+
+To set up the Slack bot, you need to:
+
+1. Create a Slack app in your workspace
+2. Configure the app with Bot Token Scopes (`chat:write`, `app_mentions:read`, `im:history`, `im:read`, `commands`)
+3. Enable Socket Mode and Event Subscriptions
+4. Subscribe to bot events (`message.im`, `app_mention`)
+5. Add the `/dbt-doc` slash command
+6. Set the environment variables (see "Key Environment Variables" section)
 
 ### Database Schema Migrations
 
