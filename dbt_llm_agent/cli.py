@@ -25,6 +25,7 @@ from dbt_llm_agent.commands import (
     feedback,
     migrate,
     init_db,
+    reset_db,
 )
 from dbt_llm_agent.commands.version_cmd import version
 
@@ -47,6 +48,7 @@ cli.add_command(questions)
 cli.add_command(feedback)
 cli.add_command(migrate)
 cli.add_command(init_db)
+cli.add_command(reset_db)
 
 
 def main():

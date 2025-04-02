@@ -11,7 +11,7 @@ from dbt_llm_agent.commands.list_cmd import list_models as list
 from dbt_llm_agent.commands.model_details_cmd import model_details
 from dbt_llm_agent.commands.questions_cmd import questions
 from dbt_llm_agent.commands.feedback_cmd import feedback
-from dbt_llm_agent.commands.db_cmd import migrate, init_db
+from dbt_llm_agent.commands.db_cmd import migrate, init_db, reset_db
 from dbt_llm_agent.commands.version_cmd import version
 
 __all__ = [
@@ -25,5 +25,6 @@ __all__ = [
     "feedback",
     "migrate",
     "init_db",
+    "reset_db",
     "version",
 ]
