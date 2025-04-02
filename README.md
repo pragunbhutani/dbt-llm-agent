@@ -5,19 +5,21 @@
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Type checking: mypy](https://img.shields.io/badge/type%20checking-mypy-blue.svg)](https://github.com/python/mypy)
 [![Linting: ruff](https://img.shields.io/badge/linting-ruff-red.svg)](https://github.com/astral-sh/ruff)
+[![Beta Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/pragunbhutani/dbt-llm-agent)
 
 An LLM-powered agent for interacting with dbt projects.
+
+> **BETA NOTICE**: This project is currently in beta. The most valuable features at this stage are model interpretation and question answering. A Slack integration is coming soon!
 
 ## Features
 
 - **Question Answering**: Ask questions about your dbt project in natural language
 - **Documentation Generation**: Automatically generate documentation for missing models
 - **Agentic Model Interpretation**: Intelligently interpret models using a step-by-step approach that verifies interpretations against upstream models
-- **Slack Integration**: Ask questions and receive answers directly in Slack
-- **FastAPI Server**: Interact with the agent programmatically via REST API
 - **Postgres with pgvector**: Store model embeddings in Postgres using pgvector (supports Supabase)
 - **dbt Model Selection**: Use dbt's model selection syntax to specify which models to work with
 - **Question Tracking**: Track questions, answers, and feedback for continuous improvement
+- **Coming Soon: Slack Integration**: Ask questions and receive answers directly in Slack
 
 ## Architecture
 
@@ -31,28 +33,53 @@ The agent uses a combination of:
 
 ## Setup
 
-1.  **Clone the repository:**
+1.  **Check Python Version:**
+    This project requires Python 3.10 or higher. You can check your Python version with:
+
+    ```bash
+    python --version
+    # or
+    python3 --version
+    ```
+
+    If you need to upgrade or install Python 3.10+, visit [python.org/downloads](https://www.python.org/downloads/).
+
+2.  **Clone the repository:**
 
     ```bash
     git clone https://github.com/pragunbhutani/dbt-llm-agent.git
     cd dbt-llm-agent
     ```
 
-2.  **Install dependencies:**
+3.  **Install dependencies:**
     This project uses [Poetry](https://python-poetry.org/) for dependency management.
 
     ```bash
+    # Install Poetry if you don't have it
+    curl -sSL https://install.python-poetry.org | python3 -
+
+    # Install dependencies
     poetry install
     ```
 
-3.  **Set up PostgreSQL:**
+4.  **Set up PostgreSQL:**
     You need a PostgreSQL database (version 11+) with the `pgvector` extension enabled. This database will store model metadata, embeddings, and question history.
 
     - Install PostgreSQL if you haven't already.
     - Install `pgvector`. Follow the instructions at [https://github.com/pgvector/pgvector](https://github.com/pgvector/pgvector).
     - Create a database for the agent (e.g., `dbt_llm_agent`).
 
-4.  **Configure environment variables:**
+    Quick setup commands for local PostgreSQL:
+
+    ```bash
+    # Create database
+    createdb dbt_llm_agent
+
+    # Enable pgvector extension (run this in psql)
+    psql -d dbt_llm_agent -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+    ```
+
+5.  **Configure environment variables:**
     Copy the example environment file and fill in your details:
 
     ```bash
@@ -66,8 +93,9 @@ The agent uses a combination of:
     - dbt Cloud credentials (`DBT_CLOUD_...`) if using `init cloud`.
     - `DBT_PROJECT_PATH` if using `init local` or `init source` and not providing the path as an argument.
 
-5.  **Initialize the database schema:**
+6.  **Initialize the database schema:**
     Run the following command. This creates the necessary tables and enables the `pgvector` extension if needed.
+
     ```bash
     poetry run dbt-llm-agent init-db
     ```
@@ -94,6 +122,7 @@ Fetches the `manifest.json` from the latest successful run in your dbt Cloud acc
     - `DBT_CLOUD_ACCOUNT_ID`
     - `DBT_CLOUD_API_KEY` (User Token or Service Token)
 - **Example:**
+
   ```bash
   # Ensure DBT_CLOUD_URL, DBT_CLOUD_ACCOUNT_ID, DBT_CLOUD_API_KEY are in .env
   poetry run dbt-llm-agent init cloud
@@ -142,52 +171,79 @@ You only need to run `init` once initially, or again if your dbt project structu
 
 ## Usage
 
-Once initialized, you can use the agent:
+Once you've completed the setup and initialization, you've got the basics sorted! Now you can start using the agent's main features:
 
-1.  **Embed Models:** Generate vector embeddings for semantic search.
+### 1. Working with Model Documentation
 
-    ```bash
-    # Embed all models
-    poetry run dbt-llm-agent embed --select "*"
+There are two main paths depending on whether your models already have documentation:
 
-    # Embed specific models or tags
-    poetry run dbt-llm-agent embed --select "+tag:marts"
-    poetry run dbt-llm-agent embed --select "my_model"
-    ```
+#### If Your Models Already Have Documentation:
 
-2.  **Interpret Models (Generate Documentation):** Use LLM to generate descriptions for models and columns.
+Generate vector embeddings for semantic search to enable question answering:
 
-    ```bash
-    # Interpret a specific model and save the results
-    poetry run dbt-llm-agent interpret --select "fct_orders" --save
+```bash
+# Embed all models
+poetry run dbt-llm-agent embed --select "*"
 
-    # Interpret all models in the staging layer, save, and embed
-    poetry run dbt-llm-agent interpret --select "tag:staging" --save --embed
-    ```
+# Or embed specific models or tags
+poetry run dbt-llm-agent embed --select "+tag:marts"
+poetry run dbt-llm-agent embed --select "my_model"
+```
 
-    See `poetry run dbt-llm-agent interpret --help` for more options like `--recursive` and `--iterations`.
+#### If Your Models Need Documentation:
 
-3.  **Ask Questions:** Interact with the agent to ask questions about your dbt project.
+First, use the LLM to interpret and generate descriptions for models and columns:
 
-    ```bash
-    poetry run dbt-llm-agent ask "What models are tagged as finance?"
-    poetry run dbt-llm-agent ask "Show me the columns in the customers model"
-    poetry run dbt-llm-agent ask "Explain the fct_orders model"
-    ```
+```bash
+# Interpret a specific model and save the results
+poetry run dbt-llm-agent interpret --select "fct_orders" --save
 
-4.  **List Models & Details:**
+# Interpret all models in the staging layer, save, and embed
+poetry run dbt-llm-agent interpret --select "tag:staging" --save --embed
+```
 
-    ```bash
-    poetry run dbt-llm-agent list
-    poetry run dbt-llm-agent model-details my_model_name
-    ```
+The `--save` flag stores the interpretations in the database, and `--embed` automatically generates embeddings after interpretation.
 
-5.  **Manage Questions & Feedback:**
-    ```bash
-    poetry run dbt-llm-agent questions
-    poetry run dbt-llm-agent feedback --question-id 1 --score 1 # Thumbs up
-    poetry run dbt-llm-agent feedback --question-id 2 --score -1 --text "Incorrect model suggested"
-    ```
+### 2. Asking Questions
+
+Now that your models are embedded, you can ask questions about your dbt project:
+
+```bash
+poetry run dbt-llm-agent ask "What models are tagged as finance?"
+poetry run dbt-llm-agent ask "Show me the columns in the customers model"
+poetry run dbt-llm-agent ask "Explain the fct_orders model"
+poetry run dbt-llm-agent ask "How is discount_amount calculated in the orders model?"
+```
+
+### 3. Providing Feedback
+
+Help improve the agent by providing feedback on answers:
+
+```bash
+# List previous questions
+poetry run dbt-llm-agent questions
+
+# Provide positive feedback
+poetry run dbt-llm-agent feedback 1 --useful
+
+# Provide negative feedback with explanation
+poetry run dbt-llm-agent feedback 2 --not-useful --text "Use this_other_model instead"
+
+# Just provide text feedback without marking useful/not useful
+poetry run dbt-llm-agent feedback 3 --text "This answer is correct but too verbose."
+```
+
+This feedback helps the agent improve its answers over time.
+
+### 4. Additional Commands
+
+```bash
+# List all models in your project
+poetry run dbt-llm-agent list
+
+# Get detailed information about a specific model
+poetry run dbt-llm-agent model-details my_model_name
+```
 
 ## Contributing
 
@@ -195,4 +251,4 @@ Contributions are welcome! Please follow standard fork-and-pull-request workflow
 
 ## License
 
-[Specify your license, e.g., MIT License]
+[MIT License](https://opensource.org/licenses/MIT)
