@@ -426,11 +426,20 @@ class DBTModel:
         lines = []
         lines.append(f"Model Name: {self.name}")
 
-        model_desc = interpretation_text if interpretation_text else self.description
-        if model_desc:
-            lines.append(f"Description: {model_desc.strip()}")
+        # Include both YML description and LLM-interpreted description
+        if self.description:
+            lines.append(f"YML Description: {self.description.strip()}")
         else:
-            lines.append("Description: (No description provided)")
+            lines.append("YML Description: (No YML description provided)")
+
+        # Use provided interpretation_text parameter if available, otherwise use the model's interpreted_description
+        interp_desc = (
+            interpretation_text if interpretation_text else self.interpreted_description
+        )
+        if interp_desc:
+            lines.append(f"Interpreted Description: {interp_desc.strip()}")
+        else:
+            lines.append("Interpreted Description: (No interpretation available)")
 
         # Use compiled_sql if available, else raw_sql
         sql_to_use = self.compiled_sql if self.compiled_sql else self.raw_sql
@@ -499,7 +508,15 @@ class DBTModel:
 
         current_section = None
         for line in lines:
-            if line.startswith("Model:"):
+            if line.startswith("Model Name:"):
+                result["model_name"] = line.replace("Model Name:", "").strip()
+            elif line.startswith("YML Description:"):
+                result["yml_description"] = line.replace("YML Description:", "").strip()
+            elif line.startswith("Interpreted Description:"):
+                result["interpreted_description"] = line.replace(
+                    "Interpreted Description:", ""
+                ).strip()
+            elif line.startswith("Model:"):
                 result["model_name"] = line.replace("Model:", "").strip()
             elif line.startswith("Description (YML):"):
                 result["description"] = line.replace("Description (YML):", "").strip()

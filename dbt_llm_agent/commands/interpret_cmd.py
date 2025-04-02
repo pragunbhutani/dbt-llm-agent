@@ -51,9 +51,9 @@ logger = get_logger(__name__)
 @click.option(
     "--iterations",
     "-i",
-    type=int,
+    type=click.IntRange(0, 5),
     default=1,
-    help="Number of verification iterations to run (default: 1, max: 5)",
+    help="Number of verification iterations to run (default: 1, min: 0, max: 5)",
 )
 def interpret(
     select,
@@ -95,10 +95,7 @@ def interpret(
     set_logging_level(verbose)
 
     # Validate iterations parameter
-    if iterations < 1:
-        logger.error("Number of iterations must be at least 1")
-        sys.exit(1)
-    elif iterations > 5:
+    if iterations > 5:
         logger.warning("Number of iterations is capped at 5")
         iterations = 5
 

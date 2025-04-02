@@ -13,6 +13,21 @@ from dbt_llm_agent.core.models import QuestionTable, ModelEmbeddingTable
 logger = logging.getLogger(__name__)
 
 
+# Helper function to convert Pydantic column list to JSON dict expected by ModelTable
+def _convert_metadata_columns_to_json(
+    columns: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    if not columns:
+        return None
+    # The input list contains dicts like {"name": "col_a", "description": "...", ...}
+    # The output should be a dict like {"col_a": {"name": "col_a", "description": "...", ...}}
+    return {
+        col_data["name"]: col_data
+        for col_data in columns
+        if "name" in col_data  # Ensure name key exists
+    }
+
+
 class ModelStorage:
     """Storage service for dbt models using PostgreSQL."""
 
@@ -66,6 +81,11 @@ class ModelStorage:
         """
         session = self.Session()
         try:
+            # Convert columns list to dict for storage
+            columns_json_dict = _convert_metadata_columns_to_json(
+                model_metadata.columns
+            )
+
             # Check if model already exists by unique_id or name
             existing_model = None
             if model_metadata.unique_id:
@@ -99,9 +119,7 @@ class ModelStorage:
                     existing_model.database = model_metadata.database
                     existing_model.materialization = model_metadata.materialization
                     existing_model.tags = model_metadata.tags
-                    existing_model.yml_columns = (
-                        model_metadata.columns
-                    )  # Map to yml_columns
+                    existing_model.yml_columns = columns_json_dict  # Use converted dict
                     existing_model.tests = model_metadata.tests  # Map tests to tests
                     existing_model.depends_on = model_metadata.depends_on
                     existing_model.path = model_metadata.path
@@ -134,7 +152,7 @@ class ModelStorage:
                     database=model_metadata.database,
                     materialization=model_metadata.materialization,
                     tags=model_metadata.tags,
-                    yml_columns=model_metadata.columns,  # Map to yml_columns
+                    yml_columns=columns_json_dict,  # Use converted dict
                     tests=model_metadata.tests,  # Map tests to tests
                     depends_on=model_metadata.depends_on,
                     path=model_metadata.path,
