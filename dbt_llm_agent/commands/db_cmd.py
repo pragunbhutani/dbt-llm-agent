@@ -4,12 +4,22 @@ Database management commands for dbt-llm-agent CLI.
 
 import click
 import sys
+import os
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.exc import OperationalError, ProgrammingError
+from alembic.config import Config
+from alembic import command
+from rich.console import Console
+from rich.prompt import Confirm
 
 from dbt_llm_agent.utils.logging import get_logger
 from dbt_llm_agent.utils.cli_utils import get_config_value, set_logging_level
+from dbt_llm_agent.core.models import Base
 
-# Initialize logger
+# Initialize logger and console
 logger = get_logger(__name__)
+console = Console()
 
 
 @click.command()
@@ -60,41 +70,58 @@ def migrate(revision, verbose):
 @click.command()
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 def init_db(verbose):
-    """Initialize the database schema.
-
-    This command creates all tables and initializes the database with the latest schema.
-    """
+    """Initialize the database schema and Alembic tracking."""
     set_logging_level(verbose)
-
-    # Import necessary modules
-    import sqlalchemy as sa
-    from dbt_llm_agent.core.models import Base
-    from dbt_llm_agent.storage.model_storage import ModelStorage
-
-    # Load configuration from environment
+    logger.info("Initializing database schema...")
     postgres_uri = get_config_value("postgres_uri")
-
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
-        logger.info("Initializing database schema...")
+        engine = create_engine(postgres_uri)
+        with engine.connect() as connection:
+            # Ensure pgvector extension is enabled
+            try:
+                logger.info("Ensuring pgvector extension is enabled...")
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+                connection.commit()
+                logger.info("pgvector extension is enabled.")
+            except ProgrammingError as e:
+                logger.error(f"Error enabling pgvector extension: {e}")
+                console.print(
+                    "[red]Failed to enable pgvector extension. Check database user permissions.[/red]"
+                )
+                connection.rollback()
+                sys.exit(1)
+            except Exception as e:
+                logger.error(f"Unexpected error enabling pgvector extension: {e}")
+                console.print(
+                    "[red]An unexpected error occurred while enabling pgvector.[/red]"
+                )
+                connection.rollback()
+                sys.exit(1)
 
-        # Create the storage instance
-        model_storage = ModelStorage(postgres_uri)
+            # Create all tables defined in models.py
+            logger.info("Creating database tables...")
+            Base.metadata.create_all(engine)
+            logger.info("Database tables created successfully.")
 
-        # Apply migrations explicitly
-        success = model_storage.apply_migrations()
+            # Stamp the database with the latest Alembic revision
+            logger.info("Stamping database with latest Alembic revision...")
+            alembic_cfg = Config("alembic.ini")
+            command.stamp(alembic_cfg, "head")
+            logger.info("Database stamped successfully.")
 
-        if success:
-            logger.info("Database initialization completed successfully")
-        else:
-            logger.error("Database initialization failed during migration step")
-            sys.exit(1)
+        console.print("[green]Database initialized successfully.[/green]")
 
+    except OperationalError as e:
+        logger.error(f"Could not connect to the database: {e}")
+        console.print("[red]Error: Could not connect to the database.[/red]")
+        console.print(f"Check your POSTGRES_URI in the .env file: {postgres_uri}")
+        sys.exit(1)
     except Exception as e:
-        logger.error(f"Error initializing database: {str(e)}")
+        logger.error(f"Error initializing database: {e}")
         if verbose:
             import traceback
 

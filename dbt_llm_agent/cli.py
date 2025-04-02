@@ -28,6 +28,7 @@ from dbt_llm_agent.commands import (
     reset_db,
 )
 from dbt_llm_agent.commands.version_cmd import version
+from dbt_llm_agent.commands.init_cmd import init
 
 
 @click.group()
@@ -49,6 +50,7 @@ cli.add_command(feedback)
 cli.add_command(migrate)
 cli.add_command(init_db)
 cli.add_command(reset_db)
+cli.add_command(init)
 
 
 def main():

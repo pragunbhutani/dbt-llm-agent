@@ -13,8 +13,8 @@ from dbt_llm_agent.core.models import DBTModel, Column, Test, ModelMetadata, DBT
 logger = logging.getLogger(__name__)
 
 
-class DBTProjectParser:
-    """Parser for dbt projects."""
+class SourceCodeParser:
+    """Parser for dbt projects based on source code analysis."""
 
     def __init__(self, project_path: str):
         """Initialize the parser with a path to a dbt project.

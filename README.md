@@ -29,273 +29,170 @@ The agent uses a combination of:
 - **LLM Integration**: Use large language models (like GPT-4) to generate responses and documentation
 - **Question Tracking**: Store a history of questions, answers, and user feedback
 
-## Installation
+## Setup
 
-### Prerequisites
+1.  **Clone the repository:**
 
-- **Python 3.10+**
-- **Poetry** for dependency management (install from [Poetry's documentation](https://python-poetry.org/docs/#installation))
-- **PostgreSQL 13+** with the [pgvector](https://github.com/pgvector/pgvector) extension
-- **OpenAI API key** (or compatible API)
-- **dbt project**
+    ```bash
+    git clone https://github.com/pragunbhutani/dbt-llm-agent.git
+    cd dbt-llm-agent
+    ```
 
-### Key Environment Variables
+2.  **Install dependencies:**
+    This project uses [Poetry](https://python-poetry.org/) for dependency management.
+
+    ```bash
+    poetry install
+    ```
+
+3.  **Set up PostgreSQL:**
+    You need a PostgreSQL database (version 11+) with the `pgvector` extension enabled. This database will store model metadata, embeddings, and question history.
+
+    - Install PostgreSQL if you haven't already.
+    - Install `pgvector`. Follow the instructions at [https://github.com/pgvector/pgvector](https://github.com/pgvector/pgvector).
+    - Create a database for the agent (e.g., `dbt_llm_agent`).
+
+4.  **Configure environment variables:**
+    Copy the example environment file and fill in your details:
+
+    ```bash
+    cp .env.example .env
+    ```
+
+    Edit the `.env` file with your:
+
+    - `OPENAI_API_KEY`
+    - `POSTGRES_URI` (database connection string)
+    - dbt Cloud credentials (`DBT_CLOUD_...`) if using `init cloud`.
+    - `DBT_PROJECT_PATH` if using `init local` or `init source` and not providing the path as an argument.
+
+5.  **Initialize the database schema:**
+    Run the following command. This creates the necessary tables and enables the `pgvector` extension if needed.
+    ```bash
+    poetry run dbt-llm-agent init-db
+    ```
+
+## Initializing Your dbt Project
+
+To use the agent, you first need to load your dbt project's metadata into the database. Use the `init` command:
 
 ```bash
-# Required
-OPENAI_API_KEY=your_openai_api_key
-POSTGRES_URI=postgresql://user:password@localhost:5432/dbt_llm_agent
-DBT_PROJECT_PATH=/path/to/your/dbt/project
-
-# Optional - for Slack integration
-SLACK_BOT_TOKEN=your_slack_bot_token
-SLACK_SIGNING_SECRET=your_slack_signing_secret
+poetry run dbt-llm-agent init <mode> [options]
 ```
 
-### Setup
+There are three modes available:
 
-1. Clone the repository:
+### 1. Cloud Mode (Recommended)
 
-   ```bash
-   git clone https://github.com/yourusername/dbt-llm-agent.git
-   cd dbt-llm-agent
-   ```
+Fetches the `manifest.json` from the latest successful run in your dbt Cloud account. This provides the richest metadata, including compiled SQL.
 
-2. Install dependencies with Poetry:
+- **Command:** `poetry run dbt-llm-agent init cloud`
+- **Prerequisites:**
+  - dbt Cloud account with successful job runs that generate artifacts.
+  - Environment variables set in `.env`:
+    - `DBT_CLOUD_URL`
+    - `DBT_CLOUD_ACCOUNT_ID`
+    - `DBT_CLOUD_API_KEY` (User Token or Service Token)
+- **Example:**
+  ```bash
+  # Ensure DBT_CLOUD_URL, DBT_CLOUD_ACCOUNT_ID, DBT_CLOUD_API_KEY are in .env
+  poetry run dbt-llm-agent init cloud
+  ```
 
-   ```bash
-   poetry install
-   ```
+### 2. Local Mode
 
-3. Create a `.env` file with your configuration (see environment variables above)
+Runs `dbt compile` on your local dbt project and parses the generated `manifest.json` from the `target/` directory. Also provides rich metadata including compiled SQL.
 
-4. Initialize the database:
+- **Command:** `poetry run dbt-llm-agent init local --project-path /path/to/your/dbt/project`
+- **Prerequisites:**
+  - dbt project configured locally (`dbt_project.yml`, `profiles.yml` etc.).
+  - Ability to run `dbt compile` successfully in the project directory.
+  - The dbt project path can be provided via the `--project-path` argument or the `DBT_PROJECT_PATH` environment variable.
+- **Example:**
 
-   ```bash
-   poetry run dbt-llm-agent init-db
-   poetry run dbt-llm-agent migrate
-   ```
+  ```bash
+  # Using argument
+  poetry run dbt-llm-agent init local --project-path /Users/me/code/my_dbt_project
+
+  # Using environment variable (set DBT_PROJECT_PATH in .env)
+  poetry run dbt-llm-agent init local
+  ```
+
+### 3. Source Code Mode (Fallback)
+
+Parses your dbt project directly from the source `.sql` and `.yml` files. This mode does _not_ capture compiled SQL or reliably determine data types.
+
+- **Command:** `poetry run dbt-llm-agent init source /path/to/your/dbt/project`
+- **Prerequisites:**
+  - Access to the dbt project source code.
+  - The dbt project path can be provided via the argument or the `DBT_PROJECT_PATH` environment variable.
+- **Example:**
+
+  ```bash
+  # Using argument
+  poetry run dbt-llm-agent init source /Users/me/code/my_dbt_project
+
+  # Using environment variable
+  poetry run dbt-llm-agent init source
+  ```
+
+**Note:** The `init` command replaces the older `parse` command for loading project metadata.
+
+You only need to run `init` once initially, or again if your dbt project structure changes significantly. Use the `--force` flag with `init` to overwrite existing models in the database.
 
 ## Usage
 
-### Command Line
+Once initialized, you can use the agent:
 
-```bash
-# Get version information
-poetry run dbt-llm-agent version
+1.  **Embed Models:** Generate vector embeddings for semantic search.
 
-# Initialize the database
-poetry run dbt-llm-agent init-db
+    ```bash
+    # Embed all models
+    poetry run dbt-llm-agent embed --select "*"
 
-# Parse a dbt project (without embedding)
-poetry run dbt-llm-agent parse /path/to/your/dbt/project
+    # Embed specific models or tags
+    poetry run dbt-llm-agent embed --select "+tag:marts"
+    poetry run dbt-llm-agent embed --select "my_model"
+    ```
 
-# Parse specific models using dbt selection syntax
-poetry run dbt-llm-agent parse /path/to/your/dbt/project --select "tag:marketing,+downstream_model"
+2.  **Interpret Models (Generate Documentation):** Use LLM to generate descriptions for models and columns.
 
-# Embed specific models in vector database
-poetry run dbt-llm-agent embed --select "tag:marketing,+downstream_model"
+    ```bash
+    # Interpret a specific model and save the results
+    poetry run dbt-llm-agent interpret --select "fct_orders" --save
 
-# List all models in the database
-poetry run dbt-llm-agent list
+    # Interpret all models in the staging layer, save, and embed
+    poetry run dbt-llm-agent interpret --select "tag:staging" --save --embed
+    ```
 
-# Get detailed information about a specific model
-poetry run dbt-llm-agent model-details customer_orders
+    See `poetry run dbt-llm-agent interpret --help` for more options like `--recursive` and `--iterations`.
 
-# Interpret a single model and generate documentation using the agentic workflow
-poetry run dbt-llm-agent interpret customer_orders
+3.  **Ask Questions:** Interact with the agent to ask questions about your dbt project.
 
-# Interpret multiple models using dbt selector syntax
-poetry run dbt-llm-agent interpret --select "tag:marketing"
+    ```bash
+    poetry run dbt-llm-agent ask "What models are tagged as finance?"
+    poetry run dbt-llm-agent ask "Show me the columns in the customers model"
+    poetry run dbt-llm-agent ask "Explain the fct_orders model"
+    ```
 
-# Interpret and embed in one step
-poetry run dbt-llm-agent interpret customer_orders --embed
+4.  **List Models & Details:**
 
-# Run database migrations
-poetry run dbt-llm-agent migrate --verbose
+    ```bash
+    poetry run dbt-llm-agent list
+    poetry run dbt-llm-agent model-details my_model_name
+    ```
 
-# Drop old columns after migration (use with caution)
-poetry run dbt-llm-agent migrate --drop-old-columns
+5.  **Manage Questions & Feedback:**
+    ```bash
+    poetry run dbt-llm-agent questions
+    poetry run dbt-llm-agent feedback --question-id 1 --score 1 # Thumbs up
+    poetry run dbt-llm-agent feedback --question-id 2 --score -1 --text "Incorrect model suggested"
+    ```
 
-# Ask a question
-poetry run dbt-llm-agent ask "What does the model customer_orders do?"
+## Contributing
 
-# Provide feedback on an answer
-poetry run dbt-llm-agent feedback 123 --useful=true --feedback="The answer was clear and helpful"
-
-# List past questions and answers
-poetry run dbt-llm-agent questions --limit=20 --useful=true
-```
-
-### Running the API Server
-
-To start the API server, run:
-
-```bash
-# Start the API server
-python -m dbt_llm_agent.api.server
-```
-
-### Running the Slack Bot
-
-To start the Slack bot, run:
-
-```bash
-# Start the Slack bot
-python -m dbt_llm_agent.integrations.slack_bot
-```
-
-### Model Interpretation
-
-The agent uses an agentic workflow to interpret dbt models:
-
-#### Agentic Workflow
-
-The agentic workflow is a multi-step process that:
-
-1. Reads the source code of the model to interpret
-2. Identifies upstream models that provide context
-3. Fetches details of the upstream models
-4. Creates a draft interpretation
-5. Verifies the draft against upstream models to ensure completeness and correctness
-6. Refines the interpretation if needed based on verification feedback
-
-This approach results in more accurate and comprehensive interpretations, particularly for complex models with many dependencies.
-
-```bash
-# Use the agentic workflow
-poetry run dbt-llm-agent interpret customer_orders
-
-# With verbose output to see verification details
-poetry run dbt-llm-agent interpret customer_orders --verbose
-```
-
-All interpretation commands support the same options for saving, embedding, and selecting models using dbt selection syntax.
-
-### Model Selection Syntax
-
-The agent supports dbt's model selection syntax:
-
-- `*` - Select all models
-- `model_name` - Select a specific model
-- `+model_name` - Select a model and all its children (downstream dependencies)
-- `@model_name` - Select a model and all its parents (upstream dependencies)
-- `tag:marketing` - Select all models with the tag "marketing"
-- `config.materialized:table` - Select all models materialized as tables
-- `path/to/models` - Select models in a specific path
-- `!model_name` - Exclude a specific model
-
-You can combine selectors with commas, e.g. `tag:marketing,+downstream_model`.
-
-### API Usage
-
-The agent provides a REST API for programmatic usage:
-
-```bash
-# Start the API server
-python -m dbt_llm_agent.api.server
-```
-
-#### Endpoints:
-
-- `GET /` - API status check
-- `POST /ask` - Ask a question about your dbt project
-- `POST /documentation` - Generate documentation for a model
-- `POST /documentation/{model_name}/save` - Save generated documentation
-- `POST /interpret` - Interpret a model using the agentic workflow
-- `POST /interpret/{model_name}/save` - Save interpreted documentation
-- `POST /parse` - Parse a dbt project
-- `GET /config` - Get current configuration
-- `GET /models` - List all models
-- `GET /models/{model_name}` - Get details about a specific model
-- `POST /questions/{question_id}/feedback` - Provide feedback on an answer
-- `GET /questions` - List past questions and answers
-- `POST /embed` - Embed specific models in the vector database
-
-### Slack Bot Usage
-
-The Slack bot provides an interactive way to query your dbt project directly in Slack:
-
-```bash
-# Start the Slack bot
-python -m dbt_llm_agent.integrations.slack_bot
-```
-
-#### Slack Features:
-
-- **Direct Messages**: Send direct messages to the bot to ask questions
-- **App Mentions**: Mention the bot in a channel to ask questions
-- **Slash Commands**: Use `/dbt-doc model_name` to generate documentation for a model
-- **Threaded Conversations**: The bot responds in threads for organized conversations
-
-To set up the Slack bot, you need to:
-
-1. Create a Slack app in your workspace
-2. Configure the app with Bot Token Scopes (`chat:write`, `app_mentions:read`, `im:history`, `im:read`, `commands`)
-3. Enable Socket Mode and Event Subscriptions
-4. Subscribe to bot events (`message.im`, `app_mention`)
-5. Add the `/dbt-doc` slash command
-6. Set the environment variables (see "Key Environment Variables" section)
-
-### Database Schema Migrations
-
-The database schema may evolve with new releases. To update your existing database:
-
-```bash
-# Run migrations to add new columns
-poetry run dbt-llm-agent migrate
-
-# Use verbose mode to see detailed migration logs
-poetry run dbt-llm-agent migrate --verbose
-
-# Optionally drop old columns after migration (use with caution)
-poetry run dbt-llm-agent migrate --drop-old-columns
-```
-
-Migrations will automatically run when the application starts, but you can also run them manually if needed.
-
-## Development
-
-### Project Structure
-
-```
-dbt_llm_agent/
-├── api/                   # API server implementation
-├── commands/              # CLI command implementations
-├── core/                  # Core functionality
-├── integrations/          # External integrations (Slack, etc.)
-├── storage/              # Storage implementations
-├── utils/                # Utility functions
-├── cli.py                # Command line interface
-└── __init__.py           # Package initialization
-```
-
-### Testing
-
-```bash
-# Run tests
-poetry run pytest
-
-# Run tests with coverage
-poetry run pytest --cov=dbt_llm_agent
-```
-
-### Code Quality
-
-The project uses several tools for code quality:
-
-```bash
-# Format code
-poetry run black .
-poetry run isort .
-
-# Type checking
-poetry run mypy .
-
-# Linting
-poetry run ruff check .
-```
+Contributions are welcome! Please follow standard fork-and-pull-request workflow.
 
 ## License
 
-MIT
+[Specify your license, e.g., MIT License]
