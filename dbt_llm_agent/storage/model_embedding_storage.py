@@ -15,6 +15,7 @@ from dbt_llm_agent.core.models import (
     ModelEmbedding,
     ModelEmbeddingTable,
     DBTModel,
+    ModelTable,
 )
 from dbt_llm_agent.integrations.llm.client import LLMClient
 
@@ -90,22 +91,115 @@ class ModelEmbeddingStorage:
         """
         return self.llm_client.get_embedding(text, model=self.embedding_model)
 
-    def store_model(
-        self, model_name: str, model_text: str, metadata: Dict[str, Any] = None
+    def store_model_embedding(
+        self,
+        model_name: str,
+        model_text: Optional[str] = None,
+        documentation_text: Optional[str] = None,
+        interpretation_text: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        force: bool = False,
     ) -> None:
-        """Store a model in the vector store.
+        """Store a comprehensive model embedding in the vector store.
+
+        This method creates a single embedding document that includes all available
+        information about the model (YML description, LLM interpretation, documentation).
 
         Args:
             model_name: The name of the model
-            model_text: The model text to embed
+            model_text: Optional pre-formatted model text to embed
+            documentation_text: Optional documentation text
+            interpretation_text: Optional interpretation text
             metadata: Optional metadata to store with the model
-
-        Raises:
-            ValueError: If an embedding cannot be generated for the model text
+            force: Whether to force update if model already exists
         """
         session = self.Session()
         try:
-            # Get embedding for the model
+            # Check if model already exists in vector store
+            existing = (
+                session.query(ModelEmbeddingTable)
+                .filter(ModelEmbeddingTable.model_name == model_name)
+                .first()
+            )
+
+            if (
+                not force
+                and existing
+                and not (model_text or documentation_text or interpretation_text)
+            ):
+                # If no new data provided and not forcing update, just return
+                logger.info(f"No changes to model {model_name}, skipping update")
+                return
+
+            # Get existing metadata if available
+            existing_metadata = {}
+            if existing:
+                domain_model = existing.to_domain()
+                existing_metadata = domain_model.model_metadata or {}
+
+            # Try to fetch the model from DBT model storage to get all descriptions
+            model_record = (
+                session.query(ModelTable).filter(ModelTable.name == model_name).first()
+            )
+            yml_description = model_record.yml_description if model_record else None
+            stored_interpreted_description = (
+                model_record.interpreted_description if model_record else None
+            )
+
+            # Use provided interpretation text or fall back to stored
+            effective_interpretation = (
+                interpretation_text or stored_interpreted_description
+            )
+
+            # Create a combined metadata object
+            combined_metadata = existing_metadata.copy()
+            if metadata:
+                combined_metadata.update(metadata)
+
+            # Ensure dbt_model section exists
+            if "dbt_model" not in combined_metadata:
+                combined_metadata["dbt_model"] = {}
+
+            # Update metadata with descriptions
+            if yml_description:
+                combined_metadata["dbt_model"]["yml_description"] = yml_description
+            if effective_interpretation:
+                combined_metadata["dbt_model"][
+                    "interpreted_description"
+                ] = effective_interpretation
+            if documentation_text:
+                if "documentation" not in combined_metadata:
+                    combined_metadata["documentation"] = {}
+                combined_metadata["documentation"]["text"] = documentation_text
+            if interpretation_text:
+                if "interpretation" not in combined_metadata:
+                    combined_metadata["interpretation"] = {}
+                combined_metadata["interpretation"]["text"] = interpretation_text
+
+            # Create embedding document
+            if model_text and not (
+                "YML Description:" in model_text
+                and "Interpreted Description:" in model_text
+            ):
+                # If model_text is provided but doesn't have descriptions, we should regenerate
+                logger.info(
+                    f"Regenerating model text for {model_name} to include descriptions"
+                )
+                model_text = None
+
+            if not model_text:
+                # Generate model text from a dummy model
+                dummy_model = DBTModel(
+                    name=model_name,
+                    description=yml_description,
+                    interpreted_description=effective_interpretation,
+                )
+                model_text = dummy_model.get_text_representation(
+                    include_documentation=True,
+                    additional_documentation=documentation_text,
+                )
+
+            # Generate embedding
             try:
                 embedding = self._get_embedding(model_text)
             except ValueError as e:
@@ -116,37 +210,32 @@ class ModelEmbeddingStorage:
                     f"Cannot store model {model_name} - embedding generation failed"
                 ) from e
 
-            # Check if model already exists
-            existing_model = (
-                session.query(ModelEmbeddingTable)
-                .filter(ModelEmbeddingTable.model_name == model_name)
-                .first()
-            )
-
-            # Create domain model
-            domain_embedding = ModelEmbedding(
-                model_name=model_name,
-                document=model_text,
-                embedding=embedding,
-                model_metadata=metadata or {},
-            )
-
-            if existing_model:
+            # Create or update the model in the vector store
+            if existing:
                 # Update existing model
-                existing_model.document = model_text
-                existing_model.embedding = embedding
-                existing_model.model_metadata = metadata or {}
+                existing.document = model_text
+                existing.embedding = embedding
+                existing.model_metadata = combined_metadata
             else:
-                # Convert to ORM model and add
+                # Create new domain model
+                domain_embedding = ModelEmbedding(
+                    model_name=model_name,
+                    document=model_text,
+                    embedding=embedding,
+                    model_metadata=combined_metadata,
+                )
+
+                # Convert to ORM and add to session
                 orm_model = domain_embedding.to_orm()
                 session.add(orm_model)
 
-            # Commit
+            # Commit changes
             session.commit()
-            logger.info(f"Stored model {model_name} in vector store")
+            logger.info(f"Stored comprehensive embedding for model {model_name}")
+
         except Exception as e:
             session.rollback()
-            logger.error(f"Error storing model {model_name}: {e}")
+            logger.error(f"Error storing embedding for model {model_name}: {e}")
             raise
         finally:
             session.close()
@@ -320,166 +409,6 @@ class ModelEmbeddingStorage:
         """
         for model_name, model_text in models_dict.items():
             metadata = metadata_dict.get(model_name) if metadata_dict else None
-            self.store_model(model_name, model_text, metadata)
-
-    def store_model_documentation(
-        self, model_name: str, documentation_text: str, force: bool = False
-    ) -> None:
-        """Store a model's documentation in the vector store.
-
-        This creates a structured document with all available information about the model.
-
-        Args:
-            model_name: The name of the model
-            documentation_text: The documentation text
-            force: Whether to force update if model already exists
-        """
-        session = self.Session()
-        try:
-            # Check if model already exists
-            existing = (
-                session.query(ModelEmbeddingTable)
-                .filter(ModelEmbeddingTable.model_name == model_name)
-                .first()
+            self.store_model_embedding(
+                model_name=model_name, model_text=model_text, metadata=metadata
             )
-
-            if existing and not force:
-                # Get existing metadata
-                domain_model = existing.to_domain()
-                metadata = domain_model.model_metadata or {}
-
-                # Create a dummy model to generate the document
-                if "dbt_model" in metadata:
-                    # Extract the model from metadata and update with new documentation
-                    dummy_model = DBTModel(name=model_name)
-                    document = dummy_model.to_embedding_text(
-                        documentation_text=documentation_text
-                    )
-                else:
-                    # No model available, just create basic document
-                    dummy_model = DBTModel(name=model_name)
-                    document = dummy_model.to_embedding_text(
-                        documentation_text=documentation_text
-                    )
-
-                # Update embedding
-                existing.document = document
-                existing.embedding = self._get_embedding(document)
-
-                # Update documentation in metadata
-                if "documentation" not in metadata:
-                    metadata["documentation"] = {}
-                metadata["documentation"]["text"] = documentation_text
-                existing.model_metadata = metadata
-
-                session.commit()
-                logger.info(f"Updated documentation for model {model_name}")
-            else:
-                # Create a basic document
-                dummy_model = DBTModel(name=model_name)
-                document = dummy_model.to_embedding_text(
-                    documentation_text=documentation_text
-                )
-
-                # Create metadata with documentation
-                metadata = {"documentation": {"text": documentation_text}}
-
-                # Create new domain model
-                domain_embedding = ModelEmbedding(
-                    model_name=model_name,
-                    document=document,
-                    embedding=self._get_embedding(document),
-                    model_metadata=metadata,
-                )
-
-                # Convert to ORM model and add to session
-                new_model = domain_embedding.to_orm()
-                session.add(new_model)
-                session.commit()
-                logger.info(f"Stored documentation for model {model_name}")
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error storing documentation for model {model_name}: {e}")
-        finally:
-            session.close()
-
-    def store_model_interpretation(
-        self, model_name: str, interpretation_text: str, force: bool = False
-    ) -> None:
-        """Store a model's LLM interpretation in the vector store.
-
-        This creates a structured document with all available information about the model.
-
-        Args:
-            model_name: The name of the model
-            interpretation_text: The interpretation text
-            force: Whether to force update if model already exists
-        """
-        session = self.Session()
-        try:
-            # Check if model already exists
-            existing = (
-                session.query(ModelEmbeddingTable)
-                .filter(ModelEmbeddingTable.model_name == model_name)
-                .first()
-            )
-
-            if existing:
-                # Get domain model and metadata
-                domain_model = existing.to_domain()
-                metadata = domain_model.model_metadata or {}
-
-                # Create a new document with existing data and new interpretation
-                if "dbt_model" in metadata:
-                    # Create a new document with the updated interpretation
-                    dummy_model = DBTModel(name=model_name)
-                    document = dummy_model.to_embedding_text(
-                        interpretation_text=interpretation_text
-                    )
-                else:
-                    # No model available, just create basic document
-                    dummy_model = DBTModel(name=model_name)
-                    document = dummy_model.to_embedding_text(
-                        interpretation_text=interpretation_text
-                    )
-
-                # Update embedding
-                existing.document = document
-                existing.embedding = self._get_embedding(document)
-
-                # Update interpretation in metadata
-                if "interpretation" not in metadata:
-                    metadata["interpretation"] = {}
-                metadata["interpretation"]["text"] = interpretation_text
-                existing.model_metadata = metadata
-
-                session.commit()
-                logger.info(f"Updated interpretation for model {model_name}")
-            else:
-                # Create a basic document
-                dummy_model = DBTModel(name=model_name)
-                document = dummy_model.to_embedding_text(
-                    interpretation_text=interpretation_text
-                )
-
-                # Create metadata with interpretation
-                metadata = {"interpretation": {"text": interpretation_text}}
-
-                # Create domain model
-                domain_embedding = ModelEmbedding(
-                    model_name=model_name,
-                    document=document,
-                    embedding=self._get_embedding(document),
-                    model_metadata=metadata,
-                )
-
-                # Convert to ORM and store
-                new_model = domain_embedding.to_orm()
-                session.add(new_model)
-                session.commit()
-                logger.info(f"Stored interpretation for model {model_name}")
-        except Exception as e:
-            session.rollback()
-            logger.error(f"Error storing interpretation for model {model_name}: {e}")
-        finally:
-            session.close()

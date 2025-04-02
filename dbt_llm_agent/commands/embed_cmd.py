@@ -93,7 +93,7 @@ def embed(select, force, verbose):
             model_name = model.name
             logger.info(f"Embedding model: {model_name} ({i+1}/{total_models})")
 
-            model_text = model.get_readable_representation()
+            model_text = model.get_text_representation()
 
             # Create metadata
             metadata = {
@@ -105,7 +105,7 @@ def embed(select, force, verbose):
 
             # Store model with progress info
             try:
-                vector_store.store_model(
+                vector_store.store_model_embedding(
                     model_name=model_name, model_text=model_text, metadata=metadata
                 )
             except Exception as e:

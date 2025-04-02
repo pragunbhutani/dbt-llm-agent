@@ -26,7 +26,7 @@ from dbt_llm_agent.integrations.llm.prompts import (
 )
 from dbt_llm_agent.storage.model_storage import ModelStorage
 from dbt_llm_agent.storage.model_embedding_storage import ModelEmbeddingStorage
-from dbt_llm_agent.core.models import DBTModel
+from dbt_llm_agent.core.models import DBTModel, ModelTable
 
 logger = logging.getLogger(__name__)
 
@@ -139,7 +139,7 @@ class Agent:
                         self.console.print(
                             f"[dim]  Fetching details for {model_name}...[/dim]"
                         )
-                    model_info_str += model.get_readable_representation() + "\n\n"
+                    model_info_str += model.get_text_representation() + "\n\n"
                     model_dict = model.to_dict()
                     model_dict["search_score"] = similarity
                     models_data.append(model_dict)
@@ -307,7 +307,7 @@ class Agent:
                             model_repr = (
                                 self.model_storage.get_model(
                                     model_name
-                                ).get_readable_representation()
+                                ).get_text_representation()
                                 if self.model_storage.get_model(model_name)
                                 else f"Details for {model_name} not fully available."
                             )
@@ -581,7 +581,7 @@ class Agent:
                 model_name = result["model_name"]
                 model = self.model_storage.get_model(model_name)
                 if model:
-                    model_info += model.get_readable_representation() + "\n\n"
+                    model_info += model.get_text_representation() + "\n\n"
                     model_dict = model.to_dict()
                     model_dict["search_score"] = result.get("similarity_score", 0)
                     models_data.append(model_dict)
@@ -929,17 +929,19 @@ class Agent:
                 f"Verifying draft interpretation for {model_name} against upstream models"
             )
 
-            # Prepare a representation of columns for verification
-            column_representation = "No columns found in draft"
-            if draft_column_names:
-                column_representation = ", ".join(draft_column_names)
-            elif draft_yaml_content:
-                # If we couldn't parse columns but have YAML content, include raw content
-                column_representation = f"YAML parsing failed, raw content available but columns couldn't be extracted."
+            # Initialize results before the loop in case iterations = 0
+            final_yaml_content = draft_yaml_content
+            verification_result = "Verification skipped (iterations=0)"
+            column_recommendations = {
+                "columns_to_add": [],
+                "columns_to_remove": [],
+                "columns_to_modify": [],
+            }
+            iteration = -1  # To handle iteration + 1 in return value correctly
 
             # Enhanced verification with multiple iterations
             current_yaml_content = draft_yaml_content
-            final_yaml_content = draft_yaml_content
+            # final_yaml_content = draft_yaml_content # Already initialized above
 
             for iteration in range(max_verification_iterations):
                 logger.info(
@@ -1337,7 +1339,8 @@ class Agent:
                 "draft_yaml": draft_yaml_content,
                 "verification_result": final_verification_result,
                 "column_recommendations": final_column_recommendations,
-                "verification_iterations": iteration + 1,
+                "verification_iterations": iteration
+                + 1,  # Will be 0 if loop didn't run
                 "prompt": prompt,
                 "success": True,
             }
@@ -1371,103 +1374,109 @@ class Agent:
         Returns:
             Dict containing the result of the operation
         """
+        logger.info(f"Saving interpreted documentation for model {model_name}")
+        session = self.model_storage.Session()  # Get a session from storage
         try:
-            logger.info(f"Saving interpreted documentation for model {model_name}")
-
-            # Clean the YAML string from markdown code fences
-            lines = yaml_documentation.strip().splitlines()
-            if lines and lines[0].strip().startswith("```yaml"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            cleaned_yaml_documentation = "\n".join(lines)
-
+            # Parse the YAML
             try:
-                # Use the cleaned string for parsing
-                parsed_yaml = yaml.safe_load(cleaned_yaml_documentation)
-            except Exception as e:
-                logger.error(f"Error parsing YAML: {e}")
+                parsed_yaml = yaml.safe_load(yaml_documentation)
+                if (
+                    not isinstance(parsed_yaml, dict)
+                    or "models" not in parsed_yaml
+                    or not isinstance(parsed_yaml["models"], list)
+                    or not parsed_yaml["models"]
+                ):
+                    raise ValueError("Invalid YAML structure")
+                model_data = parsed_yaml["models"][0]  # Assuming one model per YAML
+                if model_data.get("name") != model_name:
+                    logger.warning(
+                        f"Model name mismatch in YAML ({model_data.get('name')}) and function call ({model_name}). Using {model_name}."
+                    )
+
+            except (yaml.YAMLError, ValueError) as e:
+                logger.error(f"Error parsing YAML for {model_name}: {e}")
                 return {
-                    "model_name": model_name,
-                    "error": f"Invalid YAML format: {str(e)}",
                     "success": False,
+                    "error": f"Invalid YAML format: {e}",
+                    "model_name": model_name,
                 }
 
-            model_description = ""
-            column_descriptions = {}
-
-            if (
-                parsed_yaml
-                and "models" in parsed_yaml
-                and isinstance(parsed_yaml["models"], list)
-                and len(parsed_yaml["models"]) > 0
-            ):
-                model_data = parsed_yaml["models"][0]
-                if "description" in model_data:
-                    model_description = model_data["description"]
-
-                if "columns" in model_data and isinstance(model_data["columns"], list):
-                    for column in model_data["columns"]:
-                        # Add a check to ensure 'column' is a dictionary and not None
-                        if (
-                            isinstance(column, dict)
-                            and "name" in column
-                            and "description" in column
-                        ):
-                            column_descriptions[column["name"]] = column["description"]
-                        elif (
-                            column is not None
-                        ):  # Log a warning if it's not a dict but also not None
-                            logger.warning(
-                                f"Skipping invalid column entry in YAML for model {model_name}: {column}"
-                            )
-            else:
-                logger.warning(
-                    f"Missing or invalid YAML structure for model {model_name}"
-                )
-
-            existing_model = self.model_storage.get_model(model_name)
-            if existing_model:
-                logger.debug(
-                    f"Existing model columns: {list(existing_model.columns.keys())}"
-                )
-                logger.debug(f"Tests in existing model: {existing_model.tests}")
-
-                existing_model.interpreted_description = model_description
-                existing_model.interpreted_columns = column_descriptions
-
-                success = self.model_storage.update_model(existing_model)
-
-                if success:
-                    if embed:
-                        logger.info(f"Embedding model {model_name} in vector store")
-                        self.vector_store.store_model(
-                            model_name=model_name,
-                            model_text=existing_model.get_readable_representation(),
+            # Extract interpretation data
+            interpreted_description = model_data.get("description")
+            interpreted_columns = {}
+            if "columns" in model_data and isinstance(model_data["columns"], list):
+                for col_data in model_data["columns"]:
+                    if isinstance(col_data, dict) and "name" in col_data:
+                        interpreted_columns[col_data["name"]] = col_data.get(
+                            "description", ""
                         )
-                    else:
-                        logger.debug(f"Skipping embedding for model {model_name}")
 
+            # Fetch the existing ModelTable record
+            model_record = (
+                session.query(ModelTable).filter(ModelTable.name == model_name).first()
+            )
+
+            if not model_record:
+                logger.error(f"Model {model_name} not found in database for saving.")
                 return {
-                    "model_name": model_name,
-                    "success": success,
-                    "message": (
-                        "Interpretation saved successfully"
-                        if success
-                        else "Failed to save interpretation"
-                    ),
-                }
-            else:
-                return {
-                    "model_name": model_name,
-                    "error": f"Model {model_name} not found in the database",
                     "success": False,
+                    "error": f"Model {model_name} not found in database",
+                    "model_name": model_name,
                 }
+
+            # Update the record directly
+            model_record.interpreted_description = interpreted_description
+            model_record.interpreted_columns = interpreted_columns
+            # Add interpretation_details if needed (e.g., from agentic workflow)
+            # model_record.interpretation_details = ...
+
+            session.add(model_record)
+            session.commit()
+            logger.info(f"Successfully saved interpretation for model {model_name}")
+
+            # Optional: Re-embed the model
+            if embed:
+                logger.info(
+                    f"Re-embedding model {model_name} after saving interpretation"
+                )
+                # Fetch the updated DBTModel (using the existing storage method)
+                updated_model = self.model_storage.get_model(model_name)
+                if updated_model:
+                    # Generate the text representation for embedding
+                    model_text_for_embedding = updated_model.get_text_representation(
+                        include_documentation=True
+                    )
+                    # Use the correct store_model_embedding method
+                    self.vector_store.store_model_embedding(
+                        model_name=updated_model.name,
+                        model_text=model_text_for_embedding,
+                        # Optionally add metadata if needed
+                        # metadata=updated_model.to_dict() # Example if needed
+                    )
+                    logger.info(f"Successfully re-embedded model {model_name}")
+                else:
+                    logger.error(
+                        f"Failed to fetch updated model {model_name} for re-embedding"
+                    )
+                    # Return success=True because saving worked, but warn about embedding
+                    return {
+                        "success": True,
+                        "warning": f"Interpretation saved, but failed to re-embed model {model_name}",
+                        "model_name": model_name,
+                    }
+
+            return {"success": True, "model_name": model_name}
 
         except Exception as e:
-            logger.error(f"Error saving interpreted documentation: {e}")
+            logger.error(
+                f"Error saving interpreted documentation for {model_name}: {e}",
+                exc_info=True,
+            )
+            session.rollback()
             return {
-                "model_name": model_name,
-                "error": f"Error saving interpreted documentation: {str(e)}",
                 "success": False,
+                "error": f"Internal error saving interpretation: {e}",
+                "model_name": model_name,
             }
+        finally:
+            session.close()

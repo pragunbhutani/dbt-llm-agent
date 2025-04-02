@@ -23,7 +23,13 @@ console = Console()
 @click.argument("model_name", required=True)
 @click.option("--verbose", "-v", is_flag=True, help="Enable verbose output")
 @click.option("--json", "output_json", is_flag=True, help="Output in JSON format")
-def model_details(model_name, verbose, output_json):
+@click.option("--yaml", "output_yaml", is_flag=True, help="Output in YAML format")
+@click.option(
+    "--use-interpretation",
+    is_flag=True,
+    help="Use LLM-interpreted descriptions when generating YAML (use with --yaml)",
+)
+def model_details(model_name, verbose, output_json, output_yaml, use_interpretation):
     """Display details of a dbt model.
 
     This command shows comprehensive information about a specific dbt model,
@@ -32,6 +38,8 @@ def model_details(model_name, verbose, output_json):
     Examples:
         dbt-llm model-details customers
         dbt-llm model-details orders --json
+        dbt-llm model-details orders --yaml
+        dbt-llm model-details orders --yaml --use-interpretation
     """
     set_logging_level(verbose)
 
@@ -45,6 +53,7 @@ def model_details(model_name, verbose, output_json):
     try:
         # Import necessary modules
         from dbt_llm_agent.storage.model_storage import ModelStorage
+        from dbt_llm_agent.core.models import DBTModel, Column
 
         # Initialize storage
         model_storage = ModelStorage(postgres_uri)
@@ -58,15 +67,66 @@ def model_details(model_name, verbose, output_json):
         # Output as JSON if requested
         if output_json:
             # Use the model's own method to convert to embedding-compatible JSON
-            result = model.to_embedding_json()
+            result = model.to_dict()
 
             # Output as JSON
             print(json.dumps(result, indent=2))
             return
 
+        # Output as YAML if requested
+        if output_yaml:
+            if use_interpretation and model.interpreted_columns:
+                # Create a copy of the model with interpreted columns converted to the format
+                # expected by format_as_yaml
+                model_copy = DBTModel(
+                    name=model.name,
+                    description=(
+                        model.interpreted_description
+                        if model.interpreted_description
+                        else model.description
+                    ),
+                    schema=model.schema,
+                    database=model.database,
+                    materialization=model.materialization,
+                    tags=model.tags,
+                    depends_on=model.depends_on,
+                    all_upstream_models=model.all_upstream_models,
+                    path=model.path,
+                    unique_id=model.unique_id,
+                    meta=model.meta,
+                    raw_sql=model.raw_sql,
+                    compiled_sql=model.compiled_sql,
+                    tests=model.tests,
+                    interpretation_details=model.interpretation_details,
+                )
+
+                # Convert interpreted columns to Column objects
+                if model.interpreted_columns:
+                    model_copy.columns = {
+                        col_name: Column(
+                            name=col_name,
+                            description=col_desc,
+                            data_type=(
+                                model.columns.get(col_name).data_type
+                                if col_name in model.columns
+                                else ""
+                            ),
+                        )
+                        for col_name, col_desc in model.interpreted_columns.items()
+                    }
+
+                # Use the modified model for YAML generation
+                yaml_representation = model_copy.format_as_yaml()
+            else:
+                # Use the model's format_as_yaml method to generate YAML
+                yaml_representation = model.format_as_yaml()
+
+            print(yaml_representation)
+            return
+
         # Display model details using the same format as embeddings
-        embedding_text = model.to_embedding_text()
-        console.print(embedding_text)
+        text_representation = model.get_text_representation(include_documentation=True)
+        console.print(text_representation)
 
         # Display raw SQL if verbose (not included in embedding text)
         if verbose and model.raw_sql:

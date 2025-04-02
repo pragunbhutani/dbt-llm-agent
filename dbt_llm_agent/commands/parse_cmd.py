@@ -66,6 +66,7 @@ def parse(project_path, manifest, force, verbose):
         # Import necessary modules
         from dbt_llm_agent.storage.model_storage import ModelStorage
         from dbt_llm_agent.parsers.dbt_manifest_parser import DBTManifestParser
+        from dbt_llm_agent.core.parsers.source_code_parser import SourceCodeParser
 
         # Initialize storage
         model_storage = ModelStorage(postgres_uri)
@@ -81,28 +82,47 @@ def parse(project_path, manifest, force, verbose):
 
             if manifest:
                 logger.info(f"Loading manifest from {manifest}")
-                parser = DBTManifestParser(manifest_path=manifest)
-            else:
-                logger.info(f"Parsing project at {project_path}")
-                parser = DBTManifestParser(project_path=project_path)
+                # TODO: Instantiate DBTManifestParser correctly when implemented
+                # parser = DBTManifestParser(manifest_path=manifest)
+                # For now, raise an error or use a placeholder if manifest parsing isn't ready
+                console.print(
+                    "[yellow]Manifest parsing is not fully implemented yet via 'parse' command. Use 'init' instead.[/yellow]"
+                )
+                # Or perhaps keep the old behavior for now? Let's stick to SourceCodeParser for 'parse'
+                # raise NotImplementedError("Manifest parsing via 'parse' command is under development.")
+                logger.info(
+                    f"Parsing project at {project_path if project_path else 'current directory'} using source code parser as fallback."
+                )
+                if not project_path:
+                    project_path = "."  # Assume current dir if only manifest was given but not supported yet
+                parser = SourceCodeParser(project_path=project_path)
+                dbt_project = parser.parse_project()
 
-            # Run the parser
-            parser.parse()
+            else:
+                logger.info(
+                    f"Parsing project at {project_path} using source code parser."
+                )
+                parser = SourceCodeParser(project_path=project_path)
+                dbt_project = parser.parse_project()
+
             progress.update(parse_task, completed=True)
 
             # Store models in database
             store_task = progress.add_task(
-                f"Storing {len(parser.models)} models in database...", total=None
+                f"Storing {len(dbt_project.models)} models in database...", total=None
             )
 
-            for model_name, model in parser.models.items():
-                model_storage.store_model(model, force=force)
+            # Iterate through models in the parsed project
+            for model in dbt_project.models.values():
+                # Call get_model_metadata on the parser instance
+                metadata = parser.get_model_metadata(model)
+                model_storage.store_model(metadata, force=force)
 
             progress.update(store_task, completed=True)
 
         # Display success message
         console.print(
-            f"[green]Successfully imported {len(parser.models)} models[/green]"
+            f"[green]Successfully imported {len(dbt_project.models)} models[/green]"
         )
         console.print("You can now:")
         console.print("1. List models: dbt-llm list")
