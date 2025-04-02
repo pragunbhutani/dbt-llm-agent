@@ -412,16 +412,21 @@ class DBTModel:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    interpretation_details: Dict[str, Any] = field(default_factory=dict)
 
-    def to_embedding_text(
+    def get_text_representation(
         self,
-        documentation_text: Optional[str] = None,
-        interpretation_text: Optional[str] = None,
+        include_documentation: bool = False,
+        additional_documentation: Optional[str] = None,
     ) -> str:
-        """Create a standardized text representation for embeddings.
+        """Get a detailed text representation of the model.
 
-        Prioritizes compiled_sql if available, otherwise uses raw_sql.
-        Includes model description, column details, and optional documentation/interpretation.
+        Args:
+            include_documentation: Whether to include SQL in the output
+            additional_documentation: Optional additional documentation text to include
+
+        Returns:
+            A formatted string representation of the model
         """
         lines = []
         lines.append(f"Model Name: {self.name}")
@@ -432,24 +437,39 @@ class DBTModel:
         else:
             lines.append("YML Description: (No YML description provided)")
 
-        # Use provided interpretation_text parameter if available, otherwise use the model's interpreted_description
-        interp_desc = (
-            interpretation_text if interpretation_text else self.interpreted_description
-        )
-        if interp_desc:
-            lines.append(f"Interpreted Description: {interp_desc.strip()}")
+        if self.interpreted_description:
+            lines.append(
+                f"Interpreted Description: {self.interpreted_description.strip()}"
+            )
         else:
             lines.append("Interpreted Description: (No interpretation available)")
 
-        # Use compiled_sql if available, else raw_sql
-        sql_to_use = self.compiled_sql if self.compiled_sql else self.raw_sql
+        # Basic metadata
+        lines.append(f"\nPath: {self.path}")
+        lines.append(f"Schema: {self.schema}")
+        lines.append(f"Database: {self.database}")
+        lines.append(f"Materialization: {self.materialization}")
 
-        if sql_to_use:
-            lines.append("\nSQL:")
-            lines.append(f"```sql\n{sql_to_use.strip()}\n```")
-        else:
-            lines.append("\nSQL: (No SQL code available)")
+        if self.tags:
+            lines.append(f"Tags: {', '.join(self.tags)}")
 
+        if self.depends_on:
+            lines.append(f"Depends On: {', '.join(self.depends_on)}")
+
+        if self.unique_id:
+            lines.append(f"Unique ID: {self.unique_id}")
+
+        # SQL information if requested
+        if include_documentation:
+            # Use compiled_sql if available, else raw_sql
+            sql_to_use = self.compiled_sql if self.compiled_sql else self.raw_sql
+            if sql_to_use:
+                lines.append("\nSQL:")
+                lines.append(f"```sql\n{sql_to_use.strip()}\n```")
+            else:
+                lines.append("\nSQL: (No SQL code available)")
+
+        # Columns section
         lines.append("\nColumns:")
         if self.interpreted_columns:
             for col_name, col_desc in self.interpreted_columns.items():
@@ -472,135 +492,46 @@ class DBTModel:
         else:
             lines.append("  (No column information available)")
 
-        if self.tags:
-            lines.append(f"\nTags: {', '.join(self.tags)}")
-
-        if self.depends_on:
-            lines.append(f"\nDepends On: {', '.join(self.depends_on)}")
-
-        if self.path:
-            lines.append(f"\nPath: {self.path}")
-
-        if self.unique_id:
-            lines.append(f"\nUnique ID: {self.unique_id}")
-
-        if documentation_text:
-            lines.append("\nDocumentation:")
-            lines.append(documentation_text.strip())
+        # Additional documentation if provided
+        if additional_documentation:
+            lines.append("\nAdditional Documentation:")
+            lines.append(additional_documentation.strip())
 
         return "\n".join(lines)
 
-    @staticmethod
-    def embedding_text_to_json(
-        embedding_text: str, tests: Optional[List[Test]] = None
-    ) -> Dict[str, Any]:
-        """Convert embedding text format to JSON.
+    def to_dict(self, include_tests: bool = True) -> Dict[str, Any]:
+        """Convert the model to a dictionary.
 
         Args:
-            embedding_text: The embedding text to convert
-            tests: Optional list of tests to include in the output
-
-        Returns:
-            A structured dictionary representation of the embedding text
-        """
-        lines = embedding_text.strip().split("\n")
-        result = {}
-
-        current_section = None
-        for line in lines:
-            if line.startswith("Model Name:"):
-                result["model_name"] = line.replace("Model Name:", "").strip()
-            elif line.startswith("YML Description:"):
-                result["yml_description"] = line.replace("YML Description:", "").strip()
-            elif line.startswith("Interpreted Description:"):
-                result["interpreted_description"] = line.replace(
-                    "Interpreted Description:", ""
-                ).strip()
-            elif line.startswith("Model:"):
-                result["model_name"] = line.replace("Model:", "").strip()
-            elif line.startswith("Description (YML):"):
-                result["description"] = line.replace("Description (YML):", "").strip()
-            elif line.startswith("Interpretation (LLM):"):
-                result["has_interpretation"] = "Available" in line
-            elif line.startswith("Path:"):
-                result["path"] = line.replace("Path:", "").strip()
-            elif line.startswith("Schema:"):
-                result["schema"] = line.replace("Schema:", "").strip()
-            elif line.startswith("Database:"):
-                result["database"] = line.replace("Database:", "").strip()
-            elif line.startswith("Materialization:"):
-                result["materialization"] = line.replace("Materialization:", "").strip()
-            elif line.startswith("Depends on (via ref):"):
-                deps = line.replace("Depends on (via ref):", "").strip()
-                result["depends_on"] = (
-                    [d.strip() for d in deps.split(",")] if deps else []
-                )
-            elif "Columns from YML documentation" in line:
-                current_section = "columns"
-                result["columns"] = {}
-            elif "Interpreted columns from LLM" in line:
-                current_section = "interpreted_columns"
-                result["interpreted_columns"] = {}
-            elif line.startswith("- ") and current_section == "columns":
-                # Parse column line: "- column_name: description"
-                parts = line[2:].split(":", 1)
-                if len(parts) == 2:
-                    col_name, col_desc = parts
-                    result["columns"][col_name.strip()] = col_desc.strip()
-            elif line.startswith("- ") and current_section == "interpreted_columns":
-                # Parse interpreted column line
-                parts = line[2:].split(":", 1)
-                if len(parts) == 2:
-                    col_name, col_desc = parts
-                    result["interpreted_columns"][col_name.strip()] = col_desc.strip()
-
-        # Include tests in the output if provided
-        if tests:
-            result["tests"] = []
-            for test in tests:
-                result["tests"].append(
-                    {
-                        "test_type": test.test_type or "",
-                        "column_name": test.column_name or "",
-                    }
-                )
-
-        return result
-
-    def to_embedding_json(self) -> Dict[str, Any]:
-        """Convert the model to a JSON format for embeddings.
-
-        Returns:
-            A structured dictionary representation suitable for embeddings
-        """
-        embedding_text = self.to_embedding_text()
-        return self.embedding_text_to_json(embedding_text, self.tests)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert the model to a dictionary.
+            include_tests: Whether to include tests in the output
 
         Returns:
             Dict representation of the model
         """
-        return {
+        result = {
             "name": self.name,
             "description": self.description,
-            "columns": {name: vars(col) for name, col in self.columns.items()},
-            "tests": [vars(test) for test in self.tests],
             "schema": self.schema,
             "database": self.database,
             "materialization": self.materialization,
             "tags": self.tags,
             "meta": self.meta,
             "raw_sql": self.raw_sql,
+            "compiled_sql": self.compiled_sql,
             "depends_on": self.depends_on,
+            "all_upstream_models": self.all_upstream_models,
             "path": self.path,
+            "unique_id": self.unique_id,
             "interpreted_description": self.interpreted_description,
             "interpreted_columns": self.interpreted_columns,
-            "compiled_sql": self.compiled_sql,
-            "all_upstream_models": self.all_upstream_models,
             "interpretation_details": self.interpretation_details,
+            "columns": {name: vars(col) for name, col in self.columns.items()},
         }
+
+        if include_tests:
+            result["tests"] = [vars(test) for test in self.tests]
+
+        return result
 
     def get_column_descriptions(self) -> Dict[str, str]:
         """Get a dictionary of column names and their descriptions.
@@ -609,51 +540,6 @@ class DBTModel:
             Dict mapping column names to descriptions
         """
         return {name: col.description for name, col in self.columns.items()}
-
-    def get_readable_representation(self) -> str:
-        """Get a readable representation of the model.
-
-        Returns:
-            A readable representation of the model
-        """
-        representation = f"Model: {self.name}\n"
-        representation += (
-            f"Description (YML): {self.description or 'No YML description'}\n"
-        )
-
-        if self.interpreted_description:
-            representation += f"Interpretation (LLM): {self.interpreted_description}\n"
-        else:
-            representation += f"Interpretation (LLM): Not available\n"
-
-        representation += f"Path: {self.path}\n"
-        representation += f"Schema: {self.schema}\n"
-        representation += f"Database: {self.database}\n"
-        representation += f"Materialization: {self.materialization}\n"
-
-        if self.tags:
-            representation += f"Tags: {', '.join(self.tags)}\n"
-
-        if self.depends_on:
-            representation += f"Depends on (via ref): {', '.join(self.depends_on)}\n"
-
-        # Add columns from YML
-        if self.columns:
-            representation += (
-                f"\nColumns from YML documentation ({len(self.columns)}):\n"
-            )
-            for name, col in self.columns.items():
-                representation += f"- {name}: {col.description or 'No description'}\n"
-
-        # Add interpreted columns
-        if self.interpreted_columns:
-            representation += (
-                f"\nInterpreted columns from LLM ({len(self.interpreted_columns)}):\n"
-            )
-            for name, description in self.interpreted_columns.items():
-                representation += f"- {name}: {description}\n"
-
-        return representation
 
     def debug_info(self) -> dict:
         """Get debug information about the model.

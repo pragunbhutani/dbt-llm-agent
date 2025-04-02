@@ -466,10 +466,12 @@ async def parse_project(
 
         # Store models in PostgreSQL and vector store
         for model_name, model in project.models.items():
-            agent.postgres.store_model(model)
+            agent.postgres.store_model_embedding(
+                model_name=model_name, model_text=model.get_text_representation()
+            )
 
         model_texts = {
-            model_name: model.get_readable_representation()
+            model_name: model.get_text_representation()
             for model_name, model in project.models.items()
         }
         agent.vector_store.store_models(model_texts)
@@ -521,10 +523,12 @@ async def parse_project_upload(
 
             # Store models in PostgreSQL and vector store
             for model_name, model in project.models.items():
-                agent.postgres.store_model(model)
+                agent.postgres.store_model_embedding(
+                    model_name=model_name, model_text=model.get_text_representation()
+                )
 
             model_texts = {
-                model_name: model.get_readable_representation()
+                model_name: model.get_text_representation()
                 for model_name, model in project.models.items()
             }
             agent.vector_store.store_models(model_texts)
@@ -708,7 +712,7 @@ def embed_models(
         metadata_dict = {}
 
         for model in selected_models:
-            model_text = model.get_readable_representation()
+            model_text = model.get_text_representation()
             models_dict[model.name] = model_text
 
             # Create metadata

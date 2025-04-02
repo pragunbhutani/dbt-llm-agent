@@ -139,7 +139,7 @@ class Agent:
                         self.console.print(
                             f"[dim]  Fetching details for {model_name}...[/dim]"
                         )
-                    model_info_str += model.get_readable_representation() + "\n\n"
+                    model_info_str += model.get_text_representation() + "\n\n"
                     model_dict = model.to_dict()
                     model_dict["search_score"] = similarity
                     models_data.append(model_dict)
@@ -307,7 +307,7 @@ class Agent:
                             model_repr = (
                                 self.model_storage.get_model(
                                     model_name
-                                ).get_readable_representation()
+                                ).get_text_representation()
                                 if self.model_storage.get_model(model_name)
                                 else f"Details for {model_name} not fully available."
                             )
@@ -581,7 +581,7 @@ class Agent:
                 model_name = result["model_name"]
                 model = self.model_storage.get_model(model_name)
                 if model:
-                    model_info += model.get_readable_representation() + "\n\n"
+                    model_info += model.get_text_representation() + "\n\n"
                     model_dict = model.to_dict()
                     model_dict["search_score"] = result.get("similarity_score", 0)
                     models_data.append(model_dict)
@@ -1443,12 +1443,14 @@ class Agent:
                 updated_model = self.model_storage.get_model(model_name)
                 if updated_model:
                     # Generate the text representation for embedding
-                    model_text_for_embedding = updated_model.to_embedding_text()
-                    # Use the correct store_model method
-                    self.vector_store.store_model(
+                    model_text_for_embedding = updated_model.get_text_representation(
+                        include_documentation=True
+                    )
+                    # Use the correct store_model_embedding method
+                    self.vector_store.store_model_embedding(
                         model_name=updated_model.name,
                         model_text=model_text_for_embedding,
-                        # Optionally add metadata if needed by store_model
+                        # Optionally add metadata if needed
                         # metadata=updated_model.to_dict() # Example if needed
                     )
                     logger.info(f"Successfully re-embedded model {model_name}")

@@ -194,9 +194,9 @@ class ModelEmbeddingStorage:
                     description=yml_description,
                     interpreted_description=effective_interpretation,
                 )
-                model_text = dummy_model.to_embedding_text(
-                    documentation_text=documentation_text,
-                    interpretation_text=interpretation_text,
+                model_text = dummy_model.get_text_representation(
+                    include_documentation=True,
+                    additional_documentation=documentation_text,
                 )
 
             # Generate embedding
@@ -239,57 +239,6 @@ class ModelEmbeddingStorage:
             raise
         finally:
             session.close()
-
-    # Update existing methods to use the consolidated function
-
-    def store_model(
-        self, model_name: str, model_text: str, metadata: Dict[str, Any] = None
-    ) -> None:
-        """Store a model in the vector store.
-
-        Args:
-            model_name: The name of the model
-            model_text: The model text to embed
-            metadata: Optional metadata to store with the model
-
-        Raises:
-            ValueError: If an embedding cannot be generated for the model text
-        """
-        self.store_model_embedding(
-            model_name=model_name, model_text=model_text, metadata=metadata
-        )
-
-    def store_model_documentation(
-        self, model_name: str, documentation_text: str, force: bool = False
-    ) -> None:
-        """Store a model's documentation in the vector store.
-
-        This creates a structured document with all available information about the model.
-
-        Args:
-            model_name: The name of the model
-            documentation_text: The documentation text
-            force: Whether to force update if model already exists
-        """
-        self.store_model_embedding(
-            model_name=model_name, documentation_text=documentation_text, force=force
-        )
-
-    def store_model_interpretation(
-        self, model_name: str, interpretation_text: str, force: bool = False
-    ) -> None:
-        """Store a model's LLM interpretation in the vector store.
-
-        This creates a structured document with all available information about the model.
-
-        Args:
-            model_name: The name of the model
-            interpretation_text: The interpretation text
-            force: Whether to force update if model already exists
-        """
-        self.store_model_embedding(
-            model_name=model_name, interpretation_text=interpretation_text, force=force
-        )
 
     def model_exists(self, model_name: str) -> bool:
         """Check if a model exists in the vector store.
@@ -460,4 +409,6 @@ class ModelEmbeddingStorage:
         """
         for model_name, model_text in models_dict.items():
             metadata = metadata_dict.get(model_name) if metadata_dict else None
-            self.store_model(model_name, model_text, metadata)
+            self.store_model_embedding(
+                model_name=model_name, model_text=model_text, metadata=metadata
+            )
