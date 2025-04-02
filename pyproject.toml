@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "dbt-llm-agent"
-version = "0.4.0"
+version = "0.5.0"
 description = "An LLM-powered agent for interacting with dbt projects"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
