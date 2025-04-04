@@ -1,11 +1,11 @@
-# dbt-llm-agent
+# ragstar
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Type checking: mypy](https://img.shields.io/badge/type%20checking-mypy-blue.svg)](https://github.com/python/mypy)
 [![Linting: ruff](https://img.shields.io/badge/linting-ruff-red.svg)](https://github.com/astral-sh/ruff)
-[![Beta Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/pragunbhutani/dbt-llm-agent)
+[![Beta Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/pragunbhutani/ragstar)
 
 An LLM-powered agent for interacting with dbt projects.
 
@@ -47,8 +47,8 @@ The agent uses a combination of:
 2.  **Clone the repository:**
 
     ```bash
-    git clone https://github.com/pragunbhutani/dbt-llm-agent.git
-    cd dbt-llm-agent
+    git clone https://github.com/pragunbhutani/ragstar.git
+    cd ragstar
     ```
 
 3.  **Install dependencies:**
@@ -67,16 +67,16 @@ The agent uses a combination of:
 
     - Install PostgreSQL if you haven't already.
     - Install `pgvector`. Follow the instructions at [https://github.com/pgvector/pgvector](https://github.com/pgvector/pgvector).
-    - Create a database for the agent (e.g., `dbt_llm_agent`).
+    - Create a database for the agent (e.g., `ragstar`).
 
     Quick setup commands for local PostgreSQL:
 
     ```bash
     # Create database
-    createdb dbt_llm_agent
+    createdb ragstar
 
     # Enable pgvector extension (run this in psql)
-    psql -d dbt_llm_agent -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+    psql -d ragstar -c 'CREATE EXTENSION IF NOT EXISTS vector;'
     ```
 
 5.  **Configure environment variables:**
@@ -97,7 +97,7 @@ The agent uses a combination of:
     Run the following command. This creates the necessary tables and enables the `pgvector` extension if needed.
 
     ```bash
-    poetry run dbt-llm-agent init-db
+    poetry run ragstar init-db
     ```
 
 ## Initializing Your dbt Project
@@ -105,7 +105,7 @@ The agent uses a combination of:
 To use the agent, you first need to load your dbt project's metadata into the database. Use the `init` command:
 
 ```bash
-poetry run dbt-llm-agent init <mode> [options]
+poetry run ragstar init <mode> [options]
 ```
 
 There are three modes available:
@@ -114,7 +114,7 @@ There are three modes available:
 
 Fetches the `manifest.json` from the latest successful run in your dbt Cloud account. This provides the richest metadata, including compiled SQL.
 
-- **Command:** `poetry run dbt-llm-agent init cloud`
+- **Command:** `poetry run ragstar init cloud`
 - **Prerequisites:**
   - dbt Cloud account with successful job runs that generate artifacts.
   - Environment variables set in `.env`:
@@ -125,14 +125,14 @@ Fetches the `manifest.json` from the latest successful run in your dbt Cloud acc
 
   ```bash
   # Ensure DBT_CLOUD_URL, DBT_CLOUD_ACCOUNT_ID, DBT_CLOUD_API_KEY are in .env
-  poetry run dbt-llm-agent init cloud
+  poetry run ragstar init cloud
   ```
 
 ### 2. Local Mode
 
 Runs `dbt compile` on your local dbt project and parses the generated `manifest.json` from the `target/` directory. Also provides rich metadata including compiled SQL.
 
-- **Command:** `poetry run dbt-llm-agent init local --project-path /path/to/your/dbt/project`
+- **Command:** `poetry run ragstar init local --project-path /path/to/your/dbt/project`
 - **Prerequisites:**
   - dbt project configured locally (`dbt_project.yml`, `profiles.yml` etc.).
   - Ability to run `dbt compile` successfully in the project directory.
@@ -141,17 +141,17 @@ Runs `dbt compile` on your local dbt project and parses the generated `manifest.
 
   ```bash
   # Using argument
-  poetry run dbt-llm-agent init local --project-path /Users/me/code/my_dbt_project
+  poetry run ragstar init local --project-path /Users/me/code/my_dbt_project
 
   # Using environment variable (set DBT_PROJECT_PATH in .env)
-  poetry run dbt-llm-agent init local
+  poetry run ragstar init local
   ```
 
 ### 3. Source Code Mode (Fallback)
 
 Parses your dbt project directly from the source `.sql` and `.yml` files. This mode does _not_ capture compiled SQL or reliably determine data types.
 
-- **Command:** `poetry run dbt-llm-agent init source /path/to/your/dbt/project`
+- **Command:** `poetry run ragstar init source /path/to/your/dbt/project`
 - **Prerequisites:**
   - Access to the dbt project source code.
   - The dbt project path can be provided via the argument or the `DBT_PROJECT_PATH` environment variable.
@@ -159,10 +159,10 @@ Parses your dbt project directly from the source `.sql` and `.yml` files. This m
 
   ```bash
   # Using argument
-  poetry run dbt-llm-agent init source /Users/me/code/my_dbt_project
+  poetry run ragstar init source /Users/me/code/my_dbt_project
 
   # Using environment variable
-  poetry run dbt-llm-agent init source
+  poetry run ragstar init source
   ```
 
 **Note:** The `init` command replaces the older `parse` command for loading project metadata.
@@ -183,11 +183,11 @@ Generate vector embeddings for semantic search to enable question answering:
 
 ```bash
 # Embed all models
-poetry run dbt-llm-agent embed --select "*"
+poetry run ragstar embed --select "*"
 
 # Or embed specific models or tags
-poetry run dbt-llm-agent embed --select "+tag:marts"
-poetry run dbt-llm-agent embed --select "my_model"
+poetry run ragstar embed --select "+tag:marts"
+poetry run ragstar embed --select "my_model"
 ```
 
 #### If Your Models Need Documentation:
@@ -196,10 +196,10 @@ First, use the LLM to interpret and generate descriptions for models and columns
 
 ```bash
 # Interpret a specific model and save the results
-poetry run dbt-llm-agent interpret --select "fct_orders" --save
+poetry run ragstar interpret --select "fct_orders" --save
 
 # Interpret all models in the staging layer, save, and embed
-poetry run dbt-llm-agent interpret --select "tag:staging" --save --embed
+poetry run ragstar interpret --select "tag:staging" --save --embed
 ```
 
 The `--save` flag stores the interpretations in the database, and `--embed` automatically generates embeddings after interpretation.
@@ -209,10 +209,10 @@ The `--save` flag stores the interpretations in the database, and `--embed` auto
 Now that your models are embedded, you can ask questions about your dbt project:
 
 ```bash
-poetry run dbt-llm-agent ask "What models are tagged as finance?"
-poetry run dbt-llm-agent ask "Show me the columns in the customers model"
-poetry run dbt-llm-agent ask "Explain the fct_orders model"
-poetry run dbt-llm-agent ask "How is discount_amount calculated in the orders model?"
+poetry run ragstar ask "What models are tagged as finance?"
+poetry run ragstar ask "Show me the columns in the customers model"
+poetry run ragstar ask "Explain the fct_orders model"
+poetry run ragstar ask "How is discount_amount calculated in the orders model?"
 ```
 
 ### 3. Providing Feedback
@@ -221,16 +221,16 @@ Help improve the agent by providing feedback on answers:
 
 ```bash
 # List previous questions
-poetry run dbt-llm-agent questions
+poetry run ragstar questions
 
 # Provide positive feedback
-poetry run dbt-llm-agent feedback 1 --useful
+poetry run ragstar feedback 1 --useful
 
 # Provide negative feedback with explanation
-poetry run dbt-llm-agent feedback 2 --not-useful --text "Use this_other_model instead"
+poetry run ragstar feedback 2 --not-useful --text "Use this_other_model instead"
 
 # Just provide text feedback without marking useful/not useful
-poetry run dbt-llm-agent feedback 3 --text "This answer is correct but too verbose."
+poetry run ragstar feedback 3 --text "This answer is correct but too verbose."
 ```
 
 This feedback helps the agent improve its answers over time.
@@ -239,10 +239,10 @@ This feedback helps the agent improve its answers over time.
 
 ```bash
 # List all models in your project
-poetry run dbt-llm-agent list
+poetry run ragstar list
 
 # Get detailed information about a specific model
-poetry run dbt-llm-agent model-details my_model_name
+poetry run ragstar model-details my_model_name
 ```
 
 ## Contributing

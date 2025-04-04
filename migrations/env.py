@@ -9,10 +9,10 @@ import logging
 from dotenv import load_dotenv
 
 # Import our models
-from dbt_llm_agent.core.models import Base
+from ragstar.core.models import Base
 
 # Import our logging setup
-from dbt_llm_agent.utils.logging import get_logger
+from ragstar.utils.logging import get_logger
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

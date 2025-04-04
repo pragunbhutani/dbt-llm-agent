@@ -13,7 +13,7 @@ from alembic import op
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 
-from dbt_llm_agent.utils.logging import get_logger
+from ragstar.utils.logging import get_logger
 
 # Get logger
 logger = get_logger("alembic.migration")

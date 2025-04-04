@@ -11,10 +11,10 @@ To run migrations and update your database to the latest schema version:
 ```bash
 # First make sure your .env file has POSTGRES_URI set correctly
 # Then run the migrate command
-dbt-llm-agent migrate
+ragstar migrate
 
 # Migrate to a specific revision
-dbt-llm-agent migrate --revision "revision_id"
+ragstar migrate --revision "revision_id"
 ```
 
 ### Initializing a New Database
@@ -23,7 +23,7 @@ To initialize a new database with the current schema:
 
 ```bash
 # Make sure your .env file has POSTGRES_URI set correctly
-dbt-llm-agent init-db
+ragstar init-db
 ```
 
 ### Creating New Migrations
