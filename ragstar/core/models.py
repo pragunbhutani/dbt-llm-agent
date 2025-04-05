@@ -414,46 +414,44 @@ class DBTModel:
     updated_at: Optional[datetime] = None
     interpretation_details: Dict[str, Any] = field(default_factory=dict)
 
-    def get_text_representation(
-        self, include_documentation: bool = True, include_tests: bool = False
-    ) -> str:
-        """Get a text representation of the model for embedding."""
-        representation = f"Model: {self.name}\n"
-        representation += f"Path: {self.path}\n"
+    def get_text_representation(self, include_documentation: bool = False) -> str:
+        """Get a text representation of the model for embedding.
 
-        # Use interpreted if available, fallback to YML, then N/A
-        if include_documentation:
-            description = self.interpreted_description or self.description
-            if description:
-                representation += f"Description: {description}\n"
-            else:
-                representation += "Description: N/A\n"
-
-        representation += "Columns:\n"
-        # Use interpreted if available, fallback to YML
-        columns_to_represent = {}
-        if self.interpreted_columns:
-            columns_to_represent = self.interpreted_columns
-        elif self.columns:
-            columns_to_represent = {
-                name: col.description or "" for name, col in self.columns.items()
-            }
-
-        if columns_to_represent:
-            for col_name, col_desc in columns_to_represent.items():
-                representation += f"  - {col_name}: {col_desc or 'N/A'}\n"
-        else:
-            representation += "  No column information available.\n"
-
-        representation += f"Raw SQL:\n```sql\n{self.raw_sql or 'SQL not available'}\n```\n"
+        Args:
+            include_documentation: Whether to include YML description and columns.
+        """
+        representation = f"Model: {self.name}\n\n"
+        representation += f"Path: {self.path}\n\n"
 
         if self.depends_on:
-            representation += f"Depends on: {", ".join(self.depends_on)}\n"
+            representation += f"Depends on: {', '.join(self.depends_on)}\n\n"
+        else:
+            representation += "Depends on: None\n\n"
 
-        if include_tests and self.tests:
-            representation += "Tests:\n"
-            for test in self.tests:
-                representation += f"  - {test}\n"
+        if include_documentation:
+            representation += f"YML Description: {self.description or 'N/A'}\n\n"
+
+        representation += f"Interpreted Description: {self.interpreted_description or 'N/A'}\n\n"
+
+        if include_documentation:
+            representation += "YML Columns:\n"
+            if self.columns:
+                for col_name, col in self.columns.items():
+                    representation += f"  - {col_name}: {col.description or 'N/A'}\n"
+                representation += "\n"  # Add newline after YML columns block
+            else:
+                representation += "  No YML column information available.\n\n"
+
+        representation += "Interpreted Columns:\n"
+        if self.interpreted_columns:
+            for col_name, col_desc in self.interpreted_columns.items():
+                representation += f"  - {col_name}: {col_desc or 'N/A'}\n"
+            representation += "\n"  # Add newline after interpreted columns block
+        else:
+            representation += "  No interpreted column information available.\n\n"
+
+        representation += f"Raw SQL:\n```sql\n{self.raw_sql or 'SQL not available'}\n```\n"
+        # No extra newline needed after the final block
 
         return representation
 

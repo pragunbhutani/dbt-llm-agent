@@ -76,10 +76,10 @@ def ask(question, no_history, verbose):
                 connection_string=postgres_uri, openai_api_key=openai_api_key
             )
 
-        # Initialize the Agent
-        from ragstar.core.agent import Agent
+        # Initialize the Agent - now QuestionAnswerer
+        from ragstar.core.agents import QuestionAnswerer
 
-        agent = Agent(
+        agent = QuestionAnswerer(
             llm_client=llm,
             model_storage=model_storage,
             vector_store=vector_store,
@@ -122,7 +122,7 @@ def ask(question, no_history, verbose):
             )
             console.print(
                 "[italic]You can provide feedback with "
-                f"'dbt-llm feedback {conversation_id} --useful/--not-useful'[/italic]"
+                f"'ragstar feedback {conversation_id} --useful/--not-useful'[/italic]"
             )
         elif not no_history and not conversation_id and question_tracking:
             # Fallback if workflow didn't save history

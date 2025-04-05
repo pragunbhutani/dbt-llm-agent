@@ -131,7 +131,7 @@ def interpret(
         from ragstar.storage.model_storage import ModelStorage
         from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
         from ragstar.core.llm.client import LLMClient
-        from ragstar.core.agent import Agent
+        from ragstar.core.agents import ModelInterpreter
 
         # Initialize storage
         model_storage = ModelStorage(postgres_uri)
@@ -142,11 +142,12 @@ def interpret(
             api_key=openai_api_key, model=openai_model, temperature=temperature
         )
 
-        # Initialize agent
-        agent = Agent(
+        # Initialize agent - now ModelInterpreter
+        interpreter = ModelInterpreter(
             llm_client=llm,
             model_storage=model_storage,
             vector_store=vector_store,
+            verbose=verbose,
         )
 
         # Get all models from database
@@ -202,8 +203,8 @@ def interpret(
             logger.info(f"Interpreting model: {model_name} ({i+1}/{total_models})")
             logger.info(f"Using agentic workflow for {model_name}")
 
-            # Get interpretations from the agent
-            result = agent.interpret_model(model_name, iterations)
+            # Get interpretations from the agent - now interpreter
+            result = interpreter.interpret_model(model_name, iterations)
 
             if not result.get("success", False):
                 logger.error(
@@ -311,7 +312,7 @@ def interpret(
             # Save interpretation if requested
             if save:
                 logger.info(f"Saving interpretation for model {model_name}")
-                save_result = agent.save_interpreted_documentation(
+                save_result = interpreter.save_interpreted_documentation(
                     model_name, result["yaml_documentation"], embed=embed
                 )
 

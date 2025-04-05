@@ -125,7 +125,7 @@ def model_details(model_name, verbose, output_json, output_yaml, use_interpretat
             return
 
         # Display model details using the same format as embeddings
-        text_representation = model.get_text_representation(include_documentation=True)
+        text_representation = model.get_text_representation()
         console.print(text_representation)
 
         # Display raw SQL if verbose (not included in embedding text)
