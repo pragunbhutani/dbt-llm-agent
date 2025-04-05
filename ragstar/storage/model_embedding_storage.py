@@ -17,7 +17,7 @@ from ragstar.core.models import (
     DBTModel,
     ModelTable,
 )
-from ragstar.integrations.llm.client import LLMClient
+from ragstar.core.llm.client import LLMClient
 
 logger = logging.getLogger(__name__)
 

@@ -415,89 +415,72 @@ class DBTModel:
     interpretation_details: Dict[str, Any] = field(default_factory=dict)
 
     def get_text_representation(
-        self,
-        include_documentation: bool = False,
-        additional_documentation: Optional[str] = None,
+        self, include_documentation: bool = True, include_tests: bool = False
     ) -> str:
-        """Get a detailed text representation of the model.
+        """Get a text representation of the model for embedding."""
+        representation = f"Model: {self.name}\n"
+        representation += f"Path: {self.path}\n"
 
-        Args:
-            include_documentation: Whether to include SQL in the output
-            additional_documentation: Optional additional documentation text to include
+        # Use interpreted if available, fallback to YML, then N/A
+        if include_documentation:
+            description = self.interpreted_description or self.description
+            if description:
+                representation += f"Description: {description}\n"
+            else:
+                representation += "Description: N/A\n"
 
-        Returns:
-            A formatted string representation of the model
-        """
-        lines = []
-        lines.append(f"Model Name: {self.name}")
+        representation += "Columns:\n"
+        # Use interpreted if available, fallback to YML
+        columns_to_represent = {}
+        if self.interpreted_columns:
+            columns_to_represent = self.interpreted_columns
+        elif self.columns:
+            columns_to_represent = {
+                name: col.description or "" for name, col in self.columns.items()
+            }
 
-        # Include both YML description and LLM-interpreted description
-        if self.description:
-            lines.append(f"YML Description: {self.description.strip()}")
+        if columns_to_represent:
+            for col_name, col_desc in columns_to_represent.items():
+                representation += f"  - {col_name}: {col_desc or 'N/A'}\n"
         else:
-            lines.append("YML Description: (No YML description provided)")
+            representation += "  No column information available.\n"
 
-        if self.interpreted_description:
-            lines.append(
-                f"Interpreted Description: {self.interpreted_description.strip()}"
-            )
-        else:
-            lines.append("Interpreted Description: (No interpretation available)")
-
-        # Basic metadata
-        lines.append(f"\nPath: {self.path}")
-        lines.append(f"Schema: {self.schema}")
-        lines.append(f"Database: {self.database}")
-        lines.append(f"Materialization: {self.materialization}")
-
-        if self.tags:
-            lines.append(f"Tags: {', '.join(self.tags)}")
+        representation += f"Raw SQL:\n```sql\n{self.raw_sql or 'SQL not available'}\n```\n"
 
         if self.depends_on:
-            lines.append(f"Depends On: {', '.join(self.depends_on)}")
+            representation += f"Depends on: {", ".join(self.depends_on)}\n"
 
-        if self.unique_id:
-            lines.append(f"Unique ID: {self.unique_id}")
+        if include_tests and self.tests:
+            representation += "Tests:\n"
+            for test in self.tests:
+                representation += f"  - {test}\n"
 
-        # SQL information if requested
-        if include_documentation:
-            # Use compiled_sql if available, else raw_sql
-            sql_to_use = self.compiled_sql if self.compiled_sql else self.raw_sql
-            if sql_to_use:
-                lines.append("\nSQL:")
-                lines.append(f"```sql\n{sql_to_use.strip()}\n```")
-            else:
-                lines.append("\nSQL: (No SQL code available)")
+        return representation
 
-        # Columns section
-        lines.append("\nColumns:")
-        if self.interpreted_columns:
-            for col_name, col_desc in self.interpreted_columns.items():
-                col_info = self.columns.get(col_name)
-                data_type = (
-                    f" ({col_info.data_type})"
-                    if col_info and col_info.data_type
-                    else ""
-                )
-                lines.append(f"  - {col_name}{data_type}: {col_desc.strip()}")
-        elif self.columns:
-            for col_name, col_data in self.columns.items():
-                data_type = f" ({col_data.data_type})" if col_data.data_type else ""
-                desc = (
-                    col_data.description.strip()
-                    if col_data.description
-                    else "(No description)"
-                )
-                lines.append(f"  - {col_name}{data_type}: {desc}")
+    # ADDED: Simple summary representation for tool output
+    def get_summary_representation(self) -> str:
+        """Get a concise summary representation for tool output."""
+        summary = ""
+        # Use interpreted if available, fallback to YML
+        description = self.interpreted_description or self.description
+        if description:
+            summary += f"  Description: {description}\n"
         else:
-            lines.append("  (No column information available)")
+            summary += "  Description: N/A\n"
 
-        # Additional documentation if provided
-        if additional_documentation:
-            lines.append("\nAdditional Documentation:")
-            lines.append(additional_documentation.strip())
+        # Show column names (interpreted or YML)
+        column_names = []
+        if self.interpreted_columns:
+            column_names = list(self.interpreted_columns.keys())
+        elif self.columns:
+            column_names = list(self.columns.keys())
 
-        return "\n".join(lines)
+        if column_names:
+            summary += f"  Columns: {", ".join(column_names)}\n"
+        else:
+            summary += "  Columns: N/A\n"
+
+        return summary.strip()
 
     def to_dict(self, include_tests: bool = True) -> Dict[str, Any]:
         """Convert the model to a dictionary.

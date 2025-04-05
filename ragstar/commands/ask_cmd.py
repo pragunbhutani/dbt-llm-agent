@@ -65,7 +65,7 @@ def ask(question, no_history, verbose):
             sys.exit(1)
 
         # Initialize LLM client
-        from ragstar.integrations.llm.client import LLMClient
+        from ragstar.core.llm.client import LLMClient
 
         llm = LLMClient(api_key=openai_api_key, model=openai_model)
 

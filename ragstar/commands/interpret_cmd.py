@@ -14,6 +14,8 @@ from typing import Dict, List, Optional, Any
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
 from ragstar.utils.model_selector import ModelSelector
+from rich.console import Console
+from rich.progress import Progress
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -128,7 +130,7 @@ def interpret(
         # Import necessary modules
         from ragstar.storage.model_storage import ModelStorage
         from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
-        from ragstar.integrations.llm.client import LLMClient
+        from ragstar.core.llm.client import LLMClient
         from ragstar.core.agent import Agent
 
         # Initialize storage
