@@ -24,6 +24,8 @@ from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.prebuilt import ToolNode, tools_condition
+from typing_extensions import Annotated
+from langgraph.graph.message import add_messages
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -63,146 +65,12 @@ class FinishWorkflowInput(BaseModel):
     )
 
 
-# --- Standalone Tool Logic ---
-
-# Note: We pass dependencies like console, verbose, storages explicitly
-# These functions return the raw data, not formatted strings for the LLM state update
-# The @tool decorator will be applied later to partial versions of these functions
-
-
-def _search_dbt_models_logic(
-    query: str,
-    *,  # Force keyword args for dependencies
-    console: Console,
-    verbose: bool,
-    vector_store: ModelEmbeddingStorage,
-    model_storage: ModelStorage,
-) -> List[Dict[str, Any]]:
-    """Core logic for searching dbt models."""
-    if verbose:
-        console.print(
-            f"[bold magenta]🛠️ Executing Tool Logic: _search_dbt_models_logic(query='{query}')[/bold magenta]"
-        )
-    console.print(f"[bold blue]🔍 Searching models relevant to: '{query}'[/bold blue]")
-
-    search_results = vector_store.search_models(query=query, n_results=5)
-    newly_added_model_details = []
-
-    if not search_results:
-        if verbose:
-            console.print(
-                "[dim] -> No models found by vector store for this query.[/dim]"
-            )
-        return []  # Return empty list
-
-    for result in search_results:
-        model_name = result["model_name"]
-        similarity = result.get("similarity_score", 0)
-
-        if isinstance(similarity, (int, float)) and similarity > 0.3:
-            model = model_storage.get_model(model_name)
-            if model:
-                model_dict = model.to_dict()
-                model_dict["search_score"] = similarity
-                newly_added_model_details.append(model_dict)
-                if verbose:
-                    console.print(
-                        f"[dim] -> Found relevant new model: {model_name} (Score: {similarity:.2f})[/dim]"
-                    )
-
-    if not newly_added_model_details and verbose:
-        console.print(
-            "[dim] -> Vector store found models, but they were already known or below threshold.[/dim]"
-        )
-
-    # Return the list of newly found model *details* (dictionaries)
-    return newly_added_model_details
-
-
-def _search_feedback_logic(
-    query: str,
-    *,  # Force keyword args for dependencies
-    console: Console,
-    verbose: bool,
-    question_storage: Optional[QuestionStorage],
-) -> List[Any]:  # Assuming QuestionStorage returns a list of specific feedback items
-    """Core logic for searching past feedback."""
-    if verbose:
-        console.print(
-            f"[bold magenta]🛠️ Executing Tool Logic: _search_feedback_logic(query='{query}') [/bold magenta]"
-        )
-
-    if not (
-        question_storage
-        and hasattr(question_storage, "_get_embedding")
-        and hasattr(question_storage, "openai_client")
-        and question_storage.openai_client is not None
-    ):
-        if verbose:
-            console.print(
-                "[yellow dim] -> Feedback storage not configured or embedding client unavailable.[/yellow dim]"
-            )
-        return []  # Return empty list
-
-    if verbose:
-        console.print("[blue]🔍 Checking for feedback...[/blue]")
-
-    try:
-        question_embedding = question_storage._get_embedding(query)
-        if not question_embedding:
-            if verbose:
-                console.print(
-                    "[yellow dim] -> Could not generate embedding for feedback search.[/yellow dim]"
-                )
-            return []  # Return empty list
-
-        relevant_feedback_items = question_storage.find_similar_questions_with_feedback(
-            query_embedding=question_embedding,
-            limit=3,
-            similarity_threshold=0.75,
-        )
-
-        if not relevant_feedback_items:
-            if verbose:
-                console.print("[dim] -> No relevant feedback found.[/dim]")
-            return []  # Return empty list
-
-        if verbose:
-            console.print(
-                f"[dim] -> Found {len(relevant_feedback_items)} relevant feedback item(s).[/dim]"
-            )
-
-        # Return the list of feedback items directly
-        return relevant_feedback_items
-
-    except Exception as e:
-        logger.error(f"Error during feedback search logic: {e}", exc_info=verbose)
-        # Return empty list on error, the ToolNode might add an error message to history anyway
-        return []
-
-
-def _finish_workflow_logic(
-    final_answer: str,
-    *,  # Force keyword args for dependencies
-    console: Console,
-    verbose: bool,
-) -> str:
-    """Core logic for finishing the workflow."""
-    if verbose:
-        console.print(
-            f"[bold magenta]🛠️ Executing Tool Logic: _finish_workflow_logic(final_answer='{final_answer[:100]}...')",
-        )
-    # This function primarily acts as a signal, returning the final answer
-    # The actual state update happens in update_state_node based on the tool call
-    return final_answer
-
-
 # --- LangGraph State Definition ---
 class AgentState(TypedDict):
     """Represents the state of our agent graph."""
 
     original_question: str
-    messages: List[BaseMessage]  # Conversation history
+    messages: Annotated[List[BaseMessage], add_messages]
     accumulated_models: List[Dict[str, Any]]  # Models found so far
     accumulated_model_names: Set[str]  # Names of models found
     search_model_calls: int  # Track number of model search calls
@@ -214,176 +82,7 @@ class AgentState(TypedDict):
     conversation_id: Optional[str]
 
 
-# Add this class after imports and before the Agent class
-class SafeToolExecutor:
-    """A wrapper around LangGraph's ToolNode that ensures valid message ordering."""
-
-    def __init__(self, tools, verbose=False, console=None):
-        """Initialize with the tools and verbosity settings."""
-        self.tools = tools
-        self.verbose = verbose
-        self.console = console or Console()
-        # Create the standard ToolNode for actual execution
-        self.tool_node = ToolNode(tools)
-
-    def __call__(self, state):
-        """Execute tools while ensuring proper message ordering."""
-        if self.verbose:
-            self.console.print("[bold cyan]\n--- Safe Tool Executor ---[/bold cyan]")
-
-        # Check if the last message has valid tool_calls
-        messages = state.get("messages", [])
-        if not messages:
-            if self.verbose:
-                self.console.print(
-                    "[yellow dim]No messages in state, skipping tool execution.[/yellow dim]"
-                )
-            return state  # No messages to process
-
-        last_message = messages[-1]
-
-        # Only process if last message is an AIMessage with tool_calls
-        if not (
-            isinstance(last_message, AIMessage)
-            and hasattr(last_message, "tool_calls")
-            and last_message.tool_calls
-        ):
-            if self.verbose:
-                self.console.print(
-                    "[yellow dim]Last message doesn't have tool_calls, skipping.[/yellow dim]"
-                )
-            return state  # Last message doesn't have tool_calls
-
-        # Execute tools using the ToolNode's invoke method instead of calling it directly
-        try:
-            # Find the tool calls in the last message
-            tool_calls = last_message.tool_calls
-            tool_results = []
-
-            for tool_call in tool_calls:
-                tool_call_id = tool_call.get("id")
-                function_name = tool_call.get("name")
-                function_args = tool_call.get("args")
-
-                if not function_name or not tool_call_id:
-                    if self.verbose:
-                        self.console.print(
-                            f"[yellow dim]Incomplete tool call: {tool_call}[/yellow dim]"
-                        )
-                    continue
-
-                # Find the matching tool
-                matching_tool = None
-                for tool in self.tools:
-                    if tool.name == function_name:
-                        matching_tool = tool
-                        break
-
-                if not matching_tool:
-                    if self.verbose:
-                        self.console.print(
-                            f"[yellow dim]No matching tool found for: {function_name}[/yellow dim]"
-                        )
-                    continue
-
-                # Parse arguments if needed
-                try:
-                    if isinstance(function_args, str):
-                        import json
-
-                        args = json.loads(function_args)
-                    else:
-                        args = function_args
-                except Exception as e:
-                    if self.verbose:
-                        self.console.print(
-                            f"[red dim]Error parsing arguments: {e}[/red dim]"
-                        )
-                    args = {}
-
-                # Execute the tool
-                try:
-                    if self.verbose:
-                        self.console.print(
-                            f"[dim]Executing tool {function_name} with args: {args}[/dim]"
-                        )
-                    tool_result = matching_tool.run(args)
-
-                    # Convert result to JSON string before creating ToolMessage
-                    # MODIFIED: Import json locally here
-                    import json
-
-                    if isinstance(tool_result, (list, dict)):
-                        content_str = json.dumps(tool_result)
-                    else:
-                        content_str = str(tool_result)
-
-                    # Create a ToolMessage with the stringified result
-                    tool_message = ToolMessage(
-                        content=content_str,  # Use the stringified content
-                        name=function_name,
-                        tool_call_id=tool_call_id,
-                    )
-                    tool_results.append(tool_message)
-
-                    if self.verbose:
-                        self.console.print(
-                            f"[green dim]Tool {function_name} executed successfully.[/green dim]"
-                        )
-                        # If finish_workflow tool was called, preview the output in verbose mode
-                        if function_name == "finish_workflow" and isinstance(
-                            tool_result, str
-                        ):
-                            self.console.print(
-                                "[dim]Preview of Markdown-formatted answer:[/dim]"
-                            )
-                            preview = (
-                                tool_result[:200] + "..."
-                                if len(tool_result) > 200
-                                else tool_result
-                            )
-                            self.console.print(f"[dim]{preview}[/dim]")
-
-                except Exception as e:
-                    if self.verbose:
-                        self.console.print(
-                            f"[red dim]Error executing tool {function_name}: {e}[/red dim]"
-                        )
-                    # MODIFIED: Re-raise the exception instead of creating an error message
-                    raise e
-                    # OLD CODE:
-                    # error_msg = f"Error executing {function_name}: {str(e)}"
-                    # tool_message = ToolMessage(
-                    #     content=error_msg, name=function_name, tool_call_id=tool_call_id
-                    # )
-                    # tool_results.append(tool_message)
-
-            # Update state with tool results (only if no exceptions occurred)
-            if tool_results:
-                updated_messages = state["messages"] + tool_results
-                updated_state = dict(state)
-                updated_state["messages"] = updated_messages
-
-                if self.verbose:
-                    self.console.print(
-                        f"[green dim]Added {len(tool_results)} tool messages to state.[/green dim]"
-                    )
-
-                return updated_state
-            else:
-                if self.verbose:
-                    self.console.print(
-                        "[yellow dim]No tool results generated.[/yellow dim]"
-                    )
-                return state
-
-        except Exception as e:
-            if self.verbose:
-                self.console.print(f"[red dim]Error in tool execution: {e}[/red dim]")
-            # Return state unchanged on error
-            return state
-
-
+# --- Tool Definitions ---
 class Agent:
     """Agent for interacting with dbt projects using an agentic workflow."""
 
@@ -449,96 +148,160 @@ class Agent:
         # Call setup() on the checkpointer instance
         self.memory.setup()
 
-        # Compile the graph
+        # Define tools and then compile the graph
+        self._define_tools()
         self.graph_app = self._build_graph()
+
+    def _define_tools(self):
+        """Define the tools used by the agent."""
+
+        @tool(args_schema=SearchModelsInput)
+        def search_dbt_models(query: str) -> List[Dict[str, Any]]:
+            """Searches for relevant dbt models based on the query.
+            Use this tool iteratively to find dbt models that can help answer the user's question.
+            Provide a concise, targeted query focusing on the *specific information* needed next.
+            Analyze the results: if the found models are insufficient, call this tool again with a *refined* query.
+            If you have enough information or have reached the search limit, call 'finish_workflow'.
+            Do not use this tool if you have already found sufficient models or reached the search limit.
+            """
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: search_dbt_models(query='{query}')[/bold magenta]"
+                )
+            self.console.print(
+                f"[bold blue]🔍 Searching models relevant to: '{query}'[/bold blue]"
+            )
+
+            search_results = self.vector_store.search_models(query=query, n_results=5)
+            newly_added_model_details = []
+
+            if not search_results:
+                if self.verbose:
+                    self.console.print(
+                        "[dim] -> No models found by vector store for this query.[/dim]"
+                    )
+                return []  # Return empty list
+
+            for result in search_results:
+                model_name = result["model_name"]
+                similarity = result.get("similarity_score", 0)
+
+                if isinstance(similarity, (int, float)) and similarity > 0.3:
+                    model = self.model_storage.get_model(model_name)
+                    if model:
+                        model_dict = model.to_dict()
+                        model_dict["search_score"] = similarity
+                        newly_added_model_details.append(model_dict)
+                        if self.verbose:
+                            self.console.print(
+                                f"[dim] -> Found relevant new model: {model_name} (Score: {similarity:.2f})[/dim]"
+                            )
+
+            if not newly_added_model_details and self.verbose:
+                self.console.print(
+                    "[dim] -> Vector store found models, but they were already known or below threshold.[/dim]"
+                )
+
+            # Return the list of newly found model details (dictionaries)
+            return newly_added_model_details
+
+        @tool(args_schema=SearchFeedbackInput)
+        def search_past_feedback(query: str) -> List[Any]:
+            """Searches for feedback on previously asked similar questions.
+            Use this ONCE at the beginning of the workflow if the user's question might have been asked before.
+            Provide the original user question as the query.
+            The tool returns a summary of relevant feedback found."""
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: search_past_feedback(query='{query}') [/bold magenta]"
+                )
+
+            if not (
+                self.question_storage
+                and hasattr(self.question_storage, "_get_embedding")
+                and hasattr(self.question_storage, "openai_client")
+                and self.question_storage.openai_client is not None
+            ):
+                if self.verbose:
+                    self.console.print(
+                        "[yellow dim] -> Feedback storage not configured or embedding client unavailable.[/yellow dim]"
+                    )
+                return []  # Return empty list
+
+            if self.verbose:
+                self.console.print("[blue]🔍 Checking for feedback...[/blue]")
+
+            try:
+                question_embedding = self.question_storage._get_embedding(query)
+                if not question_embedding:
+                    if self.verbose:
+                        self.console.print(
+                            "[yellow dim] -> Could not generate embedding for feedback search.[/yellow dim]"
+                        )
+                    return []  # Return empty list
+
+                relevant_feedback_items = (
+                    self.question_storage.find_similar_questions_with_feedback(
+                        query_embedding=question_embedding,
+                        limit=3,
+                        similarity_threshold=0.75,
+                    )
+                )
+
+                if not relevant_feedback_items:
+                    if self.verbose:
+                        self.console.print("[dim] -> No relevant feedback found.[/dim]")
+                    return []  # Return empty list
+
+                if self.verbose:
+                    self.console.print(
+                        f"[dim] -> Found {len(relevant_feedback_items)} relevant feedback item(s).[/dim]"
+                    )
+
+                # Return the list of feedback items directly
+                return relevant_feedback_items
+
+            except Exception as e:
+                logger.error(
+                    f"Error during feedback search: {e}", exc_info=self.verbose
+                )
+                # Return empty list on error, the ToolNode might add an error message to history anyway
+                return []
+
+        @tool(args_schema=FinishWorkflowInput)
+        def finish_workflow(final_answer: str) -> str:
+            """Concludes the workflow and provides the final answer to the user.
+            Use this tool ONLY when you have gathered all necessary information from 'search_dbt_models',
+            considered any relevant feedback from 'search_past_feedback',
+            and are ready to provide the complete, final answer (including SQL query and explanation).
+            Format your answer using Markdown for improved readability:
+            - Use headings (# and ##) to organize different sections
+            - Put SQL code in code blocks with ```sql and ```
+            - Use bullet points (-) for listing models or key points
+            - Bold important information with **
+            Ensure the answer directly addresses the user's original question."""
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: finish_workflow(final_answer='{final_answer[:100]}...')",
+                )
+            # This function primarily acts as a signal, returning the final answer
+            return final_answer
+
+        # Store the tools as instance attributes
+        self._tools = [search_dbt_models, search_past_feedback, finish_workflow]
 
     # --- LangGraph Graph Construction ---
     def _build_graph(self):
         """Builds the LangGraph StateGraph."""
         workflow = StateGraph(AgentState)
 
-        # --- Create Tool Instances ---
-        # Use functools.partial to inject dependencies into the standalone logic functions
-        # We pass the *current state's* known model names to the search logic
-        # Note: Accessing state within partial might be tricky if state changes dynamically
-        # in ways not reflected by simple dependency injection. Passing state directly or
-        # handling it purely in update_state_node might be more robust.
-        # Let's adjust update_state_node to handle uniqueness instead of passing current_model_names here.
-
-        # Tool for searching dbt models
-        search_models_tool_partial = functools.partial(
-            _search_dbt_models_logic,
-            console=self.console,
-            verbose=self.verbose,
-            vector_store=self.vector_store,
-            model_storage=self.model_storage,
-        )
-        # Decorate the partial function
-        search_dbt_models_tool_decorated = tool(
-            "search_dbt_models", args_schema=SearchModelsInput
-        )(search_models_tool_partial)
-        # Add description (docstring from original logic function is not automatically picked up by partial)
-        search_dbt_models_tool_decorated.description = """Searches for relevant dbt models based on the query.
-        Use this tool iteratively to find dbt models that can help answer the user's question.
-        Provide a concise, targeted query focusing on the *specific information* needed next.
-        Analyze the results: if the found models are insufficient, call this tool again with a *refined* query.
-        If you have enough information or have reached the search limit, call 'finish_workflow'.
-        Do not use this tool if you have already found sufficient models or reached the search limit."""
-
-        # Tool for searching feedback
-        search_feedback_tool_partial = functools.partial(
-            _search_feedback_logic,
-            console=self.console,
-            verbose=self.verbose,
-            question_storage=self.question_storage,
-        )
-        search_feedback_tool_decorated = tool(
-            "search_past_feedback", args_schema=SearchFeedbackInput
-        )(search_feedback_tool_partial)
-        search_feedback_tool_decorated.description = """Searches for feedback on previously asked similar questions.
-        Use this ONCE at the beginning of the workflow if the user's question might have been asked before.
-        Provide the original user question as the query.
-        The tool returns a summary of relevant feedback found."""
-
-        # Tool for finishing the workflow
-        finish_workflow_tool_partial = functools.partial(
-            _finish_workflow_logic,
-            console=self.console,
-            verbose=self.verbose,
-        )
-        finish_workflow_tool_decorated = tool(
-            "finish_workflow", args_schema=FinishWorkflowInput
-        )(finish_workflow_tool_partial)
-        finish_workflow_tool_decorated.description = """Concludes the workflow and provides the final answer to the user.
-        Use this tool ONLY when you have gathered all necessary information from 'search_dbt_models',
-        considered any relevant feedback from 'search_past_feedback',
-        and are ready to provide the complete, final answer (including SQL query and explanation).
-        Format your answer using Markdown for improved readability:
-        - Use headings (# and ##) to organize different sections
-        - Put SQL code in code blocks with ```sql and ```
-        - Use bullet points (-) for listing models or key points
-        - Bold important information with **
-        Ensure the answer directly addresses the user's original question."""
-
-        # --- Define Tools List for LangGraph ---
-        tools = [
-            search_dbt_models_tool_decorated,
-            search_feedback_tool_decorated,
-            finish_workflow_tool_decorated,
-        ]
-
-        # Store tools on instance if needed elsewhere (e.g., for _get_agent_llm)
-        self._tools = tools
-        # --- End Tool Creation ---
-
-        # Instantiate the custom safe tool executor instead of standard ToolNode
-        tool_node = SafeToolExecutor(tools, verbose=self.verbose, console=self.console)
+        # MODIFIED: Use standard ToolNode instead of SafeToolExecutor
+        tool_node = ToolNode(self._tools, handle_tool_errors=True)
 
         # Add nodes
         workflow.add_node("agent", self.agent_node)
-        # MODIFIED: Use the custom Safe Tool Executor for tool execution
         workflow.add_node("tools", tool_node)
-        # ADDED: Add node for custom state updates after tools run
+        # Add node for state updates after tools run
         workflow.add_node("update_state", self.update_state_node)
 
         # Set entry point
@@ -556,11 +319,9 @@ class Agent:
             },
         )
 
-        # MODIFIED: Define edges for the new flow: tools -> update_state -> agent
-        # workflow.add_edge("tools", "agent") # Old edge
+        # Define edges for flow: tools -> update_state -> agent
         workflow.add_edge("tools", "update_state")
         workflow.add_edge("update_state", "agent")
-        # END MODIFIED
 
         # Compile the graph with memory
         return workflow.compile(checkpointer=self.memory)
@@ -576,16 +337,10 @@ class Agent:
 
     def _get_agent_llm(self):
         """Helper to get the LLM with tools bound."""
-        # Use the tools stored on the instance
-        if not hasattr(self, "_tools"):
-            raise ValueError(
-                "Tools not initialized in _build_graph before calling _get_agent_llm"
-            )
-
         chat_client_instance = self.llm.chat_client
 
         if hasattr(chat_client_instance, "bind_tools"):
-            return chat_client_instance.bind_tools(self._tools)  # Use self._tools
+            return chat_client_instance.bind_tools(self._tools)
         else:
             logger.warning(
                 "LLM chat client does not have 'bind_tools'. Tool calling might not work as expected."
@@ -594,175 +349,146 @@ class Agent:
 
     def agent_node(self, state: AgentState) -> Dict[str, Any]:
         """Calls the agent LLM to decide the next action or generate the final answer."""
+        # === ADD LOGGING HERE ===
+        if self.verbose:
+            incoming_messages = state.get("messages", [])
+            self.console.print(
+                f"[bold yellow]>>> Entering agent_node <<<[/bold yellow]"
+            )
+            self.console.print(
+                f"[dim]Received {len(incoming_messages)} messages in state:[/dim]"
+            )
+            for i, msg in enumerate(incoming_messages):
+                msg_type = type(msg).__name__
+                content_preview = (
+                    str(msg.content)[:50] + "..."
+                    if len(str(msg.content)) > 50
+                    else str(msg.content)
+                )
+                tool_calls_info = (
+                    " [bold]with tool_calls[/bold]"
+                    if hasattr(msg, "tool_calls") and msg.tool_calls
+                    else ""
+                )
+                tool_id_info = (
+                    f" [bold]for tool_call_id: {msg.tool_call_id}[/bold]"
+                    if hasattr(msg, "tool_call_id") and msg.tool_call_id
+                    else ""
+                )
+                self.console.print(
+                    f"  State[{i}] {msg_type}{tool_calls_info}{tool_id_info}: {content_preview}"
+                )
+        # === END LOGGING ===
+
         if self.verbose:
             self.console.print("[bold green]\n--- Calling Agent Model ---[/bold green]")
-            self.console.print(f"[dim]Current Messages: {state['messages']}[/dim]")
             self.console.print(
-                f"[dim]Found Models: {len(state['accumulated_model_names'])} ({state.get('search_model_calls', 0)} searches used)[/dim]"
+                f"[dim]Current Models: {len(state['accumulated_model_names'])} ({state.get('search_model_calls', 0)} searches used)[/dim]"
             )
             self.console.print(
                 f"[dim]Found Feedback: {len(state['relevant_feedback'])}[/dim]"
             )
 
-        # Create a copy of messages and ensure proper ordering for OpenAI
-        messages_for_llm = []
+        # Get the current messages directly from state
+        messages = state.get("messages", [])
 
-        # Ensure we have a valid message sequence for the OpenAI API by reconstructing
-        # the messages array with proper tool call and tool message pairings
-        pending_tool_calls = (
-            {}
-        )  # Maps tool_call_id to the message index that contains it
-
-        # First pass: Find tool calls and track them
-        for i, msg in enumerate(state["messages"]):
-            if (
-                isinstance(msg, AIMessage)
-                and hasattr(msg, "tool_calls")
-                and msg.tool_calls
-            ):
-                for tool_call in msg.tool_calls:
-                    tool_call_id = tool_call.get("id")
-                    if tool_call_id:
-                        pending_tool_calls[tool_call_id] = i
-
-        # Second pass: Construct the properly ordered message array
-        i = 0
-        while i < len(state["messages"]):
-            msg = state["messages"][i]
-
-            # Add the current message
-            messages_for_llm.append(msg)
-
-            # If this is an AIMessage with tool_calls, find and add all corresponding tool messages
-            if (
-                isinstance(msg, AIMessage)
-                and hasattr(msg, "tool_calls")
-                and msg.tool_calls
-            ):
-                # Collect all matching tool messages for this AI message's tool calls
-                tool_message_indices = []
-                for tool_call in msg.tool_calls:
-                    tool_call_id = tool_call.get("id")
-                    if not tool_call_id:
-                        continue
-
-                    # Find any ToolMessages that respond to this tool_call_id
-                    for j in range(i + 1, len(state["messages"])):
-                        response_msg = state["messages"][j]
-                        if (
-                            isinstance(response_msg, ToolMessage)
-                            and response_msg.tool_call_id == tool_call_id
-                        ):
-                            if j not in tool_message_indices:
-                                tool_message_indices.append(j)
-                                # Remove this tool_call_id from pending since we found its response
-                                pending_tool_calls.pop(tool_call_id, None)
-
-                # Add tool messages in order right after the AI message with tool calls
-                for j in sorted(tool_message_indices):
-                    messages_for_llm.append(state["messages"][j])
-
-                # Skip all these tool messages in the outer loop since we've added them here
-                i = max(tool_message_indices) + 1 if tool_message_indices else i + 1
-            else:
-                i += 1
-
-        # Check if there are any pending tool calls without responses
-        if pending_tool_calls and self.verbose:
-            self.console.print(
-                f"[yellow dim]Warning: {len(pending_tool_calls)} tool calls have no matching tool message responses.[/yellow dim]"
-            )
-            # Only send complete pairs to avoid API errors
-            # Filter out messages with pending tool calls
-            complete_messages = []
-            for msg in messages_for_llm:
-                if (
-                    isinstance(msg, AIMessage)
-                    and hasattr(msg, "tool_calls")
-                    and msg.tool_calls
-                ):
-                    # Check if any tool calls in this message are still pending
-                    has_pending = False
-                    for tool_call in msg.tool_calls:
-                        tool_call_id = tool_call.get("id")
-                        if tool_call_id in pending_tool_calls:
-                            has_pending = True
-                            break
-
-                    if not has_pending:
-                        complete_messages.append(msg)
-                else:
-                    complete_messages.append(msg)
-
-            messages_for_llm = complete_messages
-
-        # Prepare messages for the LLM, potentially adding guidance
-        current_search_calls = state.get("search_model_calls", 0)
-        remaining_searches = self.max_model_searches - current_search_calls
-
-        guidance_message: Optional[BaseMessage] = None
-        if remaining_searches > 0:
-            guidance_message = SystemMessage(
-                content=(
-                    f"Guidance: You have used the model search tool {current_search_calls} times. "
-                    f"You have {remaining_searches} remaining searches for dbt models. "
-                    f"Current models found: {len(state['accumulated_model_names'])}. "
-                    f"Original question: '{state['original_question']}'. "
-                    f"If the current models are insufficient to answer the question comprehensively, "
-                    f"use 'search_dbt_models' again with a *refined, specific* query focusing on the missing information. "
-                    f"Otherwise, if you have enough information, use 'finish_workflow' to provide the final answer (SQL query + explanation)."
-                )
-            )
-        else:
-            guidance_message = SystemMessage(
-                content=(
-                    f"Guidance: You have reached the maximum limit of {self.max_model_searches} model searches. "
-                    f"You must now synthesize an answer using the models found ({len(state['accumulated_model_names'])} models: {', '.join(state['accumulated_model_names']) or 'None'}) "
-                    f"and call 'finish_workflow'. Provide the final SQL query and explanation. Do not call 'search_dbt_models' again."
-                )
-            )
-
-        # Append the guidance message to the end. This ensures the AI(tool_calls) -> Tool sequence is maintained.
-        if guidance_message:
-            messages_for_llm.append(guidance_message)
-
-        # If we have zero or just one system message, add the original system message and user question
-        # This ensures we have at least a coherent start to the conversation
-        if len(messages_for_llm) <= 1 or all(
-            isinstance(msg, SystemMessage) for msg in messages_for_llm
-        ):
-            # Reset messages with the original system message and user question
+        # If we don't have any messages (first call), start with the original question
+        if not messages:
             messages_for_llm = [
                 SystemMessage(
                     content="You are an AI assistant specialized in analyzing dbt projects to answer questions."
                 ),
                 HumanMessage(content=state["original_question"]),
             ]
-            if guidance_message:
-                messages_for_llm.append(guidance_message)
+        else:
+            # Use the messages from state for subsequent calls
+            messages_for_llm = list(messages)  # Make a copy
+
+        # Add guidance as a system message (only if not already the last message type)
+        current_search_calls = state.get("search_model_calls", 0)
+        remaining_searches = self.max_model_searches - current_search_calls
+
+        guidance_content = ""
+        if remaining_searches > 0:
+            guidance_content = (
+                f"Guidance: You have used the model search tool {current_search_calls} times. "
+                f"You have {remaining_searches} remaining searches for dbt models. "
+                f"Current models found: {len(state['accumulated_model_names'])}. "
+                f"Original question: '{state['original_question']}'. "
+                f"If the current models are insufficient to answer the question comprehensively, "
+                f"use 'search_dbt_models' again with a *refined, specific* query focusing on the missing information. "
+                f"Otherwise, if you have enough information, use 'finish_workflow' to provide the final answer (SQL query + explanation)."
+            )
+        else:
+            guidance_content = (
+                f"Guidance: You have reached the maximum limit of {self.max_model_searches} model searches. "
+                f"You must now synthesize an answer using the models found ({len(state['accumulated_model_names'])} models: "
+                f"{', '.join(state['accumulated_model_names']) or 'None'}) "
+                f"and call 'finish_workflow'. Provide the final SQL query and explanation. Do not call 'search_dbt_models' again."
+            )
+
+        # Add guidance SystemMessage if needed
+        if not (messages_for_llm and isinstance(messages_for_llm[-1], HumanMessage)):
+            # Avoid adding duplicate guidance if the last message already provides it
+            if not (
+                messages_for_llm
+                and isinstance(messages_for_llm[-1], SystemMessage)
+                and messages_for_llm[-1].content.startswith("Guidance:")
+            ):
+                messages_for_llm.append(SystemMessage(content=guidance_content))
 
         agent_llm = self._get_agent_llm()
 
         if self.verbose:
-            # Log the exact messages being sent
             self.console.print(
-                f"[blue dim]Messages being sent to LLM:\n{messages_for_llm}[/blue dim]"
+                f"[blue dim]Sending {len(messages_for_llm)} messages to LLM with guidance[/blue dim]"
             )
+            # Log message structure *before* sending (this includes guidance)
+            self.console.print("[dim]Message structure *before* sending to LLM:[/dim]")
+            for i, msg in enumerate(messages_for_llm):
+                msg_type = type(msg).__name__
+                content_preview = (
+                    str(msg.content)[:50] + "..."
+                    if len(str(msg.content)) > 50
+                    else str(msg.content)
+                )
+                tool_calls_info = ""
+                tool_id_info = ""
+
+                if hasattr(msg, "tool_calls") and msg.tool_calls:
+                    tool_calls_info = (
+                        f" [bold]with {len(msg.tool_calls)} tool_calls[/bold]"
+                    )
+
+                if hasattr(msg, "tool_call_id") and msg.tool_call_id:
+                    tool_id_info = (
+                        f" [bold]responding to tool_call_id: {msg.tool_call_id}[/bold]"
+                    )
+
+                self.console.print(
+                    f"  [{i}] {msg_type}{tool_calls_info}{tool_id_info}: {content_preview}"
+                )
+
+            # Removed custom verification call
+            # self._verify_message_structure(messages_for_llm)
 
         try:
             response = agent_llm.invoke(messages_for_llm)
+
+            if self.verbose:
+                self.console.print(
+                    f"[dim]Agent Response: {response.content[:100]}...[/dim]"
+                )
+                if hasattr(response, "tool_calls") and response.tool_calls:
+                    self.console.print(f"[dim]Tool calls: {response.tool_calls}[/dim]")
+
+            # Return *only* the new response to be appended by LangGraph
+            return {"messages": [response]}
         except Exception as e:
             logger.error(f"Error invoking agent LLM: {e}", exc_info=self.verbose)
-            # Add the error back into the message history to potentially inform subsequent steps or final output
-            error_message = f"LLM invocation failed: {str(e)}"
-            return {
-                "messages": state["messages"] + [AIMessage(content=error_message)]
-            }  # Return an AI message indicating failure
-
-        if self.verbose:
-            self.console.print(f"[dim]Agent Response: {response}[/dim]")
-
-        return {"messages": state["messages"] + [response]}
+            error_message = AIMessage(content=f"LLM invocation failed: {str(e)}")
+            # Return the error message to be appended
+            return {"messages": [error_message]}
 
     def update_state_node(self, state: AgentState) -> Dict[str, Any]:
         """Updates AgentState based on the results from the most recent tool call."""
@@ -782,12 +508,13 @@ class Agent:
                 )
             return updates
 
-        # Find all ToolMessages in the last batch (might be multiple if several tools were called)
-        # We only want to process ToolMessages that haven't been processed before
+        # Find all recent ToolMessages - the standard ToolNode would have added these
+        # We're looking for ToolMessages that haven't been processed yet
         recent_tool_messages = []
+        i = len(messages) - 1
+        last_assistant_with_tool_calls = None
 
         # Start from the end and work backwards to find the most recent tool messages
-        i = len(messages) - 1
         while i >= 0:
             msg = messages[i]
             if isinstance(msg, ToolMessage):
@@ -799,6 +526,7 @@ class Agent:
                 and msg.tool_calls
             ):
                 # We've found the AIMessage that called these tools, stop here
+                last_assistant_with_tool_calls = msg
                 break
             i -= 1
 
@@ -813,56 +541,69 @@ class Agent:
             self.console.print(
                 f"[dim] -> Processing {len(recent_tool_messages)} recent tool messages[/dim]"
             )
+            if last_assistant_with_tool_calls:
+                self.console.print(
+                    f"[dim] -> Found corresponding assistant message with tool_calls (id: {id(last_assistant_with_tool_calls)})[/dim]"
+                )
+                # Log tool call IDs from the assistant message
+                if hasattr(last_assistant_with_tool_calls, "tool_calls"):
+                    tool_call_ids = [
+                        tc["id"]
+                        for tc in last_assistant_with_tool_calls.tool_calls
+                        if "id" in tc
+                    ]
+                    self.console.print(
+                        f"[dim] -> Tool call IDs from assistant: {tool_call_ids}[/dim]"
+                    )
+                    # Check if all tool messages have matching tool_call_ids
+                    tool_message_ids = [
+                        tm.tool_call_id
+                        for tm in recent_tool_messages
+                        if hasattr(tm, "tool_call_id")
+                    ]
+                    self.console.print(
+                        f"[dim] -> Tool call IDs from tool messages: {tool_message_ids}[/dim]"
+                    )
+            else:
+                self.console.print(
+                    f"[yellow dim] -> WARNING: Could not find corresponding assistant message with tool_calls[/yellow dim]"
+                )
 
         # Process each tool message
         for tool_message in recent_tool_messages:
             tool_name = tool_message.name
-            tool_content = (
+            content = (
                 tool_message.content
-            )  # This is the direct return value from the tool logic
-            tool_call_id = tool_message.tool_call_id  # Keep for matching if needed
+            )  # This might be stringified JSON for some tools
 
             if self.verbose:
-                self.console.print(
-                    f"[dim] -> Processing result from tool '{tool_name}' (call_id: {tool_call_id})[/dim]"
-                )
-                # Be careful logging tool_content if it can be very large
-                content_summary = str(tool_content)[:200] + (
-                    "..." if len(str(tool_content)) > 200 else ""
+                content_summary = str(content)[:200] + (
+                    "..." if len(str(content)) > 200 else ""
                 )
                 self.console.print(
-                    f"[dim] -> Tool content (summary): {content_summary}[/dim]"
+                    f"[dim] -> Processing result from tool '{tool_name}': {content_summary}[/dim]"
                 )
-
-            # Ensure the ToolMessage is associated with a valid preceding message with tool_calls
-            # Find the corresponding AIMessage with tool_calls matching this tool_call_id
-            found_matching_call = False
-            for i, msg in enumerate(messages):
-                if (
-                    isinstance(msg, AIMessage)
-                    and hasattr(msg, "tool_calls")
-                    and msg.tool_calls
-                ):
-                    for tool_call in msg.tool_calls:
-                        if tool_call.get("id") == tool_call_id:
-                            found_matching_call = True
-                            break
-                if found_matching_call:
-                    break
-
-            if not found_matching_call and self.verbose:
-                self.console.print(
-                    f"[yellow dim]Warning: ToolMessage with id {tool_call_id} has no matching preceding message with tool_calls.[/yellow dim]"
-                )
-                # Continue processing the tool content, but the warning helps debugging
 
             # --- Process based on which tool was called ---
 
             if tool_name == "search_dbt_models":
-                # Tool content should be a list of newly found model dictionaries
-                newly_found_models = (
-                    tool_content if isinstance(tool_content, list) else []
-                )
+                # Parse the content if it's a stringified list
+                try:
+                    if isinstance(content, str):
+                        import json
+
+                        newly_found_models = json.loads(content)
+                    else:
+                        newly_found_models = content
+
+                    if not isinstance(newly_found_models, list):
+                        newly_found_models = []
+                except Exception as e:
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow dim]Error parsing search_dbt_models result: {e}[/yellow dim]"
+                        )
+                    newly_found_models = []
 
                 # Increment search counter regardless of finding new models
                 current_calls = state.get("search_model_calls", 0)
@@ -893,69 +634,74 @@ class Agent:
                         updates["accumulated_model_names"] = current_model_names
                         if self.verbose:
                             self.console.print(
-                                f"[dim] -> Updated state with {len(unique_new_models)} new models. Total models: {len(current_model_names)}. Search calls: {updates['search_model_calls']}"
+                                f"[dim] -> Updated state with {len(unique_new_models)} new models. Total: {len(current_model_names)}. Search calls: {updates['search_model_calls']}"
                             )
                     elif self.verbose:
                         self.console.print(
-                            f"[dim] -> search_dbt_models ran, but no *new* unique models were found. Search calls: {updates['search_model_calls']}"
+                            f"[dim] -> No new unique models found. Search calls: {updates['search_model_calls']}"
                         )
                 elif self.verbose:
                     self.console.print(
-                        f"[dim] -> search_dbt_models ran and returned no models. Search calls: {updates['search_model_calls']}"
+                        f"[dim] -> No models returned. Search calls: {updates['search_model_calls']}"
                     )
 
             elif tool_name == "search_past_feedback":
-                # Tool content should be a list of feedback items
-                newly_found_feedback = (
-                    tool_content if isinstance(tool_content, list) else []
-                )
+                # Parse the content if it's a stringified list
+                try:
+                    if isinstance(content, str):
+                        import json
+
+                        newly_found_feedback = json.loads(content)
+                    else:
+                        newly_found_feedback = content
+
+                    if not isinstance(newly_found_feedback, list):
+                        newly_found_feedback = []
+                except Exception as e:
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow dim]Error parsing feedback result: {e}[/yellow dim]"
+                        )
+                    newly_found_feedback = []
 
                 if newly_found_feedback:
                     current_feedback = state.get("relevant_feedback", [])
-                    # Basic check for duplicates based on a potential ID or hash if available
-                    # For now, just append; consider adding more robust duplicate checking if needed
                     updates["relevant_feedback"] = (
                         current_feedback + newly_found_feedback
                     )
                     if self.verbose:
                         self.console.print(
-                            f"[dim] -> Updated state with {len(newly_found_feedback)} new feedback items. Total feedback: {len(updates['relevant_feedback'])}"
+                            f"[dim] -> Updated state with {len(newly_found_feedback)} new feedback items."
                         )
                 elif self.verbose:
-                    self.console.print(
-                        "[dim] -> search_past_feedback ran but found no feedback."
-                    )
+                    self.console.print("[dim] -> No feedback found.")
 
             elif tool_name == "finish_workflow":
                 # Tool content should be the final answer string
-                final_answer_from_tool = (
-                    tool_content if isinstance(tool_content, str) else None
-                )
-
-                if final_answer_from_tool:
-                    updates["final_answer"] = final_answer_from_tool
+                if content:
+                    updates["final_answer"] = content
                     if self.verbose:
                         self.console.print(
-                            f"[dim] -> Updated state with final answer signal.[/dim]"
+                            f"[dim] -> Updated state with final answer.[/dim]"
                         )
                         # Preview the Markdown formatting in verbose mode
                         self.console.print(
                             "[dim] -> Markdown preview of final answer:[/dim]"
                         )
-                        preview_length = min(300, len(final_answer_from_tool))
-                        preview = final_answer_from_tool[:preview_length]
-                        if len(final_answer_from_tool) > preview_length:
+                        preview_length = min(300, len(content))
+                        preview = content[:preview_length]
+                        if len(content) > preview_length:
                             preview += "..."
                         self.console.print(f"[cyan dim]{preview}[/cyan dim]")
                 elif self.verbose:
                     self.console.print(
-                        f"[yellow dim] -> finish_workflow tool ran but content was not a string: {tool_content}[/yellow dim]"
+                        f"[yellow dim] -> finish_workflow tool ran but returned empty content[/yellow dim]"
                     )
 
             else:
                 if self.verbose:
                     self.console.print(
-                        f"[yellow dim]Warning: Unrecognized tool name '{tool_name}' in update_state_node.[/yellow dim]"
+                        f"[yellow dim]Warning: Unrecognized tool name '{tool_name}'[/yellow dim]"
                     )
 
         # End of processing all tool messages
@@ -974,11 +720,14 @@ class Agent:
         )
 
         # Generate a unique ID for this conversation thread
-        # In a real application, you might use user IDs, session IDs, etc.
         thread_id = str(uuid.uuid4())
         config = {"configurable": {"thread_id": thread_id}}
 
-        # --- Add Initial System Prompt ---
+        if self.verbose:
+            self.console.print(f"[dim]Generated thread ID: {thread_id}[/dim]")
+            self.console.print("[dim]Initializing LangGraph workflow with memory[/dim]")
+
+        # Initial system prompt - important for guiding the LLM
         initial_system_prompt = """You are an AI assistant specialized in analyzing dbt projects to answer questions.
 Your primary goal is to understand the user's question, find the relevant dbt models using the 'search_dbt_models' tool, consider past feedback with 'search_past_feedback' if applicable, and then generate a final answer.
 The final answer, provided via the 'finish_workflow' tool, MUST include:
@@ -993,12 +742,10 @@ Format your answer using Markdown for improved readability:
 - Bold important information with **
 
 Use the tools iteratively. Start by searching for models relevant to the core concepts in the question. Refine your search if the initial results are insufficient. Only use 'finish_workflow' when you have enough information to construct the final SQL query and explanation."""
-        # --- End Initial System Prompt ---
 
         # Initial state
         initial_state = AgentState(
             original_question=question,
-            # Prepend the system prompt and then add the user question
             messages=[
                 SystemMessage(content=initial_system_prompt),
                 HumanMessage(content=question),
@@ -1006,104 +753,71 @@ Use the tools iteratively. Start by searching for models relevant to the core co
             accumulated_models=[],
             accumulated_model_names=set(),
             relevant_feedback=[],
-            search_model_calls=0,  # Initialize counter
-            search_queries_tried=set(),  # We might not need this if LLM handles redundant calls
+            search_model_calls=0,
+            search_queries_tried=set(),
             final_answer=None,
-            conversation_id=None,  # Will be set after recording
+            conversation_id=None,
         )
 
-        final_state = None
+        if self.verbose:
+            self.console.print(
+                "[dim]Initial state prepared with system prompt and question[/dim]"
+            )
+
         try:
-            # Invoke the graph
-            # Stream events for better visibility (optional but recommended)
-            # events = self.graph_app.stream( # Old way
-            #     initial_state, config=config, stream_mode="values"
-            # )
-            # for event in events: # Old way
-            #     # Process events if needed (e.g., print updates)
-            #     # The final state is the last event yielded
-            #     final_state = event
-            #     if self.verbose:
-            #         # Print the latest state or specific updates
-            #         # (Be careful about printing too much, especially messages)
-            #         self.console.print(
-            #             f"[dim]Graph State Update: Keys={list(final_state.keys())}\[/dim]" # Old, had syntax warning
-            #         )
-            #         # Check if final answer is set
-            #         if final_state.get("final_answer"):
-            #             self.console.print(
-            #                 "[green dim] -> Final answer received in state.[/green dim]"
-            #             )
+            # Get the final state by executing the graph
+            final_state = self.graph_app.invoke(initial_state, config=config)
 
-            # New way: Consume the stream into a list first
-            all_states = []
-            for state in self.graph_app.stream(
-                initial_state, config=config, stream_mode="values"
-            ):
-                all_states.append(state)
-                if self.verbose:
-                    # Print the latest state or specific updates
-                    self.console.print(
-                        f"[dim]Graph State Update: Keys={list(state.keys())}[/dim]"  # Corrected syntax warning
-                    )
-                    # Check if final answer is set
-                    if state.get("final_answer"):
-                        self.console.print(
-                            "[green dim] -> Final answer received in state.[/green dim]"
-                        )
-
-            # Check if any states were produced
-            if not all_states:
-                raise Exception("Graph execution finished without returning any state.")
-
-            # The final state is the last one in the list
-            final_state = all_states[-1]
-
-            if final_state is None:
-                raise Exception(
-                    "Graph execution finished without returning a final state."
-                )
-
-            # Extract results from the final state
+            # Extract results
             final_answer = final_state.get(
                 "final_answer", "Agent did not provide a final answer."
             )
             used_model_names = list(final_state.get("accumulated_model_names", set()))
-            conversation_id_from_state = final_state.get(
-                "conversation_id"
-            )  # If set during graph
+            message_count = len(final_state.get("messages", []))
 
             self.console.print("[green]✅ LangGraph workflow finished.[/green]")
 
-            # Pretty print the final answer to the console using Markdown if available
+            if self.verbose:
+                self.console.print(
+                    f"[dim]Final state contains {message_count} messages[/dim]"
+                )
+                self.console.print(
+                    f"[dim]Used {len(used_model_names)} models: {', '.join(used_model_names)}[/dim]"
+                )
+
+            # Pretty print the final answer using Markdown
             if final_answer and isinstance(final_answer, str):
                 self.console.print("\n[bold blue]📝 Final Answer:[/bold blue]")
                 md = Markdown(final_answer)
                 self.console.print(md)
 
-            # Record the final question/answer pair (if storage is configured)
-            conversation_id_recorded = None
+            # Record the final question/answer pair if storage is configured
+            conversation_id = None
             if self.question_storage:
                 try:
-                    # Ensure final_answer is a string before recording
                     answer_to_record = (
                         final_answer
                         if isinstance(final_answer, str)
-                        else "Agent finished without providing a string answer."
+                        else "No answer provided."
                     )
 
-                    conversation_id_recorded = self.question_storage.record_question(
+                    conversation_id = self.question_storage.record_question(
                         question_text=question,
-                        answer_text=answer_to_record,  # Use validated answer
+                        answer_text=answer_to_record,
                         model_names=used_model_names,
                         was_useful=None,  # No feedback yet
                         feedback=None,
                         metadata={
                             "agent_type": "langgraph",
                             "thread_id": thread_id,
-                            # Add other relevant metadata from final_state if needed
                         },
                     )
+
+                    if self.verbose:
+                        self.console.print(
+                            f"[dim]Recorded conversation with ID: {conversation_id}[/dim]"
+                        )
+
                 except Exception as e:
                     logger.error(f"Failed to record question/answer: {e}")
                     self.console.print(
@@ -1114,8 +828,7 @@ Use the tools iteratively. Start by searching for models relevant to the core co
                 "question": question,
                 "final_answer": final_answer,
                 "used_model_names": used_model_names,
-                "conversation_id": conversation_id_recorded
-                or conversation_id_from_state,
+                "conversation_id": conversation_id,
             }
 
         except Exception as e:
@@ -1123,62 +836,14 @@ Use the tools iteratively. Start by searching for models relevant to the core co
                 f"Error during LangGraph workflow execution: {str(e)}",
                 exc_info=self.verbose,
             )
-
-            # Check if this is an OpenAI message ordering error
-            error_str = str(e)
-            if "Invalid parameter: messages with role 'tool'" in error_str:
-                self.console.print(
-                    "[bold red]OpenAI API Message Ordering Error:[/bold red] Invalid message sequence detected."
-                )
-                self.console.print(
-                    "[yellow]This is likely due to a ToolMessage without a preceding message with tool_calls.[/yellow]"
-                )
-                # Print last few messages if verbose and we have a final state
-                if self.verbose and final_state and "messages" in final_state:
-                    messages = final_state["messages"]
-                    last_n = min(5, len(messages))
-                    self.console.print(f"[dim]Last {last_n} messages:[/dim]")
-                    for i, msg in enumerate(messages[-last_n:]):
-                        msg_type = type(msg).__name__
-                        has_tool_calls = hasattr(msg, "tool_calls") and bool(
-                            msg.tool_calls
-                        )
-                        self.console.print(
-                            f"[dim]  [{i}] {msg_type}"
-                            + (f" (with tool_calls)" if has_tool_calls else "")
-                            + f": {str(msg)[:100]}...[/dim]"
-                        )
-            else:
-                self.console.print(
-                    f"[bold red]Error during LangGraph workflow:[/bold red] {str(e)}"
-                )
-
-            # Try to get partial results if available
-            used_models_on_error = (
-                list(final_state.get("accumulated_model_names", set()))
-                if final_state
-                else []
+            self.console.print(
+                f"[bold red]Error during LangGraph workflow:[/bold red] {str(e)}"
             )
-            search_calls_on_error = (
-                final_state.get("search_model_calls", 0) if final_state else 0
-            )
-            error_details = str(e)
-
-            # Log detailed state if verbose
-            if self.verbose and final_state:
-                self.console.print("[bold red]State at time of error:[/bold red]")
-                import pprint
-
-                self.console.print(f"[red dim]{pprint.pformat(final_state)}[/red dim]")
-            elif self.verbose:
-                self.console.print(
-                    "[bold red]No final state available at time of error.[/bold red]"
-                )
 
             return {
                 "question": question,
-                "final_answer": f"An error occurred during the LangGraph process after {search_calls_on_error} model searches: {error_details}",
-                "used_model_names": used_models_on_error,
+                "final_answer": f"An error occurred during the workflow: {str(e)}",
+                "used_model_names": [],
                 "conversation_id": None,
             }
 
