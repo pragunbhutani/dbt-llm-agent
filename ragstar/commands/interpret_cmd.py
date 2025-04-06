@@ -204,7 +204,7 @@ def interpret(
             logger.info(f"Using agentic workflow for {model_name}")
 
             # Get interpretations from the agent - now interpreter
-            result = interpreter.interpret_model(model_name, iterations)
+            result = interpreter.run_interpretation_workflow(model_name)
 
             if not result.get("success", False):
                 logger.error(

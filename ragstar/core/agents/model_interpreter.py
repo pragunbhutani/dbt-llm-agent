@@ -3,13 +3,32 @@
 import logging
 import re
 import yaml
-from typing import Dict, Any, Optional
+import uuid
+from typing import Dict, Any, Optional, List, Set, TypedDict
+from typing_extensions import Annotated
+
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    AIMessage,
+    ToolMessage,
+    SystemMessage,
+)
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.graph.message import add_messages
+from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
+from rich.markdown import Markdown
 
 from ragstar.core.llm.client import LLMClient
 from ragstar.core.llm.prompts import MODEL_INTERPRETATION_PROMPT
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.core.models import ModelTable  # For saving
+from ragstar.utils.cli_utils import get_config_value
 
 logger = logging.getLogger(__name__)
 
@@ -21,635 +40,467 @@ class ModelInterpreter:
         self,
         llm_client: LLMClient,
         model_storage: ModelStorage,
-        vector_store: ModelEmbeddingStorage,  # Needed for re-embedding
+        vector_store: ModelEmbeddingStorage,
         verbose: bool = False,
+        console: Optional["Console"] = None,
+        temperature: float = 0.0,
+        openai_api_key: Optional[str] = None,
+        memory: Optional["PostgresSaver"] = None,
     ):
-        """Initialize the model interpreter.
-
-        Args:
-            llm_client: LLM client for generating text.
-            model_storage: Storage for dbt models.
-            vector_store: Vector store for semantic search and re-embedding.
-            verbose: Whether to print verbose output (currently used mainly for logging).
-        """
         self.llm = llm_client
         self.model_storage = model_storage
         self.vector_store = vector_store
-        self.verbose = verbose  # Keep for logging consistency
+        self.verbose = verbose
+        from rich.console import Console as RichConsole
 
-    def interpret_model(
-        self, model_name: str, max_verification_iterations: int = 1
-    ) -> Dict[str, Any]:
-        """Interpret a model and its columns using an agentic workflow.
+        self.console = console or RichConsole()
+        self.temperature = temperature
 
-        This method implements a step-by-step agentic approach to model interpretation:
-        1. Read the source code of the model to interpret
-        2. Identify upstream models that provide context
-        3. Fetch details of the upstream models
-        4. Create a draft interpretation
-        5. Iteratively verify and refine the interpretation (configurable iterations):
-           - Analyze upstream models' source code directly to ensure all columns are identified
-           - Extract structured recommendations for columns to add, remove, or modify
-           - Refine interpretation based on recommendations until verification passes or iterations complete
-        6. Return final interpretation with column recommendations
+        from ragstar.utils.cli_utils import get_config_value
+        from psycopg_pool import ConnectionPool
+        from langgraph.checkpoint.postgres import PostgresSaver
 
-        Args:
-            model_name: Name of the model to interpret.
-            max_verification_iterations: Maximum number of verification iterations to run (default: 1)
+        pg_conn_string = get_config_value("POSTGRES_URI")
+        connection_kwargs = {
+            "autocommit": True,
+            "prepare_threshold": 0,
+        }
+        pool = ConnectionPool(
+            conninfo=pg_conn_string,
+            kwargs=connection_kwargs,
+            max_size=20,
+            min_size=5,
+        )
+        self.memory = memory or PostgresSaver(conn=pool)
+        self.memory.setup()
 
-        Returns:
-            Dict containing the interpreted documentation in YAML format and metadata,
-            including structured column recommendations and verification iterations info.
-        """
-        try:
+        self._define_tools()
+        self.graph_app = self._build_graph()
+
+    # --- LangGraph Imports ---
+    # REMOVED IMPORTS FROM HERE
+
+    # --- Tool Schemas ---
+    class UpstreamModelInput(BaseModel):
+        model_name: str = Field(
+            description="Name of the upstream dbt model to fetch details for."
+        )
+
+    class FinishInterpretationInput(BaseModel):
+        yaml_doc: str = Field(
+            description="Final YAML documentation for the interpreted model."
+        )
+
+    # --- State ---
+    class InterpretationState(TypedDict):
+        model_name: str
+        messages: Annotated[List[BaseMessage], add_messages]
+        upstream_models_info: Dict[str, Dict[str, Any]]
+        explored_models: Set[str]
+        final_yaml: Optional[str]
+
+    def _define_tools(self):
+        @tool(args_schema=self.UpstreamModelInput)
+        def get_upstream_model_details(model_name: str) -> Dict[str, Any]:
+            """Fetches details for a specified upstream dbt model.
+            Use this tool to understand the data source, columns, and description of models referenced in the main model's SQL.
+            """
             logger.info(
-                f"Starting agentic interpretation workflow for model: {model_name}"
+                f"Executing tool: get_upstream_model_details for '{model_name}'"
             )
-
-            # Step 1: Read the source code of the model to interpret
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: get_upstream_model_details(model_name='{model_name}')[/bold magenta]"
+                )
             model = self.model_storage.get_model(model_name)
             if not model:
+                if self.verbose:
+                    self.console.print(
+                        f"[dim] -> Model '{model_name}' not found in storage.[/dim]"
+                    )
+                return {"error": f"Model {model_name} not found."}
+
+            result = {
+                "name": model.name,
+                "description": model.interpreted_description or model.description or "",
+                "raw_sql": model.raw_sql or "",
+                "columns": model.interpreted_columns
+                or {k: v.description for k, v in (model.columns or {}).items()},
+                "all_upstream_models": model.all_upstream_models or [],
+            }
+            if self.verbose:
+                self.console.print(
+                    f"[dim] -> Fetched details for model '{model_name}'.[/dim]"
+                )
+            return result
+
+        @tool(args_schema=self.FinishInterpretationInput)
+        def finish_interpretation(yaml_doc: str) -> str:
+            """Completes the interpretation process and returns the final YAML documentation.
+            Use this tool ONLY when the model and its columns are fully understood, including information gathered from upstream models.
+            The input should be a single string containing the complete YAML document.
+            """
+            logger.info(f"Executing tool: finish_interpretation")
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: finish_interpretation(yaml_doc='{yaml_doc[:100]}...') [/bold magenta]"
+                )
+            return yaml_doc
+
+        self._tools = [get_upstream_model_details, finish_interpretation]
+
+    def _build_graph(self):
+        workflow = StateGraph(self.InterpretationState)
+        tool_node = ToolNode(self._tools, handle_tool_errors=True)
+        workflow.add_node("agent", self.agent_node)
+        workflow.add_node("tools", tool_node)
+        workflow.add_node("update_state", self.update_state_node)
+        workflow.set_entry_point("agent")
+        workflow.add_conditional_edges(
+            "agent",
+            tools_condition,
+            {
+                "tools": "tools",
+                END: END,
+            },
+        )
+        workflow.add_edge("tools", "update_state")
+        workflow.add_edge("update_state", "agent")
+        return workflow.compile(checkpointer=self.memory)
+
+    def _get_agent_llm(self):
+        chat_client_instance = self.llm.chat_client
+        if hasattr(chat_client_instance, "bind_tools"):
+            return chat_client_instance.bind_tools(self._tools)
+        else:
+            logger.warning(
+                "LLM chat client does not have 'bind_tools'. Tool calling might not work."
+            )
+            return chat_client_instance
+
+    def agent_node(
+        self, state: "ModelInterpreter.InterpretationState"
+    ) -> Dict[str, Any]:
+        logger.info("Entering agent node.")
+        if self.verbose:
+            incoming_messages = state.get("messages", [])
+            self.console.print(
+                f"[bold yellow]\n>>> Entering agent_node <<<[/bold yellow]"
+            )
+            self.console.print(f"[dim]State Model: {state['model_name']}[/dim]")
+            self.console.print(
+                f"[dim]Received {len(incoming_messages)} messages in state:[/dim]"
+            )
+            for i, msg in enumerate(incoming_messages):
+                msg_type = type(msg).__name__
+                content_preview = (
+                    str(msg.content)[:80] + "..."
+                    if len(str(msg.content)) > 80
+                    else str(msg.content)
+                )
+                tool_calls_info = (
+                    " [bold]with tool_calls[/bold]"
+                    if hasattr(msg, "tool_calls") and msg.tool_calls
+                    else ""
+                )
+                tool_id_info = (
+                    f" [bold]for tool_call_id: {msg.tool_call_id}[/bold]"
+                    if hasattr(msg, "tool_call_id") and msg.tool_call_id
+                    else ""
+                )
+                self.console.print(
+                    f"  [dim]State[{i}] {msg_type}{tool_calls_info}{tool_id_info}: {content_preview}[/dim]"
+                )
+
+        messages = state.get("messages", [])
+        if not messages:
+            model = self.model_storage.get_model(state["model_name"])
+            if not model:
+                # Log error if model not found even at the start
+                logger.error(
+                    f"Model {state['model_name']} not found for interpretation."
+                )
                 return {
-                    "model_name": model_name,
-                    "error": f"Model {model_name} not found",
-                    "success": False,
-                }
-
-            logger.info(f"Retrieved model {model_name} for interpretation")
-
-            # Step 2: Identify upstream models from the model's source code
-            logger.info(f"Analyzing upstream dependencies for {model_name}")
-
-            # Get upstream models from the model's metadata
-            upstream_model_names = model.all_upstream_models
-
-            if not upstream_model_names:
-                logger.warning(
-                    f"No upstream models found for {model_name}. Using depends_on list."
-                )
-                upstream_model_names = model.depends_on
-
-            logger.info(
-                f"Found {len(upstream_model_names)} upstream models for {model_name}"
-            )
-
-            # Step 3: Fetch details of the upstream models for context
-            upstream_models_data = {}
-            upstream_info = ""
-            for upstream_name in upstream_model_names:
-                logger.info(f"Fetching details for upstream model: {upstream_name}")
-                upstream_model = self.model_storage.get_model(upstream_name)
-                if not upstream_model:
-                    logger.warning(
-                        f"Upstream model {upstream_name} not found. Skipping."
-                    )
-                    continue
-
-                upstream_models_data[upstream_name] = upstream_model
-
-                # Add upstream model information to context
-                upstream_info += f"\n-- Upstream Model: {upstream_model.name} --\n"
-                description = (
-                    upstream_model.interpreted_description
-                    or upstream_model.description
-                    or "No description available."
-                )
-                upstream_info += f"Description: {description}\n"
-
-                # Add column information from either interpreted columns or YML columns
-                if upstream_model.interpreted_columns:
-                    upstream_info += "Columns (from LLM interpretation):\n"
-                    for (
-                        col_name,
-                        col_desc,
-                    ) in upstream_model.interpreted_columns.items():
-                        upstream_info += f"  - {col_name}: {col_desc}\n"
-                elif upstream_model.columns:
-                    upstream_info += "Columns (from YML):\n"
-                    for col_name, col_obj in upstream_model.columns.items():
-                        upstream_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
-                else:
-                    upstream_info += "Columns: No column information available.\n"
-
-                # Add SQL for context
-                upstream_info += f"Raw SQL:\n```sql\n{upstream_model.raw_sql or 'SQL not available'}\n```\n"
-                upstream_info += "-- End Upstream Model --\n"
-
-            # Step 4: Create a draft interpretation using the model SQL and upstream info
-            logger.info(f"Creating draft interpretation for {model_name}")
-
-            prompt = MODEL_INTERPRETATION_PROMPT.format(
-                model_name=model.name,
-                model_sql=model.raw_sql,
-                upstream_info=upstream_info,
-            )
-
-            draft_yaml_documentation = self.llm.get_completion(
-                prompt=f"Interpret and generate YAML documentation for the model {model_name} based on its SQL and upstream dependencies",
-                system_prompt=prompt,
-                max_tokens=4000,
-            )
-
-            logger.debug(
-                f"Draft interpretation for {model_name}:\n{draft_yaml_documentation}"
-            )
-
-            # Extract YAML content from the response
-            match = re.search(
-                r"```(?:yaml)?\n(.*?)```", draft_yaml_documentation, re.DOTALL
-            )
-            if match:
-                draft_yaml_content = match.group(1).strip()
-            else:
-                # If no code block found, use the whole response but check for YAML tags
-                draft_yaml_content = draft_yaml_documentation.strip()
-                # Remove any potential YAML code fence markers at the beginning or end
-                if draft_yaml_content.startswith("```yaml"):
-                    draft_yaml_content = draft_yaml_content[7:]
-                if draft_yaml_content.endswith("```"):
-                    draft_yaml_content = draft_yaml_content[:-3]
-                draft_yaml_content = draft_yaml_content.strip()
-
-            logger.debug(
-                f"Cleaned draft YAML content for {model_name}:\n{draft_yaml_content}"
-            )
-
-            # Parse the draft YAML to get column information
-            try:
-                # Additional safety check to ensure YAML content is clean
-                if draft_yaml_content.startswith("```") or draft_yaml_content.endswith(
-                    "```"
-                ):
-                    # Further cleaning if needed
-                    lines = draft_yaml_content.strip().splitlines()
-                    if lines and (
-                        lines[0].startswith("```") or lines[0].startswith("---")
-                    ):
-                        lines = lines[1:]
-                    if lines and (lines[-1] == "```" or lines[-1] == "---"):
-                        lines = lines[:-1]
-                    draft_yaml_content = "\n".join(lines).strip()
-
-                draft_parsed = yaml.safe_load(draft_yaml_content)
-                if draft_parsed is None:
-                    logger.warning(
-                        f"Draft YAML for {model_name} parsed as None, using empty dict"
-                    )
-                    draft_parsed = {}
-
-                draft_model_data = draft_parsed.get("models", [{}])[0]
-                draft_columns = draft_model_data.get("columns", [])
-                if draft_columns is None:
-                    draft_columns = []
-
-                draft_column_names = [
-                    col.get("name")
-                    for col in draft_columns
-                    if col and isinstance(col, dict) and "name" in col
-                ]
-
-                logger.info(
-                    f"Draft interpretation contains {len(draft_column_names)} columns"
-                )
-            except Exception as e:
-                logger.error(f"Error parsing draft YAML: {str(e)}")
-                draft_columns = []
-                draft_column_names = []
-
-            # Step 5: Verify the draft interpretation against upstream models
-            logger.info(
-                f"Verifying draft interpretation for {model_name} against upstream models"
-            )
-
-            # Initialize results before the loop in case iterations = 0
-            final_yaml_content = draft_yaml_content
-            verification_result = "Verification skipped (iterations=0)"
-            column_recommendations = {
-                "columns_to_add": [],
-                "columns_to_remove": [],
-                "columns_to_modify": [],
-            }
-            iteration = -1  # To handle iteration + 1 in return value correctly
-
-            # Enhanced verification with multiple iterations
-            current_yaml_content = draft_yaml_content
-            # final_yaml_content = draft_yaml_content # Already initialized above
-
-            for iteration in range(max_verification_iterations):
-                logger.info(
-                    f"Starting verification iteration {iteration+1}/{max_verification_iterations}"
-                )
-
-                # Parse current YAML to get updated column information for verification prompt
-                try:
-                    current_parsed = yaml.safe_load(current_yaml_content)
-                    if current_parsed is None:
-                        logger.warning(
-                            f"Current YAML for {model_name} parsed as None, using empty dict"
+                    "messages": [
+                        AIMessage(
+                            content=f"Critical Error: Model {state['model_name']} not found in storage."
                         )
-                        current_parsed = {}
-
-                    current_model_data = current_parsed.get("models", [{}])[0]
-                    current_columns = current_model_data.get("columns", [])
-                    if current_columns is None:
-                        current_columns = []
-
-                    current_column_names = [
-                        col.get("name")
-                        for col in current_columns
-                        if col and isinstance(col, dict) and "name" in col
                     ]
-                    current_column_representation = (
-                        ", ".join(current_column_names)
-                        if current_column_names
-                        else "No columns found"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Error parsing current YAML in iteration {iteration+1}: {str(e)}"
-                    )
-                    current_column_representation = "Error parsing YAML"
-
-                # Build a more detailed upstream model information with focus on SQL
-                detailed_upstream_info = ""
-                for upstream_name in upstream_model_names:
-                    upstream_model = upstream_models_data.get(upstream_name)
-                    if not upstream_model:
-                        continue
-
-                    detailed_upstream_info += (
-                        f"\n-- Upstream Model: {upstream_model.name} --\n"
-                    )
-
-                    # Emphasize SQL analysis for column extraction
-                    detailed_upstream_info += f"Raw SQL of {upstream_model.name}:\n```sql\n{upstream_model.raw_sql or 'SQL not available'}\n```\n"
-
-                    # This model's columns - just as supplementary info
-                    if upstream_model.interpreted_columns:
-                        detailed_upstream_info += "Previously interpreted columns (for reference, SQL is definitive):\n"
-                        for (
-                            col_name,
-                            col_desc,
-                        ) in upstream_model.interpreted_columns.items():
-                            detailed_upstream_info += f"  - {col_name}: {col_desc}\n"
-                    elif upstream_model.columns:
-                        detailed_upstream_info += (
-                            "YML-defined columns (for reference, SQL is definitive):\n"
-                        )
-                        for col_name, col_obj in upstream_model.columns.items():
-                            detailed_upstream_info += f"  - {col_name}: {col_obj.description or 'No description in YML'}\n"
-
-                    detailed_upstream_info += "-- End Upstream Model --\n"
-
-                verification_prompt = f"""
-                You are validating a dbt model interpretation against its upstream model definitions to ensure it's complete and accurate.
-                
-                The model being interpreted is: {model_name}
-                
-                Original SQL of the model:
-                ```sql
-                {model.raw_sql}
-                ```
-                
-                The current interpretation contains these columns:
-                {current_column_representation}
-                
-                Current YAML content being verified (iteration {iteration+1}/{max_verification_iterations}):
-                ```yaml
-                {current_yaml_content}
-                ```
-                
-                Here is information about the upstream models:
-                {detailed_upstream_info}
-                
-                YOUR PRIMARY TASK IS TO COMPREHENSIVELY VERIFY THAT EVERY SINGLE COLUMN FROM THIS MODEL'S SQL OUTPUT IS CORRECTLY DOCUMENTED.
-                
-                Follow these specific steps in your verification:
-                
-                1. SQL ANALYSIS:
-                   - Carefully trace the model's SQL to understand ALL columns in its output
-                   - For any SELECT * statements, expand them by examining the source table/CTE's complete column list
-                   - For JOINs, include columns from all joined tables that are in the SELECT
-                   - For CTEs, carefully trace through each step to identify all columns
-                
-                2. UPSTREAM COLUMN VALIDATION:
-                   - When a model uses SELECT * from an upstream model, carefully examine the SQL of that upstream model
-                   - Count the total number of columns in each upstream model referenced with SELECT *
-                   - Compare this count with the columns documented in the interpretation
-                   - Missing columns in upstream models are the most common error - be extremely thorough
-                
-                3. COLUMN COUNT CHECK:
-                   - Roughly estimate how many columns should appear in the output of this model
-                   - Compare this estimate with the number of columns in the interpretation
-                   - A significant discrepancy (e.g., interpretation has 5 columns but SQL output should have 60+) indicates missing columns
-                
-                4. COMPLETENESS CHECK:
-                   - The interpretation must include EVERY column that will appear in the model's output
-                   - Even if there are 50+ columns, all must be properly documented
-                   - Any omission of columns is a critical error
-                
-                Based on your thorough analysis:
-                
-                If everything is correct, respond with "VERIFIED: The interpretation is complete and accurate."
-                
-                If there are issues, provide a structured response with the following format:
-                
-                VERIFICATION_RESULT:
-                [Your general feedback and assessment here]
-                [Include a count of total columns expected vs. documented]
-                
-                COLUMNS_TO_ADD:
-                - name: [column_name_1]
-                  description: [description]
-                  reason: [reason this column should be added, specifically citing where in the SQL it comes from]
-                - name: [column_name_2]
-                  description: [description]
-                  reason: [reason this column should be added, specifically citing where in the SQL it comes from]
-                [List ALL missing columns, even if there are dozens]
-                
-                COLUMNS_TO_REMOVE:
-                - name: [column_name_1]
-                  reason: [reason this column should be removed, specifically citing evidence from the SQL]
-                - name: [column_name_2]
-                  reason: [reason this column should be removed, specifically citing evidence from the SQL]
-                
-                COLUMNS_TO_MODIFY:
-                - name: [column_name_1]
-                  current_description: [current description]
-                  suggested_description: [suggested description]
-                  reason: [reason for the change, with specific reference to the SQL]
-                - name: [column_name_2]
-                  current_description: [current description]
-                  suggested_description: [suggested description]
-                  reason: [reason for the change, with specific reference to the SQL]
-                
-                Only include sections that have actual entries (e.g., omit COLUMNS_TO_REMOVE if no columns need to be removed).
-                """
-
-                verification_result = self.llm.get_completion(
-                    prompt=verification_prompt,
-                    system_prompt="You are an AI assistant specialized in verifying dbt model interpretations. Your task is to carefully analyze SQL code to ensure all columns are correctly documented.",
-                    max_tokens=4000,
-                )
-
-                logger.debug(
-                    f"Verification result for {model_name} (iteration {iteration+1}):\n{verification_result}"
-                )
-
-                # Parse the verification result to extract recommended column changes
-                column_recommendations = {
-                    "columns_to_add": [],
-                    "columns_to_remove": [],
-                    "columns_to_modify": [],
                 }
+            initial_prompt = f"""
+You are an expert data analyst tasked with interpreting a dbt model called '{model.name}'.
 
-                # Only parse if verification found issues
-                if "VERIFIED" not in verification_result:
-                    logger.info(
-                        f"Verification found issues for {model_name} in iteration {iteration+1}, extracting column recommendations"
+Your goal is to produce a complete YAML documentation for this model, including:
+- A clear description of what the model represents.
+- A detailed list of all columns it produces, with explanations.
+
+You have access to a tool `get_upstream_model_details` to fetch details of any upstream models used in this model's SQL.
+
+You should:
+- Analyze the model's raw SQL (including Jinja).
+- Identify all columns produced, including those from upstream models.
+- Call `get_upstream_model_details` as needed to understand upstream models.
+- Recursively explore upstreams if necessary.
+- When ready, call `finish_interpretation` with the final YAML documentation.
+
+Here is the raw SQL for the model '{model.name}':
+```sql
+{model.raw_sql}
+```
+"""
+            messages_for_llm = [
+                SystemMessage(content="You are an expert dbt model interpreter."),
+                HumanMessage(content=initial_prompt),
+            ]
+            if self.verbose:
+                self.console.print("[dim]Generated initial prompt for LLM.[/dim]")
+        else:
+            messages_for_llm = list(messages)
+            if self.verbose:
+                self.console.print("[dim]Using existing messages for LLM.[/dim]")
+
+        agent_llm = self._get_agent_llm()
+        if self.verbose:
+            self.console.print(
+                f"[blue dim]Sending {len(messages_for_llm)} messages to LLM...[/blue dim]"
+            )
+
+        try:
+            response = agent_llm.invoke(messages_for_llm)
+            # Log tool calls if present (non-verbose)
+            if hasattr(response, "tool_calls") and response.tool_calls:
+                tool_names = [
+                    tc.get("name")
+                    for tc in response.tool_calls
+                    if isinstance(tc, dict) and tc.get("name")
+                ]
+                if tool_names:
+                    logger.info(f"LLM requested tool calls: {tool_names}")
+            elif self.verbose:
+                self.console.print("[dim]LLM Response has no tool calls.[/dim]")
+
+            if self.verbose:
+                self.console.print(
+                    f"[dim]LLM Response: {response.content[:150]}...[/dim]"
+                )
+                if hasattr(response, "tool_calls") and response.tool_calls:
+                    self.console.print(
+                        f"[dim]LLM Tool Calls: {response.tool_calls}[/dim]"
                     )
+                # Removed redundant verbose log for no tool calls here
 
-                    # Extract columns to add
-                    add_match = re.search(
-                        r"COLUMNS_TO_ADD:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_REMOVE|COLUMNS_TO_MODIFY)|\Z)",
-                        verification_result,
-                        re.DOTALL,
+            return {"messages": [response]}
+        except Exception as e:
+            logger.error(f"LLM invocation failed: {e}", exc_info=self.verbose)
+            if self.verbose:
+                self.console.print(f"[bold red]LLM invocation failed: {e}[/bold red]")
+            return {"messages": [AIMessage(content=f"LLM invocation failed: {str(e)}")]}
+
+    def update_state_node(
+        self, state: "ModelInterpreter.InterpretationState"
+    ) -> Dict[str, Any]:
+        logger.info("Entering state update node.")
+        if self.verbose:
+            self.console.print(
+                "[bold cyan]\n--- Updating State After Tool Execution ---[/bold cyan]"
+            )
+        updates: Dict[str, Any] = {}
+        messages = state.get("messages", [])
+        if not messages:
+            if self.verbose:
+                self.console.print(
+                    "[yellow dim] -> No messages in state, skipping update.[/yellow dim]"
+                )
+            return updates
+
+        recent_tool_messages = []
+        i = len(messages) - 1
+        last_assistant_with_tool_calls = None
+        while i >= 0:
+            msg = messages[i]
+            if isinstance(msg, ToolMessage):
+                recent_tool_messages.append(msg)
+            elif (
+                isinstance(msg, AIMessage)
+                and hasattr(msg, "tool_calls")
+                and msg.tool_calls
+            ):
+                last_assistant_with_tool_calls = msg
+                break
+            i -= 1
+
+        if not recent_tool_messages:
+            if self.verbose:
+                self.console.print(
+                    "[yellow dim] -> No recent tool messages found, skipping update.[/yellow dim]"
+                )
+            return updates
+        if self.verbose:
+            self.console.print(
+                f"[dim] -> Processing {len(recent_tool_messages)} recent tool messages[/dim]"
+            )
+
+        for tool_message in recent_tool_messages:
+            tool_name = tool_message.name
+            content = tool_message.content
+            tool_call_id = (
+                tool_message.tool_call_id
+                if hasattr(tool_message, "tool_call_id")
+                else "N/A"
+            )
+            if self.verbose:
+                content_summary = str(content)[:150] + (
+                    "..." if len(str(content)) > 150 else ""
+                )
+                self.console.print(
+                    f"[dim] -> Processing result from tool '{tool_name}' (ID: {tool_call_id}): {content_summary}[/dim]"
+                )
+
+            processed_info = f"tool '{tool_name}'"
+            if tool_name == "get_upstream_model_details":
+                try:
+                    import json
+
+                    model_info = (
+                        json.loads(content) if isinstance(content, str) else content
                     )
-                    if add_match:
-                        add_section = add_match.group(1).strip()
-                        # Parse the yaml-like format for columns to add
-                        columns_to_add = []
-                        current_column = {}
-                        for line in add_section.split("\n"):
-                            line = line.strip()
-                            if line.startswith("- name:"):
-                                if current_column and "name" in current_column:
-                                    columns_to_add.append(current_column)
-                                current_column = {
-                                    "name": line.replace("- name:", "").strip()
-                                }
-                            elif line.startswith("description:") and current_column:
-                                current_column["description"] = line.replace(
-                                    "description:", ""
-                                ).strip()
-                            elif line.startswith("reason:") and current_column:
-                                current_column["reason"] = line.replace(
-                                    "reason:", ""
-                                ).strip()
-                        if current_column and "name" in current_column:
-                            columns_to_add.append(current_column)
-                        column_recommendations["columns_to_add"] = columns_to_add
-
-                    # Extract columns to remove
-                    remove_match = re.search(
-                        r"COLUMNS_TO_REMOVE:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_ADD|COLUMNS_TO_MODIFY)|\Z)",
-                        verification_result,
-                        re.DOTALL,
-                    )
-                    if remove_match:
-                        remove_section = remove_match.group(1).strip()
-                        # Parse the yaml-like format for columns to remove
-                        columns_to_remove = []
-                        current_column = {}
-                        for line in remove_section.split("\n"):
-                            line = line.strip()
-                            if line.startswith("- name:"):
-                                if current_column and "name" in current_column:
-                                    columns_to_remove.append(current_column)
-                                current_column = {
-                                    "name": line.replace("- name:", "").strip()
-                                }
-                            elif line.startswith("reason:") and current_column:
-                                current_column["reason"] = line.replace(
-                                    "reason:", ""
-                                ).strip()
-                        if current_column and "name" in current_column:
-                            columns_to_remove.append(current_column)
-                        column_recommendations["columns_to_remove"] = columns_to_remove
-
-                    # Extract columns to modify
-                    modify_match = re.search(
-                        r"COLUMNS_TO_MODIFY:\s*\n((?:.+\n)+?)(?:(?:COLUMNS_TO_ADD|COLUMNS_TO_REMOVE)|\Z)",
-                        verification_result,
-                        re.DOTALL,
-                    )
-                    if modify_match:
-                        modify_section = modify_match.group(1).strip()
-                        # Parse the yaml-like format for columns to modify
-                        columns_to_modify = []
-                        current_column = {}
-                        for line in modify_section.split("\n"):
-                            line = line.strip()
-                            if line.startswith("- name:"):
-                                if current_column and "name" in current_column:
-                                    columns_to_modify.append(current_column)
-                                current_column = {
-                                    "name": line.replace("- name:", "").strip()
-                                }
-                            elif (
-                                line.startswith("current_description:")
-                                and current_column
-                            ):
-                                current_column["current_description"] = line.replace(
-                                    "current_description:", ""
-                                ).strip()
-                            elif (
-                                line.startswith("suggested_description:")
-                                and current_column
-                            ):
-                                current_column["suggested_description"] = line.replace(
-                                    "suggested_description:", ""
-                                ).strip()
-                            elif line.startswith("reason:") and current_column:
-                                current_column["reason"] = line.replace(
-                                    "reason:", ""
-                                ).strip()
-                        if current_column and "name" in current_column:
-                            columns_to_modify.append(current_column)
-                        column_recommendations["columns_to_modify"] = columns_to_modify
-
-                    logger.info(
-                        f"Iteration {iteration+1}: Extracted column recommendations: {len(column_recommendations['columns_to_add'])} to add, "
-                        f"{len(column_recommendations['columns_to_remove'])} to remove, "
-                        f"{len(column_recommendations['columns_to_modify'])} to modify"
-                    )
-
-                    # If issues were found, refine the interpretation
-                    logger.info(
-                        f"Refining interpretation for {model_name} based on verification feedback (iteration {iteration+1})"
-                    )
-
-                    refinement_prompt = f"""
-                    You are refining a dbt model interpretation based on verification feedback.
-                    
-                    Original model: {model_name}
-                    
-                    Original SQL:
-                    ```sql
-                    {model.raw_sql}
-                    ```
-                    
-                    Current interpretation:
-                    ```yaml
-                    {current_yaml_content}
-                    ```
-                    
-                    Verification feedback from iteration {iteration+1}:
-                    {verification_result}
-                    
-                    Upstream model information:
-                    {detailed_upstream_info}
-                    
-                    YOUR TASK IS TO CREATE A COMPLETE YAML INTERPRETATION THAT INCLUDES ALL COLUMNS FROM THE MODEL.
-                    
-                    This is absolutely critical:
-                    1. ADD ALL MISSING COLUMNS identified in the verification feedback - you must include EVERY column
-                    2. Even if there are 50+ columns to add, you must include all of them in your response
-                    3. The most common error is not including all columns from upstream models when SELECT * is used
-                    4. Be extremely thorough - lack of completeness is a critical issue
-                    5. Remove any incorrect columns identified in COLUMNS_TO_REMOVE
-                    6. Update descriptions for columns identified in COLUMNS_TO_MODIFY
-                    
-                    DO NOT OMIT ANY COLUMNS from your response - completeness is the highest priority.
-                    
-                    Your output should be complete, valid YAML for this model. Include all columns.
-                    """
-
-                    refined_yaml_documentation = self.llm.get_completion(
-                        prompt=refinement_prompt,
-                        system_prompt="You are an AI assistant specialized in refining dbt model interpretations based on SQL analysis.",
-                        max_tokens=4000,
-                    )
-
-                    logger.debug(
-                        f"Refined interpretation for {model_name} (iteration {iteration+1}):\n{refined_yaml_documentation}"
-                    )
-
-                    # Extract YAML content from the refined response
-                    match = re.search(
-                        r"```(?:yaml)?\n(.*?)```", refined_yaml_documentation, re.DOTALL
-                    )
-                    if match:
-                        current_yaml_content = match.group(1).strip()
-                    else:
-                        # If no code block found, use the whole response but check for YAML tags
-                        current_yaml_content = refined_yaml_documentation.strip()
-                        # Remove any potential YAML code fence markers at the beginning or end
-                        if current_yaml_content.startswith("```yaml"):
-                            current_yaml_content = current_yaml_content[7:]
-                        if current_yaml_content.endswith("```"):
-                            current_yaml_content = current_yaml_content[:-3]
-                        current_yaml_content = current_yaml_content.strip()
-
-                    # Additional safety check for YAML content
-                    if current_yaml_content.startswith(
-                        "```"
-                    ) or current_yaml_content.endswith("```"):
-                        # Further cleaning if needed
-                        lines = current_yaml_content.strip().splitlines()
-                        if lines and (
-                            lines[0].startswith("```") or lines[0].startswith("---")
-                        ):
-                            lines = lines[1:]
-                        if lines and (lines[-1] == "```" or lines[-1] == "---"):
-                            lines = lines[:-1]
-                        current_yaml_content = "\n".join(lines).strip()
-
-                    final_yaml_content = current_yaml_content
-
-                    # If we found column issues but are not on last iteration, continue
-                    has_column_changes = (
-                        len(column_recommendations["columns_to_add"]) > 0
-                        or len(column_recommendations["columns_to_remove"]) > 0
-                        or len(column_recommendations["columns_to_modify"]) > 0
-                    )
-
-                    if (
-                        has_column_changes
-                        and iteration < max_verification_iterations - 1
-                    ):
-                        logger.info(
-                            f"Moving to next verification iteration to check for additional issues"
+                    if "error" in model_info:
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow dim] -> Tool '{tool_name}' reported error: {model_info['error']}[/yellow dim]"
+                            )
+                        processed_info = (
+                            f"tool '{tool_name}' result (error: {model_info['error']})"
                         )
-                        continue
-                else:
-                    # Verification was successful - no issues found
-                    logger.info(
-                        f"Interpretation for {model_name} verified successfully in iteration {iteration+1}"
+                        continue  # Skip updating state for this error
+
+                    model_name_from_tool = model_info.get("name")
+                    if model_name_from_tool:
+                        upstreams = state.get("upstream_models_info", {}).copy()
+                        upstreams[model_name_from_tool] = model_info
+                        updates["upstream_models_info"] = upstreams
+                        processed_info = (
+                            f"upstream details for model '{model_name_from_tool}'"
+                        )
+                        if self.verbose:
+                            self.console.print(
+                                f"[dim] -> Updated state with upstream info for '{model_name_from_tool}'. Total upstreams: {len(upstreams)}.[/dim]"
+                            )
+                    else:
+                        processed_info = f"tool '{tool_name}' result (missing name)"
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow dim] -> Tool '{tool_name}' result missing 'name' field.[/yellow dim]"
+                            )
+
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to parse upstream model details: {e}",
+                        exc_info=self.verbose,
                     )
-                    final_yaml_content = current_yaml_content
-                    break
+                    processed_info = f"tool '{tool_name}' result (parsing error)"
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow dim] -> Error parsing '{tool_name}' result: {e}[/yellow dim]"
+                        )
+                    continue  # Skip update on parsing error
+            elif tool_name == "finish_interpretation":
+                if isinstance(content, str):
+                    updates["final_yaml"] = content
+                    processed_info = (
+                        f"final YAML interpretation (length: {len(content)})"
+                    )
+                    if self.verbose:
+                        self.console.print(
+                            f"[dim] -> Updated state with final_yaml (length: {len(content)}).[/dim]"
+                        )
+                else:
+                    processed_info = f"tool '{tool_name}' result (non-string content)"
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow dim] -> finish_interpretation tool returned non-string content: {type(content)}[/yellow dim]"
+                        )
 
-            # Store the verification history and column recommendations from the final iteration
-            final_verification_result = verification_result
-            final_column_recommendations = column_recommendations
+            logger.info(f"Processed {processed_info}.")
 
-            # Prepare the result
-            result_data = {
+        if not updates and self.verbose:
+            self.console.print(
+                f"[dim] -> No state updates generated from tool messages."
+            )
+
+        return updates
+
+    def run_interpretation_workflow(self, model_name: str) -> Dict[str, Any]:
+        logger.info(f"Starting interpretation workflow for model: {model_name}")
+        self.console.print(
+            f"[bold]🚀 Starting interpretation workflow for model:[/bold] {model_name}"
+        )
+        thread_id = str(uuid.uuid4())
+        config = {"configurable": {"thread_id": thread_id}}
+        if self.verbose:
+            self.console.print(f"[dim]Generated thread ID: {thread_id}[/dim]")
+
+        initial_state = self.InterpretationState(
+            model_name=model_name,
+            messages=[],
+            upstream_models_info={},
+            explored_models=set(),  # Consider adding logic to update explored_models
+            final_yaml=None,
+        )
+
+        try:
+            final_state = self.graph_app.invoke(initial_state, config=config)
+            final_yaml = final_state.get("final_yaml", "")
+            success = bool(final_yaml)
+            logger.info(
+                f"Interpretation workflow for {model_name} finished. Success: {success}"
+            )
+            if self.verbose:
+                self.console.print(
+                    f"[green]✅ Interpretation workflow finished for {model_name}.[/green]"
+                )
+                message_count = len(final_state.get("messages", []))
+                upstream_count = len(final_state.get("upstream_models_info", {}))
+                self.console.print(
+                    f"[dim]Final state contains {message_count} messages."
+                )
+                self.console.print(
+                    f"[dim]Gathered info for {upstream_count} upstream models."
+                )
+                self.console.print(
+                    "\n[bold blue]📝 Final YAML Interpretation:[/bold blue]"
+                )
+                self.console.print(Markdown(final_yaml or "*No YAML produced*"))
+            else:
+                # Log YAML presence even if not verbose
+                if success:
+                    logger.debug(
+                        f"Final YAML generated for {model_name} (length: {len(final_yaml)})"
+                    )
+                else:
+                    logger.warning(f"No final YAML produced for {model_name}.")
+
+            return {
                 "model_name": model_name,
-                "yaml_documentation": final_yaml_content,
-                "draft_yaml": draft_yaml_content,
-                "verification_result": final_verification_result,
-                "column_recommendations": final_column_recommendations,
-                "verification_iterations": iteration
-                + 1,  # Will be 0 if loop didn't run
-                "prompt": prompt,
-                "success": True,
+                "yaml_documentation": final_yaml,
+                "upstream_models_info": final_state.get("upstream_models_info", {}),
+                "success": success,
             }
-
-            return result_data
-
         except Exception as e:
             logger.error(
-                f"Error in agentic interpretation of model {model_name}: {e}",
+                f"Error during interpretation workflow for {model_name}: {e}",
                 exc_info=True,
             )
-            error_result = {
+            self.console.print(
+                f"[bold red]Error during interpretation workflow for {model_name}:[/bold red] {e}"
+            )
+            return {
                 "model_name": model_name,
-                "error": f"Error in agentic interpretation: {str(e)}",
+                "yaml_documentation": None,
+                "upstream_models_info": {},
                 "success": False,
+                "error": str(e),
             }
-            return error_result
 
     def save_interpreted_documentation(
         self, model_name: str, yaml_documentation: str, embed: bool = False
@@ -719,8 +570,6 @@ class ModelInterpreter:
             # Update the record directly
             model_record.interpreted_description = interpreted_description
             model_record.interpreted_columns = interpreted_columns
-            # Add interpretation_details if needed (e.g., from agentic workflow)
-            # model_record.interpretation_details = ...
 
             session.add(model_record)
             session.commit()
@@ -731,26 +580,20 @@ class ModelInterpreter:
                 logger.info(
                     f"Re-embedding model {model_name} after saving interpretation"
                 )
-                # Fetch the updated DBTModel (using the existing storage method)
                 updated_model = self.model_storage.get_model(model_name)
                 if updated_model:
-                    # Generate the text representation for embedding
                     model_text_for_embedding = updated_model.get_text_representation(
                         include_documentation=True
                     )
-                    # Use the correct store_model_embedding method
                     self.vector_store.store_model_embedding(
                         model_name=updated_model.name,
                         model_text=model_text_for_embedding,
-                        # Optionally add metadata if needed
-                        # metadata=updated_model.to_dict() # Example if needed
                     )
                     logger.info(f"Successfully re-embedded model {model_name}")
                 else:
                     logger.error(
                         f"Failed to fetch updated model {model_name} for re-embedding"
                     )
-                    # Return success=True because saving worked, but warn about embedding
                     return {
                         "success": True,
                         "warning": f"Interpretation saved, but failed to re-embed model {model_name}",
