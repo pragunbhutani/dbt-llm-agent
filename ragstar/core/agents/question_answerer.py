@@ -48,6 +48,16 @@ class SearchFeedbackInput(BaseModel):
     )
 
 
+# --- NEW: Input schema for feedback content search ---
+class SearchFeedbackContentInput(BaseModel):
+    query: str = Field(
+        description="Specific query about a concept, definition, or clarification to search within the text content of past feedback entries."
+    )
+
+
+# --- END NEW SCHEMA ---
+
+
 class FinishWorkflowInput(BaseModel):
     final_answer: str = Field(
         description="The comprehensive final answer to the user's original question, synthesized from all gathered information and feedback. This should include the final SQL query and explanation."
@@ -63,9 +73,10 @@ class QuestionAnsweringState(TypedDict):
     accumulated_models: List[Dict[str, Any]]  # Models found so far
     accumulated_model_names: Set[str]  # Names of models found
     search_model_calls: int  # Track number of model search calls
-    relevant_feedback: List[
-        Any
-    ]  # Feedback found (replace Any with specific type if available)
+    # --- MODIFIED: Use a dict to store feedback by source ---
+    # relevant_feedback: List[Any]
+    relevant_feedback: Dict[str, List[Any]]  # Keys: 'by_question', 'by_content'
+    # --- END MODIFIED ---
     search_queries_tried: Set[str]  # Track search queries
     final_answer: Optional[str]
     conversation_id: Optional[str]
@@ -196,13 +207,17 @@ class QuestionAnswerer:
 
         @tool(args_schema=SearchFeedbackInput)
         def search_past_feedback(query: str) -> List[Any]:
-            """Searches for feedback on previously asked similar questions.
-            Use this ONCE at the beginning of the workflow if the user's question might have been asked before.
-            Provide the original user question as the query.
-            The tool returns a summary of relevant feedback found."""
+            """Searches for feedback on previously asked questions whose core topic is *similar* to the provided query.
+            Use this ONCE at the beginning of the workflow if relevant feedback might exist.
+            Provide a concise query reflecting the core information need (e.g., the same refined query used for model search).
+            The tool returns a list of relevant past question/feedback pairs."""
             if self.verbose:
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: search_past_feedback(query='{query}') [/bold magenta]"
+                )
+                # ADDED: Log the query being used for feedback search
+                self.console.print(
+                    f"[dim]  -> Using query for feedback search: '{query}'[/dim]"
                 )
 
             if not (
@@ -218,7 +233,9 @@ class QuestionAnswerer:
                 return []  # Return empty list
 
             if self.verbose:
-                self.console.print("[blue]🔍 Checking for feedback...[/blue]")
+                self.console.print(
+                    "[blue]🔍 Checking for feedback related to similar questions...[/blue]"
+                )
 
             try:
                 question_embedding = self.question_storage._get_embedding(query)
@@ -229,23 +246,42 @@ class QuestionAnswerer:
                         )
                     return []  # Return empty list
 
+                # ADDED: Log the similarity threshold
+                similarity_threshold = 0.30  # Define threshold variable for logging
+                if self.verbose:
+                    self.console.print(
+                        f"[dim]  -> Using similarity threshold: {similarity_threshold}[/dim]"
+                    )
+
                 relevant_feedback_items = (
                     self.question_storage.find_similar_questions_with_feedback(
                         query_embedding=question_embedding,
                         limit=3,
-                        similarity_threshold=0.75,
+                        similarity_threshold=similarity_threshold,
                     )
                 )
 
                 if not relevant_feedback_items:
                     if self.verbose:
-                        self.console.print("[dim] -> No relevant feedback found.[/dim]")
+                        # MODIFIED: More explicit log for no results
+                        self.console.print(
+                            f"[dim] -> No similar questions found meeting threshold {similarity_threshold}.[/dim]"
+                        )
                     return []  # Return empty list
 
                 if self.verbose:
+                    # MODIFIED: Log details of found items
                     self.console.print(
-                        f"[dim] -> Found {len(relevant_feedback_items)} relevant feedback item(s).[/dim]"
+                        f"[dim] -> Found {len(relevant_feedback_items)} potentially relevant feedback item(s) via question similarity:[/dim]"
                     )
+                    for i, item in enumerate(relevant_feedback_items):
+                        q_text = getattr(item, "question_text", "N/A")
+                        item_id = getattr(item, "id", "N/A")
+                        # Note: Similarity score might not be directly available on the returned object here, depends on storage implementation.
+                        # We'll just log the ID and question text for now.
+                        self.console.print(
+                            f"[dim]    [{i+1}] ID: {item_id}, Question: '{q_text[:50]}...'[/dim]"
+                        )
 
                 # Return the list of feedback items directly
                 return relevant_feedback_items
@@ -254,8 +290,98 @@ class QuestionAnswerer:
                 logger.error(
                     f"Error during feedback search: {e}", exc_info=self.verbose
                 )
+                # ADDED: Log the error in verbose mode
+                if self.verbose:
+                    self.console.print(
+                        f"[red dim] -> Error during feedback search: {e}[/red dim]"
+                    )
                 # Return empty list on error, the ToolNode might add an error message to history anyway
                 return []
+
+        # --- NEW: Tool to search feedback content ---
+        @tool(args_schema=SearchFeedbackContentInput)
+        def search_feedback_content(query: str) -> List[Any]:
+            """Searches the *text content* of past feedback entries for specific information.
+            Use this tool *during* the workflow if you need clarification on a specific term, concept, or definition
+            that might have been mentioned in past feedback, even if related to a different original question.
+            Provide a targeted query for the specific information needed (e.g., 'definition of mandate', 'how to calculate watch time').
+            The tool returns a list of past question/feedback pairs where the feedback content matched your query.
+            """
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: search_feedback_content(query='{query}') [/bold magenta]"
+                )
+                # ADDED: Log the query being used for content search
+                self.console.print(
+                    f"[dim]  -> Using query for feedback *content* search: '{query}'[/dim]"
+                )
+
+            if not self.question_storage:
+                if self.verbose:
+                    self.console.print(
+                        "[yellow dim] -> Feedback storage not configured.[/yellow dim]"
+                    )
+                return []
+
+            if self.verbose:
+                self.console.print(
+                    f"[blue]🔍 Searching feedback content for: '{query}'...[/blue]"
+                )
+
+            try:
+                # Use the new storage method
+                # ADDED: Log the similarity threshold
+                similarity_threshold = 0.6  # Define threshold variable for logging
+                if self.verbose:
+                    self.console.print(
+                        f"[dim]  -> Using content similarity threshold: {similarity_threshold}[/dim]"
+                    )
+
+                relevant_feedback_items = (
+                    self.question_storage.find_similar_feedback_content(
+                        query=query,
+                        limit=3,
+                        similarity_threshold=similarity_threshold,
+                    )
+                )
+
+                if not relevant_feedback_items:
+                    if self.verbose:
+                        # MODIFIED: More explicit log for no results
+                        self.console.print(
+                            f"[dim] -> No feedback content found matching query '{query}' with threshold {similarity_threshold}.[/dim]"
+                        )
+                    return []
+
+                if self.verbose:
+                    # MODIFIED: Log details of found items
+                    self.console.print(
+                        f"[dim] -> Found {len(relevant_feedback_items)} relevant feedback item(s) via content search:[/dim]"
+                    )
+                    for i, item in enumerate(relevant_feedback_items):
+                        q_text = getattr(item, "question_text", "N/A")
+                        f_text = getattr(item, "feedback", "N/A")
+                        item_id = getattr(item, "id", "N/A")
+                        # Note: Similarity score might not be directly available on the returned object here, depends on storage implementation.
+                        self.console.print(
+                            f"[dim]    [{i+1}] ID: {item_id}, Question: '{q_text[:50]}...', Feedback Snippet: '{f_text[:50]}...'[/dim]"
+                        )
+
+                # Return the list of feedback items (Question domain objects)
+                return relevant_feedback_items
+
+            except Exception as e:
+                logger.error(
+                    f"Error during feedback content search: {e}", exc_info=self.verbose
+                )
+                # ADDED: Log the error in verbose mode
+                if self.verbose:
+                    self.console.print(
+                        f"[red dim] -> Error during feedback content search: {e}[/red dim]"
+                    )
+                return []
+
+        # --- END NEW TOOL ---
 
         @tool(args_schema=FinishWorkflowInput)
         def finish_workflow(final_answer: str) -> str:
@@ -276,8 +402,13 @@ class QuestionAnswerer:
             # This function primarily acts as a signal, returning the final answer
             return final_answer
 
-        # Store the tools as instance attributes
-        self._tools = [search_dbt_models, search_past_feedback, finish_workflow]
+        # Store the tools as instance attributes - ADD THE NEW TOOL
+        self._tools = [
+            search_dbt_models,
+            search_past_feedback,
+            search_feedback_content,
+            finish_workflow,
+        ]
 
     # --- LangGraph Graph Construction ---
     def _build_graph(self):
@@ -338,6 +469,19 @@ class QuestionAnswerer:
 
     def agent_node(self, state: QuestionAnsweringState) -> Dict[str, Any]:
         """Calls the agent LLM to decide the next action or generate the final answer."""
+        # === ADDED: Check if workflow is already finished ===
+        if state.get("final_answer"):
+            if self.verbose:
+                self.console.print(
+                    "[bold yellow]>>> Entering agent_node (Workflow Finished) <<<[/bold yellow]"
+                )
+                self.console.print(
+                    "[dim] -> Final answer already exists in state. Skipping LLM call and ending workflow.[/dim]"
+                )
+            # Return empty messages to signal completion (tools_condition will route to END)
+            return {"messages": []}
+        # === END ADDED CHECK ===
+
         # === ADD LOGGING HERE ===
         if self.verbose:
             incoming_messages = state.get("messages", [])
@@ -374,8 +518,11 @@ class QuestionAnswerer:
             self.console.print(
                 f"[dim]Current Models: {len(state['accumulated_model_names'])} ({state.get('search_model_calls', 0)} searches used)[/dim]"
             )
+            # Log feedback count from both sources
+            feedback_by_q = state.get("relevant_feedback", {}).get("by_question", [])
+            feedback_by_c = state.get("relevant_feedback", {}).get("by_content", [])
             self.console.print(
-                f"[dim]Found Feedback: {len(state['relevant_feedback'])}[/dim]"
+                f"[dim]Found Feedback Items: {len(feedback_by_q)} (by question), {len(feedback_by_c)} (by content)[/dim]"
             )
 
         # Get the current messages directly from state
@@ -393,28 +540,99 @@ class QuestionAnswerer:
             # Use the messages from state for subsequent calls
             messages_for_llm = list(messages)  # Make a copy
 
-        # Add guidance as a system message (only if not already the last message type)
+        # --- START: Inject Feedback Content (from both sources) ---
+        feedback_for_prompt = []
+        relevant_feedback_state = state.get("relevant_feedback", {})
+        feedback_by_question = relevant_feedback_state.get("by_question", [])
+        feedback_by_content = relevant_feedback_state.get("by_content", [])
+
+        all_feedback_items = feedback_by_question + feedback_by_content
+        processed_ids = set()  # Avoid duplicate feedback if found by both methods
+
+        if all_feedback_items:
+            feedback_texts = []
+            for item in all_feedback_items:
+                # Assuming item is a Question domain object now
+                item_id = item.id
+                if item_id in processed_ids:
+                    continue
+                processed_ids.add(item_id)
+
+                q_text = getattr(item, "question_text", "N/A")
+                f_text = getattr(item, "feedback", "N/A")
+                f_useful = getattr(item, "was_useful", None)
+
+                # Only include if there is actual feedback text
+                if f_text and f_text != "N/A":
+                    feedback_texts.append(
+                        f"- Past Question ID {item_id}: '{q_text}'\\n  - Feedback (Useful: {f_useful}): '{f_text}'"
+                    )
+
+            if feedback_texts:
+                feedback_summary = (
+                    "\\n\\nRelevant Past Feedback Found (from similar questions and/or content search):\\n"
+                    + "\\n".join(feedback_texts)
+                )
+                messages_for_llm.append(SystemMessage(content=feedback_summary))
+                if self.verbose:
+                    self.console.print(
+                        f"[dim blue]Injecting {len(feedback_texts)} unique feedback items into context.[/dim blue]"
+                    )
+        # --- END: Inject Feedback Content ---
+
+        # --- MODIFIED: Update Guidance Prompt ---
         current_search_calls = state.get("search_model_calls", 0)
         remaining_searches = self.max_model_searches - current_search_calls
+        feedback_searched = (
+            state.get("relevant_feedback", {}).get("by_question") is not None
+            or state.get("relevant_feedback", {}).get("by_content") is not None
+        )
 
-        guidance_content = ""
+        guidance_pieces = [
+            f"Guidance: You have used the model search tool {current_search_calls} times.",
+            f"You have {remaining_searches} remaining searches for dbt models.",
+            f"Current models found: {len(state['accumulated_model_names'])}.",
+            f"Original question: '{state['original_question']}'.",
+        ]
+
+        # Check if search_past_feedback has been attempted (even if it returned nothing)
+        # We infer this by checking if the specific key exists in the feedback dict
+        past_feedback_key_exists = "by_question" in state.get("relevant_feedback", {})
+
+        if not past_feedback_key_exists:
+            guidance_pieces.append(
+                "Reminder: You MUST call 'search_past_feedback' first with a concise query relevant to the original question before searching for models."
+            )
+        else:
+            guidance_pieces.append(
+                "You have already checked for feedback related to similar past questions."
+            )
+            # Add guidance for content search only *after* initial feedback search is done
+            guidance_pieces.append(
+                "If you need clarification on specific terms or concepts mentioned *within* feedback, use 'search_feedback_content' to query past feedback text directly."
+            )
+
         if remaining_searches > 0:
-            guidance_content = (
-                f"Guidance: You have used the model search tool {current_search_calls} times. "
-                f"You have {remaining_searches} remaining searches for dbt models. "
-                f"Current models found: {len(state['accumulated_model_names'])}. "
-                f"Original question: '{state['original_question']}'. "
-                f"If the current models are insufficient to answer the question comprehensively, "
+            guidance_pieces.append(
+                f"When calling 'search_past_feedback', use a concise query reflecting the core information need, potentially similar to your model search query. "  # Keep this for reference even if reminded above
+            )
+            guidance_pieces.append(
+                f"If the current models (and feedback) are insufficient to answer the question comprehensively, "
                 f"use 'search_dbt_models' again with a *refined, specific* query focusing on the missing information. "
+            )
+            guidance_pieces.append(
                 f"Otherwise, if you have enough information, use 'finish_workflow' to provide the final answer (SQL query + explanation)."
             )
         else:
-            guidance_content = (
-                f"Guidance: You have reached the maximum limit of {self.max_model_searches} model searches. "
+            guidance_pieces.append(
+                f"You have reached the maximum limit of {self.max_model_searches} model searches. "
                 f"You must now synthesize an answer using the models found ({len(state['accumulated_model_names'])} models: "
                 f"{', '.join(state['accumulated_model_names']) or 'None'}) "
-                f"and call 'finish_workflow'. Provide the final SQL query and explanation. Do not call 'search_dbt_models' again."
+                f"and considering any provided feedback. Call 'finish_workflow'. Provide the final SQL query and explanation. Do not call 'search_dbt_models' or 'search_feedback_content' again."
             )
+
+        guidance_content = " ".join(guidance_pieces)
+        # --- END MODIFIED GUIDANCE ---
 
         # Add guidance SystemMessage if needed
         if not (messages_for_llm and isinstance(messages_for_llm[-1], HumanMessage)):
@@ -424,13 +642,22 @@ class QuestionAnswerer:
                 and isinstance(messages_for_llm[-1], SystemMessage)
                 and messages_for_llm[-1].content.startswith("Guidance:")
             ):
-                messages_for_llm.append(SystemMessage(content=guidance_content))
+                # Make sure we don't add guidance if the feedback message was just added
+                # (Check if the last message contains the feedback summary)
+                last_msg_content = (
+                    messages_for_llm[-1].content if messages_for_llm else ""
+                )
+                if (
+                    not relevant_feedback_state
+                    or "Relevant Past Feedback Found:" not in last_msg_content
+                ):
+                    messages_for_llm.append(SystemMessage(content=guidance_content))
 
         agent_llm = self._get_agent_llm()
 
         if self.verbose:
             self.console.print(
-                f"[blue dim]Sending {len(messages_for_llm)} messages to LLM with guidance[/blue dim]"
+                f"[blue dim]Sending {len(messages_for_llm)} messages to LLM (including feedback and guidance)[/blue dim]"
             )
             # Log message structure *before* sending (this includes guidance)
             self.console.print("[dim]Message structure *before* sending to LLM:[/dim]")
@@ -561,9 +788,7 @@ class QuestionAnswerer:
         # Process each tool message
         for tool_message in recent_tool_messages:
             tool_name = tool_message.name
-            content = (
-                tool_message.content
-            )  # This might be stringified JSON for some tools
+            content = tool_message.content
 
             if self.verbose:
                 content_summary = str(content)[:200] + (
@@ -635,35 +860,60 @@ class QuestionAnswerer:
                     )
 
             elif tool_name == "search_past_feedback":
-                # Parse the content if it's a stringified list
+                # Parse result (list of Question domain objects)
                 try:
-                    if isinstance(content, str):
-                        import json
-
-                        newly_found_feedback = json.loads(content)
-                    else:
-                        newly_found_feedback = content
-
-                    if not isinstance(newly_found_feedback, list):
-                        newly_found_feedback = []
+                    # Content should already be a list of Question objects from the tool
+                    newly_found_feedback = content if isinstance(content, list) else []
+                    # Further validation could be added here if needed
                 except Exception as e:
                     if self.verbose:
                         self.console.print(
-                            f"[yellow dim]Error parsing feedback result: {e}[/yellow dim]"
+                            f"[yellow dim]Error interpreting search_past_feedback result: {e}[/yellow dim]"
                         )
                     newly_found_feedback = []
 
                 if newly_found_feedback:
-                    current_feedback = state.get("relevant_feedback", [])
-                    updates["relevant_feedback"] = (
-                        current_feedback + newly_found_feedback
-                    )
+                    # --- MODIFIED: Store feedback under 'by_question' key ---
+                    current_feedback_dict = state.get("relevant_feedback", {})
+                    existing_by_question = current_feedback_dict.get("by_question", [])
+                    # Add new items, could add uniqueness check later if needed
+                    updated_by_question = existing_by_question + newly_found_feedback
+                    current_feedback_dict["by_question"] = updated_by_question
+                    updates["relevant_feedback"] = current_feedback_dict
+                    # --- END MODIFIED ---
                     if self.verbose:
                         self.console.print(
-                            f"[dim] -> Updated state with {len(newly_found_feedback)} new feedback items."
+                            f"[dim] -> Updated state with {len(newly_found_feedback)} new feedback items (from similar questions)."
                         )
                 elif self.verbose:
-                    self.console.print("[dim] -> No feedback found.")
+                    self.console.print(
+                        "[dim] -> No feedback found via similar questions."
+                    )
+
+            # --- NEW: Handle results from search_feedback_content ---
+            elif tool_name == "search_feedback_content":
+                try:
+                    newly_found_feedback = content if isinstance(content, list) else []
+                except Exception as e:
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow dim]Error interpreting search_feedback_content result: {e}[/yellow dim]"
+                        )
+                    newly_found_feedback = []
+
+                if newly_found_feedback:
+                    current_feedback_dict = state.get("relevant_feedback", {})
+                    existing_by_content = current_feedback_dict.get("by_content", [])
+                    updated_by_content = existing_by_content + newly_found_feedback
+                    current_feedback_dict["by_content"] = updated_by_content
+                    updates["relevant_feedback"] = current_feedback_dict
+                    if self.verbose:
+                        self.console.print(
+                            f"[dim] -> Updated state with {len(newly_found_feedback)} new feedback items (from content search)."
+                        )
+                elif self.verbose:
+                    self.console.print("[dim] -> No feedback found via content search.")
+            # --- END NEW HANDLER ---
 
             elif tool_name == "finish_workflow":
                 # Tool content should be the final answer string
@@ -673,15 +923,6 @@ class QuestionAnswerer:
                         self.console.print(
                             f"[dim] -> Updated state with final answer.[/dim]"
                         )
-                        # Preview the Markdown formatting in verbose mode
-                        self.console.print(
-                            "[dim] -> Markdown preview of final answer:[/dim]"
-                        )
-                        preview_length = min(300, len(content))
-                        preview = content[:preview_length]
-                        if len(content) > preview_length:
-                            preview += "..."
-                        self.console.print(f"[cyan dim]{preview}[/cyan dim]")
                 elif self.verbose:
                     self.console.print(
                         f"[yellow dim] -> finish_workflow tool ran but returned empty content[/yellow dim]"
@@ -716,13 +957,21 @@ class QuestionAnswerer:
             self.console.print(f"[dim]Generated thread ID: {thread_id}[/dim]")
             self.console.print("[dim]Initializing LangGraph workflow with memory[/dim]")
 
-        # Initial system prompt - important for guiding the LLM
+        # --- MODIFIED: Update initial system prompt ---
         initial_system_prompt = """You are an AI assistant specialized in analyzing dbt projects to answer questions.
-Your primary goal is to understand the user's question, find the relevant dbt models using the 'search_dbt_models' tool, consider past feedback with 'search_past_feedback' if applicable, and then generate a final answer.
+Your primary goal is to understand the user's question, find the relevant dbt models using the 'search_dbt_models' tool, consider past feedback, and then generate a final answer.
+
+**Workflow Steps:**
+1.  **Analyze the Question:** Understand the core concepts.
+2.  **Check Past Feedback (Mandatory First Step):** Use 'search_past_feedback' *immediately* with a concise query reflecting the core information need (similar to what you'd use for model search) to see if this question or similar ones have feedback.
+3.  **Search for Models:** Use 'search_dbt_models' iteratively to find relevant dbt models. Refine your search query based on findings.
+4.  **Search Feedback Content (Optional):** If you need clarification on specific terms or concepts mentioned *within* feedback text later, use 'search_feedback_content'.
+5.  **Synthesize Answer:** Once sufficient models and feedback are gathered, use 'finish_workflow' to provide the final answer.
+
 The final answer, provided via the 'finish_workflow' tool, MUST include:
 1. A SQL query that directly addresses the user's question based on the models found.
 2. A clear explanation of the SQL query, including which models were used and why.
-3. A mention of any potential limitations or assumptions made.
+3. A mention of any potential limitations or assumptions made, considering any relevant feedback found.
 
 Format your answer using Markdown for improved readability:
 - Use headings (# and ##) to organize different sections
@@ -730,9 +979,10 @@ Format your answer using Markdown for improved readability:
 - Use bullet points (-) for listing models or key points
 - Bold important information with **
 
-Use the tools iteratively. Start by searching for models relevant to the core concepts in the question. Refine your search if the initial results are insufficient. Only use 'finish_workflow' when you have enough information to construct the final SQL query and explanation."""
+Remember to call 'search_past_feedback' first!"""
+        # --- END MODIFIED PROMPT ---
 
-        # Initial state
+        # Initial state - MODIFIED: Initialize relevant_feedback as a dict
         initial_state = QuestionAnsweringState(
             original_question=question,
             messages=[
@@ -741,7 +991,8 @@ Use the tools iteratively. Start by searching for models relevant to the core co
             ],
             accumulated_models=[],
             accumulated_model_names=set(),
-            relevant_feedback=[],
+            # relevant_feedback=[],
+            relevant_feedback={},  # Initialize as empty dict
             search_model_calls=0,
             search_queries_tried=set(),
             final_answer=None,
@@ -773,12 +1024,6 @@ Use the tools iteratively. Start by searching for models relevant to the core co
                 self.console.print(
                     f"[dim]Used {len(used_model_names)} models: {', '.join(used_model_names)}[/dim]"
                 )
-
-            # Pretty print the final answer using Markdown
-            if final_answer and isinstance(final_answer, str):
-                self.console.print("\n[bold blue]📝 Final Answer:[/bold blue]")
-                md = Markdown(final_answer)
-                self.console.print(md)
 
             # Record the final question/answer pair if storage is configured
             conversation_id = None

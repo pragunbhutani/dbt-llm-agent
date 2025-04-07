@@ -117,14 +117,24 @@ class QuestionStorage:
             # Convert to ORM model
             question_orm = domain_question.to_orm()
 
-            # Generate and add embedding
-            embedding = self._get_embedding(question_text)
-            if embedding:
-                question_orm.question_embedding = embedding
+            # Generate and add question embedding
+            question_embedding = self._get_embedding(question_text)
+            if question_embedding:
+                question_orm.question_embedding = question_embedding
             else:
                 logger.warning(
                     f"Could not generate embedding for question: {question_text[:50]}..."
                 )
+
+            # Generate and add feedback embedding if feedback text exists
+            if feedback:
+                feedback_embedding = self._get_embedding(feedback)
+                if feedback_embedding:
+                    question_orm.feedback_embedding = feedback_embedding
+                else:
+                    logger.warning(
+                        f"Could not generate embedding for feedback: {feedback[:50]}..."
+                    )
 
             session.add(question_orm)
             session.flush()  # Get the assigned ID
@@ -175,10 +185,21 @@ class QuestionStorage:
                 logger.warning(f"Question with ID {question_id} not found")
                 return False
 
-            # Update feedback
+            # Update feedback fields
             question.was_useful = was_useful
             if feedback:
                 question.feedback = feedback
+                # Generate and add feedback embedding if feedback text exists
+                feedback_embedding = self._get_embedding(feedback)
+                if feedback_embedding:
+                    question.feedback_embedding = feedback_embedding
+                else:
+                    logger.warning(
+                        f"Could not generate embedding for feedback update: {feedback[:50]}..."
+                    )
+            else:
+                # If feedback is being cleared, clear the embedding too
+                question.feedback_embedding = None
 
             # Commit changes
             session.commit()
@@ -262,7 +283,7 @@ class QuestionStorage:
         self,
         query_embedding: List[float],
         limit: int = 5,
-        similarity_threshold: float = 0.8,  # Cosine similarity threshold
+        similarity_threshold: float = 0.65,  # Updated threshold
     ) -> List[Question]:
         """Find similar questions that have feedback (marked not useful or have feedback text).
 
@@ -316,3 +337,60 @@ class QuestionStorage:
             return []
         finally:
             session.close()
+
+    # --- NEW METHOD: Search feedback content ---
+    def find_similar_feedback_content(
+        self,
+        query: str,
+        limit: int = 3,
+        similarity_threshold: float = 0.6,  # Cosine similarity threshold for feedback content
+    ) -> List[Question]:
+        """Find questions where the *feedback text* is semantically similar to the query.
+
+        Args:
+            query: The text query to search for within feedback.
+            limit: Max number of matching questions to return.
+            similarity_threshold: Minimum cosine similarity for feedback to be considered.
+
+        Returns:
+            A list of Question domain objects whose feedback is relevant, ordered by similarity.
+        """
+        session = self.Session()
+        query_embedding = self._get_embedding(query)
+        if not query_embedding:
+            logger.warning(
+                f"Could not generate embedding for feedback content query: {query[:50]}..."
+            )
+            return []
+
+        distance_threshold = 1 - similarity_threshold
+        try:
+            similar_feedback_questions = (
+                session.query(QuestionTable)
+                .filter(
+                    QuestionTable.feedback.isnot(None),
+                    QuestionTable.feedback_embedding.isnot(None),
+                )
+                .filter(
+                    QuestionTable.feedback_embedding.cosine_distance(query_embedding)
+                    < distance_threshold
+                )
+                .order_by(
+                    QuestionTable.feedback_embedding.cosine_distance(
+                        query_embedding
+                    ).asc()
+                )
+                .order_by(QuestionTable.updated_at.desc())  # Tie-break by recency
+                .limit(limit)
+                .all()
+            )
+
+            # Convert ORM results to domain models
+            return [q.to_domain() for q in similar_feedback_questions]
+        except Exception as e:
+            logger.error(f"Error finding similar feedback content: {e}")
+            return []
+        finally:
+            session.close()
+
+    # --- END NEW METHOD ---

@@ -215,6 +215,11 @@ class QuestionTable(Base):
     )
     was_useful = Column(Boolean, nullable=True)
     feedback = Column(Text, nullable=True)
+    feedback_embedding = Column(
+        Vector(1536),
+        nullable=True,
+        comment="Embedding vector for the feedback text using text-embedding-ada-002",
+    )
     question_metadata = Column(JSONB, nullable=True, default={})
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
