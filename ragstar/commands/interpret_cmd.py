@@ -307,8 +307,6 @@ def interpret(
                     )
                     print("--- End Draft vs Final ---\n")
 
-            print(result["yaml_documentation"])
-
             # Save interpretation if requested
             if save:
                 logger.info(f"Saving interpretation for model {model_name}")
