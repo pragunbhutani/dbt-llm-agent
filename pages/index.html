@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Ragstar - RAG Agent Orchestration Framework</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        font-family: "Inter", sans-serif;
+      }
+      .fade-in {
+        animation: fadeIn 0.8s ease-out forwards;
+        opacity: 0;
+      }
+      @keyframes fadeIn {
+        to {
+          opacity: 1;
+        }
+      }
+      .delay-1 {
+        animation-delay: 0.1s;
+      }
+      .delay-2 {
+        animation-delay: 0.2s;
+      }
+      .delay-3 {
+        animation-delay: 0.3s;
+      }
+      .delay-4 {
+        animation-delay: 0.4s;
+      }
+      .delay-5 {
+        animation-delay: 0.5s;
+      }
+      .delay-6 {
+        animation-delay: 0.6s;
+      }
+
+      pre > code {
+        display: block;
+        white-space: pre;
+        word-wrap: normal;
+        overflow-x: auto;
+        background-color: #f3f4f6;
+        color: #1f2937;
+        padding: 1rem;
+        border-radius: 0.375rem;
+        font-family: monospace;
+      }
+      code:not(pre > code) {
+        background-color: #e5e7eb;
+        color: #be185d;
+        padding: 0.125rem 0.25rem;
+        border-radius: 0.25rem;
+        font-size: 0.875em;
+      }
+      /* Add some spacing for list items */
+      section ol li,
+      section ul li {
+        margin-bottom: 0.5rem;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50 text-gray-800">
+    <header
+      class="bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-md fade-in"
+    >
+      <div class="container mx-auto px-6 py-12 text-center">
+        <svg
+          class="w-16 h-16 mx-auto mb-4 text-indigo-200"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.708.707M12 21v-1m6.364-1.636l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M12 12a3 3 0 100-6 3 3 0 000 6z"
+          ></path>
+        </svg>
+        <h1 class="text-4xl md:text-5xl font-bold mb-2">Ragstar</h1>
+        <p class="text-lg md:text-xl text-indigo-100">
+          Your friendly RAG agent orchestration framework.
+        </p>
+      </div>
+    </header>
+
+    <main class="container mx-auto px-6 py-10">
+      <section id="about" class="mb-12 fade-in delay-1">
+        <h2 class="text-3xl font-semibold text-gray-900 mb-4 text-center">
+          About Ragstar
+        </h2>
+        <p
+          class="text-lg text-gray-700 leading-relaxed max-w-3xl mx-auto text-center"
+        >
+          Ragstar is an advanced LLM-based AI Agent framework designed for
+          interacting with and understanding complex projects, initially focused
+          on dbt (data build tool). It helps teams streamline documentation,
+          improve discovery, and gain deeper insights through natural language
+          interaction. Leverage the power of Large Language Models to make your
+          projects more accessible and maintainable.
+        </p>
+        <div class="mt-8 max-w-4xl mx-auto text-center">
+          <h3 class="text-2xl font-semibold text-gray-800 mb-4">
+            Key Features
+          </h3>
+          <ul
+            class="list-disc list-inside text-left inline-block text-gray-700 space-y-1"
+          >
+            <li>Natural Language Question Answering</li>
+            <li>Agentic Interpretation & Reasoning</li>
+            <li>Automated Documentation Generation</li>
+            <li>Semantic Search powered by Vector Embeddings</li>
+            <li>Integration via Manifest Files or Source Code</li>
+            <li>Postgres with pgvector Backend</li>
+            <li>Question & Feedback Tracking</li>
+            <li>Slack Integration</li>
+            <li>Extensible Architecture</li>
+          </ul>
+        </div>
+      </section>
+
+      <section id="installation" class="mb-12 fade-in delay-2">
+        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
+          Installation & Setup
+        </h2>
+        <div
+          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
+        >
+          <p class="text-gray-700 mb-4">
+            Follow these steps to set up Ragstar:
+          </p>
+          <ol class="list-decimal list-inside text-gray-700 space-y-3">
+            <li>
+              <strong>Check Python Version:</strong> Ensure you have Python 3.10
+              or higher.
+              <pre class="mt-1"><code>python3 --version</code></pre>
+            </li>
+            <li>
+              <strong>Clone the repository:</strong>
+              <pre
+                class="mt-1"
+              ><code>git clone https://github.com/pragunbhutani/ragstar.git
+cd ragstar</code></pre>
+            </li>
+            <li>
+              <strong>Install dependencies:</strong> Using Poetry.
+              <pre
+                class="mt-1"
+              ><code># Install Poetry if needed: curl -sSL https://install.python-poetry.org | python3 -
+poetry install</code></pre>
+            </li>
+            <li>
+              <strong>Set up PostgreSQL:</strong> Requires PostgreSQL (11+) with
+              the <code>pgvector</code> extension.
+              <pre class="mt-1"><code># Example: Local setup
+createdb ragstar
+psql -d ragstar -c 'CREATE EXTENSION IF NOT EXISTS vector;'</code></pre>
+              See the
+              <a
+                href="https://github.com/pgvector/pgvector"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-600 hover:underline"
+                >pgvector docs</a
+              >
+              for more options.
+            </li>
+            <li>
+              <strong>Configure environment variables:</strong> Copy
+              <code>.env.example</code> to <code>.env</code> and fill in your
+              details (<code>OPENAI_API_KEY</code>, <code>POSTGRES_URI</code>,
+              etc.).
+              <pre class="mt-1"><code>cp .env.example .env
+# vim .env # Or use your favorite editor</code></pre>
+            </li>
+            <li>
+              <strong>Initialize the database schema:</strong>
+              <pre class="mt-1"><code>poetry run ragstar init-db</code></pre>
+            </li>
+            <li>
+              <strong>Initialize your project:</strong> Load metadata using one
+              of the modes (cloud, local, source). Example using local mode:
+              <pre
+                class="mt-1"
+              ><code># Make sure DBT_PROJECT_PATH is set in .env or provided via --project-path
+poetry run ragstar init local --project-path /path/to/your/dbt/project</code></pre>
+            </li>
+          </ol>
+          <p class="text-sm text-gray-600 mt-4">
+            <em
+              >For full details on initialization modes and dbt Cloud setup,
+              please refer to the
+              <a
+                href="https://github.com/pragunbhutani/ragstar#setup"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-blue-600 hover:underline"
+                >README</a
+              >.</em
+            >
+          </p>
+        </div>
+      </section>
+
+      <section id="usage" class="mb-12 fade-in delay-3">
+        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
+          Using Ragstar (CLI)
+        </h2>
+        <div
+          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
+        >
+          <p class="text-gray-700 mb-4">
+            Once initialized, use the CLI to interact with Ragstar:
+          </p>
+          <div class="space-y-4">
+            <div>
+              <h4 class="font-semibold text-gray-800">
+                1. Process Documentation & Embeddings:
+              </h4>
+              <p class="text-sm text-gray-600 mb-1">
+                Generate embeddings for existing docs, or interpret+embed models
+                without docs.
+              </p>
+              <pre><code># Embed existing docs for all models
+poetry run ragstar embed --select "*"
+
+# Interpret, save, and embed models tagged 'staging'
+poetry run ragstar interpret --select "tag:staging" --save --embed</code></pre>
+            </div>
+            <div>
+              <h4 class="font-semibold text-gray-800">2. Ask Questions:</h4>
+              <p class="text-sm text-gray-600 mb-1">
+                Query your project using natural language.
+              </p>
+              <pre><code>poetry run ragstar ask "Explain the fct_orders model"
+poetry run ragstar ask "Which models depend on stg_users?"</code></pre>
+            </div>
+            <div>
+              <h4 class="font-semibold text-gray-800">3. Provide Feedback:</h4>
+              <p class="text-sm text-gray-600 mb-1">
+                Help improve the agent's responses.
+              </p>
+              <pre><code># List previous questions
+poetry run ragstar questions
+
+# Mark question 1 as useful
+poetry run ragstar feedback 1 --useful
+
+# Mark question 2 as not useful and provide correction
+poetry run ragstar feedback 2 --not-useful --text "The upstream source is incorrect."</code></pre>
+            </div>
+            <div>
+              <h4 class="font-semibold text-gray-800">4. Other Commands:</h4>
+              <pre><code># List models
+poetry run ragstar list
+
+# Get details for a specific model
+poetry run ragstar model-details my_model_name</code></pre>
+            </div>
+          </div>
+          <p class="text-sm text-gray-600 mt-4">
+            This covers the main CLI commands. Refer to the
+            <a
+              href="https://github.com/pragunbhutani/ragstar#usage"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="text-blue-600 hover:underline"
+              >README</a
+            >
+            for more advanced options and programmatic usage.
+          </p>
+        </div>
+      </section>
+
+      <section id="slackbot" class="mb-12 fade-in delay-4">
+        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
+          Slackbot Integration
+        </h2>
+        <div
+          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
+        >
+          <p class="text-gray-700 mb-4">
+            Interact with your Ragstar agents directly from Slack:
+          </p>
+          <ol class="list-decimal list-inside text-gray-700 mb-4 space-y-2">
+            <li>
+              Configure Slack API tokens (<code>SLACK_BOT_TOKEN</code>,
+              <code>SLACK_APP_TOKEN</code>) in your <code>.env</code> file.
+            </li>
+            <li>Run the Slackbot application:</li>
+          </ol>
+          <pre><code>poetry run python -m ragstar.integrations.slackbot</code></pre>
+          <p class="text-sm text-gray-600 mt-4">
+            Mention the bot in your Slack workspace to start interacting.
+          </p>
+        </div>
+      </section>
+
+      <section id="get-involved" class="mb-12 text-center fade-in delay-5">
+        <h2 class="text-3xl font-semibold text-gray-900 mb-4">Get Involved</h2>
+        <p class="text-lg text-gray-700 leading-relaxed max-w-3xl mx-auto mb-6">
+          Ragstar is an open-source project. Check out the GitHub repository to
+          see the latest progress, explore the code, and contribute!
+        </p>
+        <a
+          href="https://github.com/pragunbhutani/ragstar"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:-translate-y-1"
+        >
+          View on GitHub
+        </a>
+      </section>
+    </main>
+
+    <footer class="bg-gray-800 text-gray-300 py-6 mt-12 fade-in delay-6">
+      <div class="container mx-auto px-6 text-center">
+        <p>&copy; 2024 Ragstar Project. All rights reserved.</p>
+        <p class="text-sm mt-1">
+          Released under the
+          <a
+            href="https://github.com/pragunbhutani/ragstar/blob/main/LICENSE"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-blue-400 hover:text-blue-300 underline"
+          >
+            MIT License </a
+          >.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

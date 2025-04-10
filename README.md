@@ -20,8 +20,8 @@
 - **dbt Integration**: Seamlessly integrates with dbt projects by parsing `manifest.json` artifacts from dbt Cloud runs or local `dbt compile` output, or directly from source code. Supports dbt's model selection syntax (`--select`, `--exclude`) for targeted operations.
 - **Postgres with pgvector**: Uses PostgreSQL and the `pgvector` extension to efficiently store dbt metadata, generated documentation, and vector embeddings for fast retrieval and semantic search. Compatible with managed services like Supabase Postgres.
 - **Question & Feedback Tracking**: Logs all questions, answers, and user feedback (useful/not useful, corrections) to enable continuous learning and improvement of the agent's performance.
+- **Slack Integration**: Interact with Ragstar directly within your Slack workspace using the built-in Slackbot.
 - **Extensible Architecture**: Built with modular components for easy extension and customization.
-- **Coming Soon: Slack Integration**: Interact with Ragstar directly within your Slack workspace.
 
 ## Use Cases
 
@@ -249,7 +249,41 @@ poetry run ragstar feedback 3 --text "This answer is correct but too verbose."
 
 This feedback helps the agent improve its answers over time.
 
-### 4. Additional Commands
+### 4. Running the Slackbot
+
+Interact with your configured Ragstar agent directly through Slack:
+
+#### Setting up the Slack App using the Manifest
+
+The easiest way to configure the necessary permissions and settings for your Slack bot is by using the provided app manifest:
+
+1.  **Find the Manifest:** Locate the `.slack_manifest.example.json` file in the root of the project repository.
+2.  **Go to Slack API:** Navigate to [api.slack.com/apps](https://api.slack.com/apps) and log in to your Slack account.
+3.  **Create New App:** Click on "Create New App".
+4.  **Choose Manifest:** Select the "From an app manifest" option.
+5.  **Select Workspace:** Choose the Slack workspace where you want to install the bot.
+6.  **Paste Manifest:** Copy the _entire_ content of the `.slack_manifest.example.json` file and paste it into the JSON or YAML manifest input field. Click "Next".
+7.  **Review:** Slack will show a summary of the configuration (bot name, permissions, etc.). Review it and click "Create".
+8.  **Install App:** After creation, you'll be taken to the app's settings page. Click "Install to Workspace" and authorize the installation.
+9.  **Get Bot Token:** Navigate to the "OAuth & Permissions" section in the left sidebar. Copy the "Bot User OAuth Token". This is your `SLACK_BOT_TOKEN`.
+10. **Generate App-Level Token:** Go to the "Basic Information" section. Scroll down to "App-Level Tokens" and click "Generate Token and Scopes".
+    - Give the token a name (e.g., `ragstar-app-token`).
+    - Add the `connections:write` scope.
+    - Click "Generate".
+    - Copy the generated token. This is your `SLACK_APP_TOKEN`.
+
+#### Environment Variables and Running
+
+- Ensure you have added the `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` obtained from the steps above to your `.env` file.
+- Run the Slackbot application:
+
+  ```bash
+  poetry run python -m ragstar.integrations.slackbot
+  ```
+
+- Once running, mention the bot in your Slack workspace to ask questions about your dbt project.
+
+### 5. Additional Commands
 
 ```bash
 # List all models in your project
