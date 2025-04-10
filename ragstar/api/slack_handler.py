@@ -10,7 +10,9 @@ from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.storage.question_storage import QuestionStorage
 from ragstar.core.agents.slack_responder import SlackResponder
-from ragstar.utils.cli_utils import get_config_value, setup_logging
+from ragstar.utils.cli_utils import get_config_value
+from ragstar.utils.logging import setup_logging
+from ragstar.utils.slack import get_async_slack_client
 
 # Import Slack Bolt components
 from slack_bolt.async_app import AsyncApp
@@ -61,20 +63,16 @@ async def startup_event():
         db_uri = get_config_value("POSTGRES_URI")
         if not db_uri:
             raise ValueError(
-                "POSTGRES_URI not found in environment variables or config."
+                "POSTGRES_URI not found in environment variables or config. Postgres is required."
             )
-        model_storage = ModelStorage(database_uri=db_uri)
-        vector_store = ModelEmbeddingStorage(
-            database_uri=db_uri, embedder_api_key=openai_api_key
-        )
+        model_storage = ModelStorage(connection_string=db_uri)
+        vector_store = ModelEmbeddingStorage(connection_string=db_uri)
         question_storage = QuestionStorage(
-            database_uri=db_uri, openai_api_key=openai_api_key
+            connection_string=db_uri, openai_api_key=openai_api_key
         )
 
         # Initialize the shared AsyncWebClient (needed by SlackResponder)
-        slack_client = AsyncWebClient(
-            token=slack_bot_token
-        )  # Use token fetched globally
+        slack_client = get_async_slack_client(slack_bot_token)
 
         # Slack Responder Agent (Now initializes its own QuestionAnswerer)
         slack_responder = SlackResponder(

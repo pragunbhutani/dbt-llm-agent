@@ -23,7 +23,6 @@ def load_config() -> Dict[str, Any]:
         "vector_db_path": os.environ.get("VECTOR_DB_PATH", "data/vector_db"),
         "dbt_project_path": os.environ.get("DBT_PROJECT_PATH", None),
         "slack_bot_token": os.environ.get("SLACK_BOT_TOKEN", ""),
-        "slack_app_token": os.environ.get("SLACK_APP_TOKEN", ""),
         "slack_signing_secret": os.environ.get("SLACK_SIGNING_SECRET", ""),
     }
     return config

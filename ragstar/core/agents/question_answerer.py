@@ -389,11 +389,12 @@ class QuestionAnswerer:
             Use this tool ONLY when you have gathered all necessary information from 'search_dbt_models',
             considered any relevant feedback from 'search_past_feedback',
             and are ready to provide the complete, final answer (including SQL query and explanation).
-            Format your answer using Markdown for improved readability:
-            - Use headings (# and ##) to organize different sections
-            - Put SQL code in code blocks with ```sql and ```
+            Format your answer using Slack's `mrkdwn` syntax for improved readability:
+            - Use *bold text* for emphasis or section names (NOT # or ## headings)
+            - Put SQL code in code blocks with ``` and ``` (no language specification)
             - Use bullet points (-) for listing models or key points
-            - Bold important information with **
+            - Use _italic_ for minor emphasis
+            - Use `inline code` for model names or short code snippets
             Ensure the answer directly addresses the user's original question."""
             if self.verbose:
                 self.console.print(
@@ -973,11 +974,12 @@ The final answer, provided via the 'finish_workflow' tool, MUST include:
 2. A clear explanation of the SQL query, including which models were used and why.
 3. A mention of any potential limitations or assumptions made, considering any relevant feedback found.
 
-Format your answer using Markdown for improved readability:
-- Use headings (# and ##) to organize different sections
-- Put SQL code in code blocks with ```sql and ```
+IMPORTANT: Format your final answer using Slack `mrkdwn` syntax:
+- Use *bold text* for section names and emphasis. Do NOT use # or ## headings at all.
+- Put SQL code in code blocks with ``` and ``` (no language specification)
 - Use bullet points (-) for listing models or key points
-- Bold important information with **
+- Use `inline code` for model names or short code snippets
+- Use _italics_ sparingly for minor emphasis
 
 Remember to call 'search_past_feedback' first!"""
         # --- END MODIFIED PROMPT ---
