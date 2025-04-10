@@ -266,19 +266,14 @@ The easiest way to configure the necessary permissions and settings for your Sla
 7.  **Review:** Slack will show a summary of the configuration (bot name, permissions, etc.). Review it and click "Create".
 8.  **Install App:** After creation, you'll be taken to the app's settings page. Click "Install to Workspace" and authorize the installation.
 9.  **Get Bot Token:** Navigate to the "OAuth & Permissions" section in the left sidebar. Copy the "Bot User OAuth Token". This is your `SLACK_BOT_TOKEN`.
-10. **Generate App-Level Token:** Go to the "Basic Information" section. Scroll down to "App-Level Tokens" and click "Generate Token and Scopes".
-    - Give the token a name (e.g., `ragstar-app-token`).
-    - Add the `connections:write` scope.
-    - Click "Generate".
-    - Copy the generated token. This is your `SLACK_APP_TOKEN`.
 
 #### Environment Variables and Running
 
-- Ensure you have added the `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` obtained from the steps above to your `.env` file.
-- Run the Slackbot application:
+- Ensure you have added the `SLACK_BOT_TOKEN` obtained from the steps above to your `.env` file.
+- Run the Slackbot application using the serve command:
 
   ```bash
-  poetry run python -m ragstar.integrations.slackbot
+  poetry run ragstar serve
   ```
 
 - Once running, mention the bot in your Slack workspace to ask questions about your dbt project.
