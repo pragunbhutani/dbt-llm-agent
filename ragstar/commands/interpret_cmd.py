@@ -217,6 +217,44 @@ def interpret(
                 f"\n=== Interpretation for model: {model_name} ({i+1}/{total_models}) ===\n"
             )
 
+            # === New Code: Pretty-print YAML ===
+            documentation_dict = result.get("documentation")
+            if documentation_dict and isinstance(documentation_dict, dict):
+                # Structure for dbt YAML
+                dbt_yaml_structure = {
+                    "models": [
+                        {
+                            "name": documentation_dict.get("name", model_name),
+                            "description": documentation_dict.get("description", ""),
+                            "columns": documentation_dict.get("columns", []),
+                        }
+                    ]
+                }
+                # Convert to YAML string
+                try:
+                    yaml_output = yaml.dump(
+                        dbt_yaml_structure,
+                        sort_keys=False,
+                        indent=2,
+                        allow_unicode=True,
+                    )
+                    print("--- Generated dbt YAML ---")
+                    print(yaml_output)
+                    print("--- End Generated dbt YAML ---")
+                except Exception as yaml_err:
+                    logger.error(f"Failed to format documentation as YAML: {yaml_err}")
+                    # Optionally print the raw dict if YAML fails
+                    print(
+                        "--- Raw Documentation Dictionary (YAML formatting failed) ---"
+                    )
+                    print(json.dumps(documentation_dict, indent=2))
+                    print("--- End Raw Documentation ---")
+            else:
+                logger.warning(
+                    f"No valid documentation dictionary found in the result for {model_name} to print as YAML."
+                )
+            # === End New Code ===
+
             # Display iteration configuration
             if "verification_iterations" in result:
                 total_iterations = result.get("verification_iterations", 1)
