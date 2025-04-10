@@ -151,53 +151,35 @@ class ModelEmbeddingStorage:
                 interpretation_text or stored_interpreted_description
             )
 
-            # Create a combined metadata object
+            # Combine existing metadata with new metadata
             combined_metadata = existing_metadata.copy()
             if metadata:
                 combined_metadata.update(metadata)
 
-            # Ensure dbt_model section exists
+            # Ensure dbt_model section exists in metadata
             if "dbt_model" not in combined_metadata:
                 combined_metadata["dbt_model"] = {}
 
-            # Update metadata with descriptions
+            # Update metadata with descriptions if available from DB or passed args
             if yml_description:
                 combined_metadata["dbt_model"]["yml_description"] = yml_description
             if effective_interpretation:
                 combined_metadata["dbt_model"][
                     "interpreted_description"
                 ] = effective_interpretation
-            if documentation_text:
+            if documentation_text:  # Keep for potential direct calls
                 if "documentation" not in combined_metadata:
                     combined_metadata["documentation"] = {}
                 combined_metadata["documentation"]["text"] = documentation_text
-            if interpretation_text:
-                if "interpretation" not in combined_metadata:
-                    combined_metadata["interpretation"] = {}
-                combined_metadata["interpretation"]["text"] = interpretation_text
 
-            # Create embedding document
-            if model_text and not (
-                "YML Description:" in model_text
-                and "Interpreted Description:" in model_text
-            ):
-                # If model_text is provided but doesn't have descriptions, we should regenerate
-                logger.info(
-                    f"Regenerating model text for {model_name} to include descriptions"
+            # Validate that model_text is provided
+            if not model_text or not model_text.strip():
+                logger.error(
+                    f"Cannot store embedding for model {model_name}: model_text is missing or empty."
                 )
-                model_text = None
-
-            if not model_text:
-                # Generate model text from a dummy model
-                dummy_model = DBTModel(
-                    name=model_name,
-                    description=yml_description,
-                    interpreted_description=effective_interpretation,
-                )
-                model_text = dummy_model.get_text_representation(
-                    include_documentation=True,
-                    additional_documentation=documentation_text,
-                )
+                # Depending on desired behavior, could raise ValueError here
+                # raise ValueError(f"model_text is required to store embedding for {model_name}")
+                return  # Or simply log and return
 
             # Generate embedding
             try:

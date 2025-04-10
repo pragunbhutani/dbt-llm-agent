@@ -704,48 +704,28 @@ Follow the interpretation process outlined in the system message. Start by analy
                 logger.info(
                     f"Re-embedding model {model_name} after saving interpretation"
                 )
-                session.refresh(model_record) # Ensure we have the latest data
+                # Re-fetch the updated model record to get all data including interpretation
+                session.refresh(model_record)
 
-                try:
-                    # Construct text representation for embedding using updated record
-                    text_parts = [
-                        f"Model: {model_record.name}",
-                        f"Description: {model_record.interpreted_description or ''}", # Use new description
-                        "Columns:",
-                    ]
-                    # Use new columns
-                    for col_name, col_desc in (
-                        model_record.interpreted_columns or {}
-                    ).items():
-                        text_parts.append(f"  - {col_name}: {col_desc or ''}")
-                    if model_record.raw_sql: # Still include raw SQL if available in DB
-                        text_parts.append("SQL:")
-                        text_parts.append(model_record.raw_sql)
+                # Convert ORM record to domain model
+                updated_domain_model = model_record.to_domain()
 
-                    model_text_for_embedding = "\n".join(text_parts)
+                # Generate the text representation using the domain model's method
+                model_text_for_embedding = updated_domain_model.get_text_representation(
+                    include_documentation=True
+                )
 
-                    if model_text_for_embedding.strip(): # Check if there's actual content
-                        self.vector_store.store_model_embedding(
-                            model_name=model_record.name,
-                            model_text=model_text_for_embedding,
-                        )
-                        logger.info(f"Successfully re-embedded model {model_name}")
-                    else:
-                        logger.warning(
-                            f"Could not generate non-empty text representation for {model_name} from DB record for embedding."
-                        )
-
-                except Exception as embed_err:
-                    logger.error(
-                        f"Error during re-embedding of {model_name}: {embed_err}",
-                        exc_info=True,
+                if model_text_for_embedding.strip(): # Check if there's actual content
+                    self.vector_store.store_model_embedding(
+                        model_name=model_record.name,
+                        model_text=model_text_for_embedding,
+                        force=True # Force update since we just saved interpretation
                     )
-                    # Report success for saving, but warn about embedding failure
-                    return {
-                        "success": True,
-                        "warning": f"Interpretation saved, but failed to re-embed model {model_name}: {embed_err}",
-                        "model_name": model_name,
-                    }
+                    logger.info(f"Successfully re-embedded model {model_name}")
+                else:
+                    logger.warning(
+                        f"Could not generate non-empty text representation for {model_name} from DB record for embedding."
+                    )
 
 
             return {"success": True, "model_name": model_name}

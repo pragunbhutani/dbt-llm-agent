@@ -349,7 +349,7 @@ def interpret(
             if save:
                 logger.info(f"Saving interpretation for model {model_name}")
                 save_result = interpreter.save_interpreted_documentation(
-                    model_name, result["yaml_documentation"], embed=embed
+                    model_name, result["documentation"], embed=embed
                 )
 
                 if save_result.get("success", False):
