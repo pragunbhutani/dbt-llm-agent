@@ -1,0 +1,35 @@
+display_information:
+  name: Ragstar Integration
+  description: Connect Slack with your Ragstar application.
+  background_color: "#2F6EAF" # Example color
+
+features:
+  bot_user:
+    display_name: RagstarBot
+    always_online: false
+  slash_commands:
+    - command: /ragstar
+      url: https://your-ragstar-api.com/slack/commands
+      description: Interact with Ragstar.
+      usage_hint: "[your query or command]"
+      should_escape: false
+
+oauth_config:
+  scopes:
+    bot:
+      - commands
+      - chat:write
+      - chat:write.public # If the bot needs to post in channels it's not explicitly invited to
+
+settings:
+  interactivity:
+    is_enabled: true
+    request_url: https://your-ragstar-api.com/slack/events # Endpoint for interactive components (buttons, modals, etc.)
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
+  event_subscriptions:
+    request_url: https://your-ragstar-api.com/slack/events # Endpoint for events API
+    bot_events:
+      - app_mention # Triggered when your bot is @mentioned
+      - message.im # Triggered when a user DMs your bot

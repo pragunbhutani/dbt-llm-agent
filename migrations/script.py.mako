@@ -12,10 +12,10 @@ from alembic import op
 import sqlalchemy as sa
 ${imports if imports else ""}
 
-from dbt_llm_agent.utils.logging import get_logger
+from ragstar.utils.logging import get_logger
 
 # Get logger
-logger = get_logger("alembic.migration")
+logger = get_logger(__name__)
 
 # revision identifiers, used by Alembic.
 revision: str = ${repr(up_revision)}

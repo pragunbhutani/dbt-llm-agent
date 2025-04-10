@@ -12,7 +12,7 @@ poetry install
 
 # Setup instructions
 echo "
-Setup complete! You can now run the dbt-llm-agent:
+Setup complete! You can now run the ragstar:
 
 # Configure your environment
 # Copy .env.example to .env and edit the values
@@ -23,5 +23,12 @@ cp .env.example .env
 # - POSTGRES_URI
 
 # Parse a dbt project
-poetry run dbt-llm-agent parse /path/to/your/dbt/project
-" 
+poetry run ragstar parse /path/to/your/dbt/project
+
+Examples:
+--------
+Initialize the database:
+poetry run ragstar init-db
+
+Then ask questions:
+poetry run ragstar ask \"What does the orders model do?\"" 
