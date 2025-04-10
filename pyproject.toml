@@ -33,6 +33,7 @@ rich = "^14.0.0"
 langgraph = "^0.3.25"
 psycopg-pool = "^3.2.6"
 langgraph-checkpoint-postgres = "^2.0.19"
+aiohttp = "^3.11.16"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.11.0"
