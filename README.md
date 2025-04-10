@@ -7,29 +7,43 @@
 [![Linting: ruff](https://img.shields.io/badge/linting-ruff-red.svg)](https://github.com/astral-sh/ruff)
 [![Beta Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/pragunbhutani/ragstar)
 
-An LLM-powered agent for interacting with dbt projects.
+**Ragstar is an advanced LLM-based AI Agent designed specifically for interacting with and understanding your dbt (data build tool) projects.** It helps data teams streamline documentation, improve data discovery, and gain deeper insights into their dbt models through natural language interaction. Leverage the power of Large Language Models to make your dbt project more accessible and maintainable.
 
-> **BETA NOTICE**: This project is currently in beta. The most valuable features at this stage are model interpretation and question answering. A Slack integration is coming soon!
+> **BETA NOTICE**: Ragstar is currently in beta. Key features include agentic model interpretation and semantic question answering about your dbt project. Slack integration and other enhancements are actively under development.
 
-## Features
+## Key Features
 
-- **Question Answering**: Ask questions about your dbt project in natural language
-- **Documentation Generation**: Automatically generate documentation for missing models
-- **Agentic Model Interpretation**: Intelligently interpret models using a step-by-step approach that verifies interpretations against upstream models
-- **Postgres with pgvector**: Store model embeddings in Postgres using pgvector (supports Supabase)
-- **dbt Model Selection**: Use dbt's model selection syntax to specify which models to work with
-- **Question Tracking**: Track questions, answers, and feedback for continuous improvement
-- **Coming Soon: Slack Integration**: Ask questions and receive answers directly in Slack
+- **Natural Language Question Answering**: Ask questions about your dbt project structure, models, sources, metrics, and lineage in plain English (e.g., "Explain the `fct_orders` model", "Which models use the `stg_customers` source?").
+- **Agentic Model Interpretation**: Ragstar intelligently analyzes dbt models, understanding their logic, upstream dependencies, and business context. It verifies interpretations by examining related models, ensuring accuracy.
+- **Automated Documentation Generation**: Automatically generate descriptions and column-level documentation for dbt models lacking documentation, reducing manual effort and improving data catalog quality.
+- **Semantic Search**: Find relevant models, columns, and documentation based on the meaning of your query, not just keywords, powered by vector embeddings.
+- **dbt Integration**: Seamlessly integrates with dbt projects by parsing `manifest.json` artifacts from dbt Cloud runs or local `dbt compile` output, or directly from source code. Supports dbt's model selection syntax (`--select`, `--exclude`) for targeted operations.
+- **Postgres with pgvector**: Uses PostgreSQL and the `pgvector` extension to efficiently store dbt metadata, generated documentation, and vector embeddings for fast retrieval and semantic search. Compatible with managed services like Supabase Postgres.
+- **Question & Feedback Tracking**: Logs all questions, answers, and user feedback (useful/not useful, corrections) to enable continuous learning and improvement of the agent's performance.
+- **Extensible Architecture**: Built with modular components for easy extension and customization.
+- **Coming Soon: Slack Integration**: Interact with Ragstar directly within your Slack workspace.
+
+## Use Cases
+
+- **Accelerate Data Discovery**: Quickly find relevant dbt models and understand their purpose without digging through code.
+- **Improve Onboarding**: Help new team members understand the dbt project structure and logic faster.
+- **Maintain Data Documentation**: Keep dbt documentation up-to-date with automated generation and suggestions.
+- **Enhance Data Governance**: Gain better visibility into data lineage and model dependencies.
+- **Debug dbt Models**: Ask clarifying questions about model logic and calculations.
 
 ## Architecture
 
-The agent uses a combination of:
+Ragstar combines several technologies to provide its capabilities:
 
-- **dbt Project Parsing**: Extract information from your dbt project including models, sources, and documentation
-- **PostgreSQL with pgvector**: Store both structured metadata and vector embeddings for semantic search
-- **Model Selection**: Selectively parse and embed models using dbt's selection syntax
-- **LLM Integration**: Use large language models (like GPT-4) to generate responses and documentation
-- **Question Tracking**: Store a history of questions, answers, and user feedback
+- **dbt Project Parsing**: Extracts comprehensive metadata from dbt artifacts (`manifest.json`) or source files (`.sql`, `.yml`), including models, sources, exposures, metrics, tests, columns, descriptions, and lineage.
+- **PostgreSQL Database with pgvector**: Serves as the central knowledge store. It holds structured metadata parsed from the dbt project, generated documentation, question/answer history, and vector embeddings of model and column descriptions for semantic search.
+- **Vector Embeddings**: Creates numerical representations (embeddings) of model and column documentation using sentence-transformer models. These embeddings capture semantic meaning, enabling powerful search capabilities.
+- **Large Language Models (LLMs)**: Integrates with LLMs (e.g., OpenAI's GPT models) via APIs to:
+  - Understand natural language questions.
+  - Generate human-readable answers based on retrieved context from the database and embeddings.
+  - Interpret model logic and generate documentation.
+- **Agentic Reasoning**: Employs a step-by-step reasoning process, especially for model interpretation, where it breaks down the task, gathers evidence (e.g., upstream model definitions), and synthesizes an interpretation, similar to how a human analyst would approach it.
+- **CLI Interface**: Provides command-line tools (`ragstar ...`) for initialization, embedding generation, asking questions, providing feedback, and managing the system.
 
 ## Setup
 
@@ -100,7 +114,7 @@ The agent uses a combination of:
     poetry run ragstar init-db
     ```
 
-## Initializing Your dbt Project
+## Initializing Your dbt Project with Ragstar
 
 To use the agent, you first need to load your dbt project's metadata into the database. Use the `init` command:
 
