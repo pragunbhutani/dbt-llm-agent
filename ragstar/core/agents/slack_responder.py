@@ -481,19 +481,23 @@ Workflow:
 2. Use the 'fetch_slack_thread' tool ONCE to get the recent message history for context.
 3. Analyze the original question AND the thread history. If the history provides important context (e.g., clarifying a previous point, referring to an earlier topic), formulate a combined question. Otherwise, just use the original question.
 4. Use the 'ask_question_answerer' tool with the formulated question. This tool will invoke another agent to find the answer based on dbt models.
-5. Once you receive the final answer from 'ask_question_answerer', review it and ensure it is formatted correctly for Slack's `mrkdwn` syntax.
-6. Use the 'respond_to_slack_thread' tool to post this formatted answer back into the original Slack thread.
-7. Your final step should always be calling 'respond_to_slack_thread'. Do not try to chat further after getting the answer.
+5. **CRITICAL**: Once you receive the final answer from 'ask_question_answerer', you MUST **verify and correct** its formatting to strictly adhere to Slack's `mrkdwn` syntax before proceeding. Pay close attention to the formatting rules below.
+6. Use the 'respond_to_slack_thread' tool to post this **correctly formatted** answer back into the original Slack thread.
+7. Your final step should always be calling 'respond_to_slack_thread' with the verified and corrected answer. Do not try to chat further after getting the answer.
 
-IMPORTANT SLACK FORMATTING INSTRUCTIONS:
-- Ensure NO Markdown headings (# or ##) are used - Slack doesn't support these!
-- Instead, use *bold text* for section titles and emphasis
-- Use `inline code` for model names, fields, or technical terms
-- Use ``` for code blocks (no language specification like ```sql)
-- Use bullet points with (-) for lists
-- Use _italics_ sparingly
+**STRICT SLACK MARKDOWN (mrkdwn) FORMATTING RULES:**
+Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-messages#markup
+- **NO Markdown headings (# or ##).** Slack does not support these. Use *bold text* instead.
+- Use *bold text* for emphasis or section names (surrounded by asterisks: *your text*).
+- Use _italic text_ for minor emphasis (surrounded by underscores: _your text_).
+- Use `inline code` for model names, fields, or technical terms (surrounded by backticks: `your text`).
+- Use code blocks for SQL queries or multi-line code (surrounded by triple backticks: ```your code```). **Crucially, do NOT specify a language** (like ```sql).
+- Use >blockquote for quoting text (add > before the text: >your text).
+- Use bulleted lists starting with * or - followed by a space (* your text).
+- Use numbered lists starting with 1. followed by a space (1. your text).
+- Check for stray Markdown elements that are not Slack-compatible.
 
-Do NOT add or modify the actual SQL query content provided by the QuestionAnswerer, but ensure all formatting follows Slack's mrkdwn syntax.
+**Your responsibility:** Review the answer from QuestionAnswerer. If it contains formatting errors (like `#` headings or ```sql blocks), correct them before calling `respond_to_slack_thread`. Do NOT add or modify the actual SQL query content itself, only the formatting and the surrounding text's formatting.
 """
             # Use single quotes for f-string, double for dict keys
             initial_human_message = f'New question received from Slack:\\nChannel ID: {state["channel_id"]}\\nThread TS: {state["thread_ts"]}\\nQuestion: "{state["original_question"]}"\\n\\nPlease fetch the thread history to understand the context.'
@@ -511,9 +515,9 @@ Do NOT add or modify the actual SQL query content provided by the QuestionAnswer
                     "Analyze the thread history and the original question. Formulate the question for the 'ask_question_answerer' tool."
                 )
             else:
-                # Final answer is ready, instruct to format and respond.
+                # Final answer is ready, instruct to VERIFY, FIX, and respond.
                 guidance_items.append(
-                    f"You have received the final answer. IMPORTANT: Check and fix the formatting to ensure it uses Slack's `mrkdwn` syntax: use *bold* instead of # headings, `code`, ```code blocks``` (no language specification), etc. DO NOT modify the SQL query content, but ensure the format is Slack-compatible. Then use 'respond_to_slack_thread' to post it back to channel {state['channel_id']} in thread {state['thread_ts']}."
+                    f"You have received the final answer. **CRITICAL ACTION**: Review the answer text for strict adherence to Slack `mrkdwn` format. **Correct any errors** (e.g., remove '#', '##' headings, ensure code blocks are ``` without language specifiers, use *bold*). Do NOT modify the SQL query content itself, only the formatting. Once verified and corrected, use 'respond_to_slack_thread' to post the fixed answer to channel {state['channel_id']} in thread {state['thread_ts']}."
                 )
 
             guidance = "Guidance: " + " ".join(guidance_items)
