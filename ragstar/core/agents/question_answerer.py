@@ -420,7 +420,9 @@ class QuestionAnswerer:
             **CRITICAL: GROUNDING & ACCURACY:**
             - **DO NOT HALLUCINATE:** You MUST strictly base the SQL query and explanation on the columns and relationships present in the dbt models retrieved via 'search_dbt_models'. Never invent table or column names.
             - **HANDLE INCOMPLETENESS:** If the retrieved models are insufficient to fully answer the question, generate the best possible answer using *only* the available information. Clearly state in the explanation that the answer may be incomplete and specify what information (e.g., specific metrics, columns, relationships between models) was missing or could not be confirmed.
-            - **CLARIFYING QUESTIONS (Optional Footnotes):** If needed, include clarifying questions in a 'Footnotes' section at the end (e.g., "Footnotes:\n1. Could you clarify if 'metric X' refers to column Y or Z?"). This helps continue the conversation in Slack.
+            - **CLARIFYING QUESTIONS (Optional Footnotes):** If needed, include clarifying questions in a 'Footnotes' section *after* the SQL code block (as normal text, not as SQL comments). For example:
+              "Footnotes:\n1. Could you clarify if 'metric X' refers to column Y or Z?". This helps continue the conversation in Slack. Do NOT include footnotes or clarifying questions as SQL comments; they must be outside the code block.
+            - **EXPLANATIONS FOR NON-OBVIOUS LOGIC:** Place explanations for non-obvious logic or limitations as comments *above* the relevant CTE or section in the SQL query. If it is not possible to place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do NOT use inline comments at the end of SQL lines, and do NOT add explanations after the SQL block except in the 'Footnotes' section.
 
             **CRITICAL: Format your answer strictly using Slack's `mrkdwn` syntax:**
             - Use *bold text* for emphasis or section names. Surround text with asterisks: *your text*
@@ -1025,15 +1027,17 @@ Your primary goal is to understand the user's question, find the relevant dbt mo
 
 The final answer, provided via the 'finish_workflow' tool, MUST include:
 1. A SQL query that directly addresses the user's question based *strictly* on the models and columns found. **Follow the SQL STYLE GUIDE below.**
-2. Only include simple, concise explanations as comments *within* the SQL query itself, and only where necessary to clarify non-obvious logic. Do not add any explanation text after the SQL block.
-3. If there are limitations or missing information, briefly note this as a comment within the SQL query.
+2. Only include simple, concise explanations as comments *above* the relevant CTE or section in the SQL query, and only where necessary to clarify non-obvious logic or limitations. If you cannot place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do not use inline comments at the end of SQL lines, and do not add any explanation text after the SQL block except in the 'Footnotes' section.
+3. If there are limitations or missing information, briefly note this as a comment above the relevant section in the SQL query, or in the 'Footnotes' section if not possible.
+4. If you have clarifying questions or footnotes, include them *after* the SQL code block as normal text in a 'Footnotes' section (Slack mrkdwn). Do NOT include footnotes or clarifying questions as SQL comments.
 
 {sql_style_section}
 
 **CRITICAL RULES FOR ANSWER GENERATION:**
 - **NO HALLUCINATION:** Absolutely do *not* invent database names, schema names, table names, **column names**, or relationships that are not explicitly present in the information retrieved from the dbt models. Stick strictly to the provided schema details (table names, column names, types). If database/schema information is missing for a model, use *only* the model (table) name in the query (e.g., `FROM my_model` instead of `FROM my_db.my_schema.my_model`). Do not "assume" columns exist; only use columns explicitly listed for the relevant models.
-- **ACKNOWLEDGE LIMITATIONS:** If you cannot fully answer the question due to missing information (e.g., required columns not found in retrieved models, ambiguity in the question), clearly state this limitation as a comment within the SQL query.
-- **SQL COMMENTS ONLY:** All explanations must be in the form of simple, concise comments *within* the SQL query itself. Do not add any explanation or summary text after the SQL block.
+- **ACKNOWLEDGE LIMITATIONS:** If you cannot fully answer the question due to missing information (e.g., required columns not found in retrieved models, ambiguity in the question), clearly state this limitation as a comment above the relevant section in the SQL query, or in the 'Footnotes' section if not possible.
+- **SQL COMMENTS ONLY:** All explanations must be in the form of simple, concise comments *above* the relevant CTE or section in the SQL query, and only where necessary to clarify non-obvious logic or limitations. If you cannot place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do not use inline comments at the end of SQL lines, and do not add any explanation or summary text after the SQL block, except for a 'Footnotes' section as described below.
+- **FOOTNOTES OUTSIDE SQL:** If you have clarifying questions or footnotes, include them *after* the SQL code block as normal text in a 'Footnotes' section (Slack mrkdwn). Do NOT include footnotes or clarifying questions as SQL comments.
 
 **CRITICAL SLACK MARKDOWN (mrkdwn) FORMATTING FOR FINAL ANSWER:**
 Your final answer *must* strictly adhere to Slack's `mrkdwn` format:
