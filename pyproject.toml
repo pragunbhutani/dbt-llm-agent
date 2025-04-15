@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ragstar"
-version = "0.7.1"
+version = "0.7.2"
 description = "An LLM-powered agent for interacting with dbt projects"
 authors = ["Pragun Bhutani <pragunbhutani.com>"]
 readme = "README.md"

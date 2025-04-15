@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, List, Any, Optional, Union, Set, TypedDict
 import uuid
+import pathlib
 
 # Langchain & LangGraph Imports
 from langchain_core.messages import (
@@ -147,6 +148,32 @@ class QuestionAnswerer:
 
         # Call setup() on the checkpointer instance
         self.memory.setup()
+
+        # --- ADDED: Load SQL style example ---
+        try:
+            # Construct path relative to the current file
+            style_file_path = pathlib.Path(__file__).parent / "sql_style_example.sql"
+            if style_file_path.is_file():
+                self.sql_style_example = style_file_path.read_text()
+                if self.verbose:
+                    self.console.print(
+                        f"[dim]Loaded SQL style example from: {style_file_path}[/dim]"
+                    )
+            else:
+                self.sql_style_example = None
+                logger.warning(
+                    f"SQL style example file not found at: {style_file_path}"
+                )
+                if self.verbose:
+                    self.console.print(
+                        f"[yellow]Warning: SQL style example file not found at: {style_file_path}[/yellow]"
+                    )
+        except Exception as e:
+            self.sql_style_example = None
+            logger.error(f"Error loading SQL style example: {e}", exc_info=self.verbose)
+            if self.verbose:
+                self.console.print(f"[red]Error loading SQL style example: {e}[/red]")
+        # --- END ADDED ---
 
         # Define tools and then compile the graph
         self._define_tools()
@@ -387,15 +414,29 @@ class QuestionAnswerer:
         def finish_workflow(final_answer: str) -> str:
             """Concludes the workflow and provides the final answer to the user.
             Use this tool ONLY when you have gathered all necessary information from 'search_dbt_models',
-            considered any relevant feedback from 'search_past_feedback',
+            considered any relevant feedback from 'search_past_feedback' and 'search_feedback_content',
             and are ready to provide the complete, final answer (including SQL query and explanation).
-            Format your answer using Slack's `mrkdwn` syntax for improved readability:
-            - Use *bold text* for emphasis or section names (NOT # or ## headings)
-            - Put SQL code in code blocks with ``` and ``` (no language specification)
-            - Use bullet points (-) for listing models or key points
-            - Use _italic_ for minor emphasis
-            - Use `inline code` for model names or short code snippets
-            Ensure the answer directly addresses the user's original question."""
+
+            **CRITICAL: GROUNDING & ACCURACY:**
+            - **DO NOT HALLUCINATE:** You MUST strictly base the SQL query and explanation on the columns and relationships present in the dbt models retrieved via 'search_dbt_models'. Never invent table or column names.
+            - **HANDLE INCOMPLETENESS:** If the retrieved models are insufficient to fully answer the question, generate the best possible answer using *only* the available information. Clearly state in the explanation that the answer may be incomplete and specify what information (e.g., specific metrics, columns, relationships between models) was missing or could not be confirmed.
+            - **CLARIFYING QUESTIONS (Optional Footnotes):** If needed, include clarifying questions in a 'Footnotes' section *after* the SQL code block (as normal text, not as SQL comments). For example:
+              "Footnotes:\n1. Could you clarify if 'metric X' refers to column Y or Z?". This helps continue the conversation in Slack. Do NOT include footnotes or clarifying questions as SQL comments; they must be outside the code block.
+            - **EXPLANATIONS FOR NON-OBVIOUS LOGIC:** Place explanations for non-obvious logic or limitations as comments *above* the relevant CTE or section in the SQL query. If it is not possible to place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do NOT use inline comments at the end of SQL lines, and do NOT add explanations after the SQL block except in the 'Footnotes' section.
+
+            **CRITICAL: Format your answer strictly using Slack's `mrkdwn` syntax:**
+            - Use *bold text* for emphasis or section names. Surround text with asterisks: *your text*
+            - Use _italic text_ for minor emphasis. Surround text with underscores: _your text_
+            - Use ~strikethrough text~. Surround text with tildes: ~your text~
+            - Use `inline code` for model names, field names, or short code snippets. Surround text with backticks: `your text`
+            - Use code blocks for SQL queries or multi-line code. Surround text with triple backticks: ```your code``` (Do NOT specify a language like ```sql).
+            - Use >blockquote for quoting text. Add > before the text: >your text
+            - Use bulleted lists starting with * or - followed by a space: * your text
+            - Use numbered lists starting with 1. followed by a space: 1. your text
+
+            **DO NOT use Markdown headings (# or ##). Slack does not support them.**
+            Ensure the final answer directly addresses the user's original question, acknowledging any limitations found.
+            """
             if self.verbose:
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: finish_workflow(final_answer='{final_answer[:100]}...')",
@@ -959,7 +1000,22 @@ class QuestionAnswerer:
             self.console.print("[dim]Initializing LangGraph workflow with memory[/dim]")
 
         # --- MODIFIED: Update initial system prompt ---
-        initial_system_prompt = """You are an AI assistant specialized in analyzing dbt projects to answer questions.
+        # --- ADDED: Dynamically create SQL style section ---
+        sql_style_section = ""
+        if self.sql_style_example:
+            # Escape backticks within the example SQL for f-string compatibility inside the final prompt's code block
+            escaped_sql_example = self.sql_style_example.replace("`", "\`")
+            sql_style_section = f"""
+**SQL STYLE GUIDE:**
+Format the SQL query in your final answer *exactly* like this example, paying close attention to indentation, spacing, CTE structure, and comments:
+```sql
+{escaped_sql_example}
+```"""
+        else:
+            sql_style_section = "\n**SQL STYLE GUIDE:**\nAim for readable SQL with consistent indentation and spacing. Use CTEs where appropriate."
+        # --- END ADDED ---
+
+        initial_system_prompt = f"""You are an AI assistant specialized in analyzing dbt projects to answer questions.
 Your primary goal is to understand the user's question, find the relevant dbt models using the 'search_dbt_models' tool, consider past feedback, and then generate a final answer.
 
 **Workflow Steps:**
@@ -970,16 +1026,31 @@ Your primary goal is to understand the user's question, find the relevant dbt mo
 5.  **Synthesize Answer:** Once sufficient models and feedback are gathered, use 'finish_workflow' to provide the final answer.
 
 The final answer, provided via the 'finish_workflow' tool, MUST include:
-1. A SQL query that directly addresses the user's question based on the models found.
-2. A clear explanation of the SQL query, including which models were used and why.
-3. A mention of any potential limitations or assumptions made, considering any relevant feedback found.
+1. A SQL query that directly addresses the user's question based *strictly* on the models and columns found. **Follow the SQL STYLE GUIDE below.**
+2. Only include simple, concise explanations as comments *above* the relevant CTE or section in the SQL query, and only where necessary to clarify non-obvious logic or limitations. If you cannot place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do not use inline comments at the end of SQL lines, and do not add any explanation text after the SQL block except in the 'Footnotes' section.
+3. If there are limitations or missing information, briefly note this as a comment above the relevant section in the SQL query, or in the 'Footnotes' section if not possible.
+4. If you have clarifying questions or footnotes, include them *after* the SQL code block as normal text in a 'Footnotes' section (Slack mrkdwn). Do NOT include footnotes or clarifying questions as SQL comments.
 
-IMPORTANT: Format your final answer using Slack `mrkdwn` syntax:
-- Use *bold text* for section names and emphasis. Do NOT use # or ## headings at all.
-- Put SQL code in code blocks with ``` and ``` (no language specification)
-- Use bullet points (-) for listing models or key points
-- Use `inline code` for model names or short code snippets
-- Use _italics_ sparingly for minor emphasis
+{sql_style_section}
+
+**CRITICAL RULES FOR ANSWER GENERATION:**
+- **NO HALLUCINATION:** Absolutely do *not* invent database names, schema names, table names, **column names**, or relationships that are not explicitly present in the information retrieved from the dbt models. Stick strictly to the provided schema details (table names, column names, types). If database/schema information is missing for a model, use *only* the model (table) name in the query (e.g., `FROM my_model` instead of `FROM my_db.my_schema.my_model`). Do not "assume" columns exist; only use columns explicitly listed for the relevant models.
+- **ACKNOWLEDGE LIMITATIONS:** If you cannot fully answer the question due to missing information (e.g., required columns not found in retrieved models, ambiguity in the question), clearly state this limitation as a comment above the relevant section in the SQL query, or in the 'Footnotes' section if not possible.
+- **SQL COMMENTS ONLY:** All explanations must be in the form of simple, concise comments *above* the relevant CTE or section in the SQL query, and only where necessary to clarify non-obvious logic or limitations. If you cannot place the explanation meaningfully in the SQL, include it in the 'Footnotes' section after the query. Do not use inline comments at the end of SQL lines, and do not add any explanation or summary text after the SQL block, except for a 'Footnotes' section as described below.
+- **FOOTNOTES OUTSIDE SQL:** If you have clarifying questions or footnotes, include them *after* the SQL code block as normal text in a 'Footnotes' section (Slack mrkdwn). Do NOT include footnotes or clarifying questions as SQL comments.
+
+**CRITICAL SLACK MARKDOWN (mrkdwn) FORMATTING FOR FINAL ANSWER:**
+Your final answer *must* strictly adhere to Slack's `mrkdwn` format:
+- Use *bold text* for emphasis or section names. Surround text with asterisks: *your text*
+- Use _italic text_ for minor emphasis. Surround text with underscores: _your text_
+- Use ~strikethrough text~. Surround text with tildes: ~your text~
+- Use `inline code` for model names, field names, or short code snippets. Surround text with backticks: `your text`
+- Use code blocks for SQL queries or multi-line code. Surround text with triple backticks: ```your code``` (Do NOT specify a language like ```sql).
+- Use >blockquote for quoting text. Add > before the text: >your text
+- Use bulleted lists starting with * or - followed by a space: * your text
+- Use numbered lists starting with 1. followed by a space: 1. your text
+
+Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-messages#markup
 
 Remember to call 'search_past_feedback' first!"""
         # --- END MODIFIED PROMPT ---
