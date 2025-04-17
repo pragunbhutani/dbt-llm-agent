@@ -13,6 +13,22 @@ Ragstar is an AI agent that learns the context of your dbt project to answer que
 
 > **BETA NOTICE**: Ragstar is currently in beta. Core features include agentic model interpretation and semantic question answering about your dbt project.
 
+## Table of Contents
+
+- [Key Value](#key-value)
+- [Key Features](#key-features)
+- [Use Cases](#use-cases)
+- [Architecture](#architecture)
+- [Setup](#setup)
+  - [Option 1: Docker Compose (Recommended)](#option-1-docker-compose-recommended)
+  - [Option 2: Local Python Environment (Advanced)](#option-2-local-python-environment-advanced)
+- [Usage](#usage)
+  - [Using Docker Compose](#using-docker-compose)
+  - [Using Local Python Environment](#using-local-python-environment)
+  - [Core Commands](#core-commands)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Key Value
 
 - **Democratize Data Access:** Allow anyone to ask questions about your dbt project in natural language via Slack or CLI.
