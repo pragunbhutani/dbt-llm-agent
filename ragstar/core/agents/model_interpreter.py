@@ -100,7 +100,7 @@ class ModelInterpreter:
         self.temperature = temperature
 
         # Setup Postgres connection for memory
-        pg_conn_string = get_config_value("POSTGRES_URI")
+        pg_conn_string = get_config_value("database_url")
 
         # Create connection pool with proper parameters
         connection_kwargs = {

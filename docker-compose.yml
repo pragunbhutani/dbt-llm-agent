@@ -1,0 +1,54 @@
+version: "3.8"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16 # Use a specific version
+    container_name: ragstar_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data/
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ragstar}
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password} # Change this in production!
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432" # Expose DB port to host if needed
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-ragstar}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ragstar_app
+    ports:
+      - "${APP_PORT:-8000}:8000" # Expose API server port
+    volumes:
+      # Mount local code for development (optional)
+      # Be mindful of potential performance issues on non-Linux hosts
+      - .:/app
+      # You might need to mount other volumes if your app writes data outside /app
+    environment:
+      # Use external DB URL if provided, otherwise use the 'db' service
+      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      # Pass other necessary environment variables from host or .env file
+      # Example: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, etc.
+      # Ensure these match your application's requirements
+      APP_PORT: ${APP_PORT:-8000}
+    depends_on:
+      db:
+        condition: service_healthy # Wait for DB to be ready
+    # The command to run the app (replace the placeholder in Dockerfile or override here)
+    # command: poetry run uvicorn ragstar.api.server:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local

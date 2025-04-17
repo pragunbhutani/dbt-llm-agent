@@ -11,6 +11,7 @@ from rich.table import Table
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
+from dotenv import load_dotenv_once
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -43,8 +44,11 @@ def model_details(model_name, verbose, output_json, output_yaml, use_interpretat
     """
     set_logging_level(verbose)
 
+    load_dotenv_once()
+
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
+    openai_api_key = get_config_value("openai_api_key")
 
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")

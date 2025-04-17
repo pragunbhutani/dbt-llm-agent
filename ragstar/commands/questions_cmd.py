@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
+from dotenv import load_dotenv_once
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -43,8 +44,11 @@ def questions(limit, offset, useful, not_useful, output_json, verbose):
     """
     set_logging_level(verbose)
 
-    # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    load_dotenv_once()
+
+    # Load configuration
+    postgres_uri = get_config_value("database_url")
+    openai_api_key = get_config_value("openai_api_key")
 
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")

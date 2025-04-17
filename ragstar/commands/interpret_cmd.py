@@ -113,7 +113,7 @@ def interpret(
         )
 
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
     openai_api_key = get_config_value("openai_api_key")
     openai_model = get_config_value("openai_model", "gpt-4o")
     temperature = float(get_config_value("temperature", "0.0"))

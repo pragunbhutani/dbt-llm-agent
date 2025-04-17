@@ -5,6 +5,8 @@ Feedback command for ragstar CLI.
 import click
 import sys
 import logging
+from dotenv import load_dotenv
+from rich import console
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
@@ -50,8 +52,15 @@ def feedback(question_id, useful, not_useful, feedback_text, verbose):
         sys.exit(1)
 
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    load_dotenv_once()
+    console.print("[bold green]Interpreting feedback...[/bold green]")
+
     openai_api_key = get_config_value("openai_api_key")
+    postgres_uri = get_config_value("database_url")
+
+    if not openai_api_key:
+        console.print("[bold red]OPENAI_API_KEY not found[/bold red]")
+        sys.exit(1)
 
     # Import necessary modules
     from ragstar.storage.model_storage import ModelStorage

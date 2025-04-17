@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 def load_config() -> Dict[str, Any]:
     """Load configuration from environment variables."""
     config = {
-        "postgres_uri": os.environ.get("POSTGRES_URI", None),
+        "database_url": os.environ.get("DATABASE_URL", None),
         "openai_api_key": os.environ.get("OPENAI_API_KEY", None),
         "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4-turbo"),
         "openai_embedding_model": os.environ.get(

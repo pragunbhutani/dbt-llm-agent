@@ -35,10 +35,10 @@ def migrate(revision, verbose):
     set_logging_level(verbose)
 
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
 
     if not postgres_uri:
-        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        logger.error("Database URL not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
@@ -73,9 +73,9 @@ def init_db(verbose):
     """Initialize the database schema and Alembic tracking."""
     set_logging_level(verbose)
     logger.info("Initializing database schema...")
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
     if not postgres_uri:
-        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        logger.error("Database URL not provided in environment variables (.env file)")
         sys.exit(1)
 
     try:
@@ -118,7 +118,7 @@ def init_db(verbose):
     except OperationalError as e:
         logger.error(f"Could not connect to the database: {e}")
         console.print("[red]Error: Could not connect to the database.[/red]")
-        console.print(f"Check your POSTGRES_URI in the .env file: {postgres_uri}")
+        console.print(f"Check your DATABASE_URL in the .env file: {postgres_uri}")
         sys.exit(1)
     except Exception as e:
         logger.error(f"Error initializing database: {e}")
@@ -153,10 +153,10 @@ def reset_db(force, drop_tables, cascade, verbose):
     set_logging_level(verbose)
 
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
 
     if not postgres_uri:
-        logger.error("PostgreSQL URI not provided in environment variables (.env file)")
+        logger.error("Database URL not provided in environment variables (.env file)")
         sys.exit(1)
 
     # Confirm action unless --force is used

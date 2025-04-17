@@ -38,11 +38,12 @@ class ModelEmbeddingStorage:
             collection_name: Name of the collection/table to use
             embedding_model: Name of the embedding model to use
         """
-        # Load config if connection_string is not provided
-        if not connection_string:
-            connection_string = get_config_value("postgres_uri")
-            if not connection_string:
-                raise ValueError("No postgres_uri found in config")
+        self.connection_string = connection_string
+        if not self.connection_string:
+            # Try fetching from config if not provided explicitly
+            self.connection_string = get_config_value("database_url")
+            if not self.connection_string:
+                raise ValueError("No database_url found in config or provided")
 
         # Set embedding model
         self.embedding_model = embedding_model or get_config_value(
@@ -50,7 +51,7 @@ class ModelEmbeddingStorage:
         )
 
         # Initialize SQLAlchemy engine and session
-        self.engine = sa.create_engine(connection_string)
+        self.engine = sa.create_engine(self.connection_string)
         self.Session = sessionmaker(bind=self.engine)
 
         # Collection name

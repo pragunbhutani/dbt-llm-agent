@@ -42,7 +42,7 @@ def ask(question, no_history, verbose):
         sys.exit(1)
 
     # Load configuration
-    postgres_uri = get_config_value("postgres_uri")
+    postgres_uri = get_config_value("database_url")
     vector_db_path = get_config_value("vector_db_path", "~/.ragstar/vector_db")
     temperature = float(get_config_value("temperature", "0.0"))
     openai_model = get_config_value("openai_model", "gpt-4o")

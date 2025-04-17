@@ -15,7 +15,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from typing import Dict, List, Optional
 
 from ragstar.utils.logging import get_logger
-from ragstar.utils.cli_utils import get_config_value, set_logging_level
+from ragstar.utils.cli_utils import (
+    get_config_value,
+    set_logging_level,
+    load_dotenv_once,
+)
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.core.parsers.source_code_parser import SourceCodeParser
 from ragstar.core.parsers.manifest_parser import ManifestParser
@@ -67,7 +71,9 @@ def cloud(
     logger.info("Initializing using dbt Cloud API...")
 
     # Load configuration
-    postgres_uri = get_config_value("postgres_uri")
+    load_dotenv_once()
+
+    postgres_uri = get_config_value("database_url")
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
@@ -308,7 +314,9 @@ def local(project_path, force, verbose):
     logger.info(f"Initializing using local dbt project at: {project_path_obj}")
 
     # Load configuration
-    postgres_uri = get_config_value("postgres_uri")
+    load_dotenv_once()
+
+    postgres_uri = get_config_value("database_url")
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
@@ -431,7 +439,9 @@ def source(project_path, force, verbose):
     logger.info(f"Initializing using source code from: {project_path}")
 
     # Load configuration from environment
-    postgres_uri = get_config_value("postgres_uri")
+    load_dotenv_once()
+
+    postgres_uri = get_config_value("database_url")
     if not postgres_uri:
         logger.error("PostgreSQL URI not provided in environment variables (.env file)")
         sys.exit(1)
