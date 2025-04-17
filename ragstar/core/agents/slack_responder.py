@@ -130,7 +130,7 @@ class SlackResponder:
         self.slack_client = slack_client
         # Initialize default memory if None is provided and Postgres is configured
         if memory is None:
-            pg_conn_string = get_config_value("POSTGRES_URI", None)
+            pg_conn_string = get_config_value("database_url", None)
             if pg_conn_string:
                 try:
                     connection_kwargs = {
@@ -158,7 +158,7 @@ class SlackResponder:
             else:
                 if verbose:
                     (console or Console()).print(
-                        "[dim yellow]POSTGRES_URI not set. SlackResponder state will not be persisted.[/dim yellow]"
+                        "[dim yellow]DATABASE_URL not set. SlackResponder state will not be persisted.[/dim yellow]"
                     )
                 self.memory = None  # No connection string, no memory
         else:

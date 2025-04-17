@@ -3,17 +3,32 @@
 import os
 import logging
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Define constants
+RAGSTAR_ENV_FILE = ".env"
 
 logger = logging.getLogger(__name__)
 
-# Note: We no longer load environment variables here directly.
-# This is now handled by load_dotenv_once() in utils/cli_utils.py
+# Check ~/.ragstar/.env first
+env_path = Path.home() / ".ragstar" / RAGSTAR_ENV_FILE
+if env_path.exists():
+    load_dotenv(dotenv_path=env_path, override=True)
+    logger.debug(f"Loaded environment variables from global {env_path}")
+
+# Then check .env in the current working directory
+# This is now handled by load_dotenv() called in cli.py and commands
+cwd_env_path = Path(".env")
+if cwd_env_path.exists():
+    load_dotenv(dotenv_path=cwd_env_path, override=True)
+    logger.debug(f"Loaded environment variables from local .env")
 
 
 def load_config() -> Dict[str, Any]:
     """Load configuration from environment variables."""
     config = {
-        "postgres_uri": os.environ.get("POSTGRES_URI", None),
+        "database_url": os.environ.get("DATABASE_URL", None),
         "openai_api_key": os.environ.get("OPENAI_API_KEY", None),
         "openai_model": os.environ.get("OPENAI_MODEL", "gpt-4-turbo"),
         "openai_embedding_model": os.environ.get(

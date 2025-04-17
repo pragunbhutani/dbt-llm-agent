@@ -436,7 +436,9 @@ class DBTModel:
         if include_documentation:
             representation += f"YML Description: {self.description or 'N/A'}\n\n"
 
-        representation += f"Interpreted Description: {self.interpreted_description or 'N/A'}\n\n"
+        representation += (
+            f"Interpreted Description: {self.interpreted_description or 'N/A'}\n\n"
+        )
 
         if include_documentation:
             representation += "YML Columns:\n"
@@ -455,7 +457,9 @@ class DBTModel:
         else:
             representation += "  No interpreted column information available.\n\n"
 
-        representation += f"Raw SQL:\n```sql\n{self.raw_sql or 'SQL not available'}\n```\n"
+        representation += (
+            f"Raw SQL:\n```sql\n{self.raw_sql or 'SQL not available'}\n```\n"
+        )
         # No extra newline needed after the final block
 
         return representation
@@ -479,7 +483,7 @@ class DBTModel:
             column_names = list(self.columns.keys())
 
         if column_names:
-            summary += f"  Columns: {", ".join(column_names)}\n"
+            summary += f"  Columns: {', '.join(column_names)}\n"
         else:
             summary += "  Columns: N/A\n"
 

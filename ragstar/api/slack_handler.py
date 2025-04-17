@@ -60,11 +60,12 @@ async def startup_event():
         llm_client = LLMClient(api_key=openai_api_key)
 
         # Storage Components
-        db_uri = get_config_value("POSTGRES_URI")
+        db_uri = get_config_value("database_url")
         if not db_uri:
-            raise ValueError(
-                "POSTGRES_URI not found in environment variables or config. Postgres is required."
+            logger.error(
+                "DATABASE_URL not found in environment variables or config. Postgres is required."
             )
+            # Potentially raise an exception or handle appropriately if DB is essential
         model_storage = ModelStorage(connection_string=db_uri)
         vector_store = ModelEmbeddingStorage(connection_string=db_uri)
         question_storage = QuestionStorage(

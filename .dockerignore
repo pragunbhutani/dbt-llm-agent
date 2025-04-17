@@ -1,0 +1,48 @@
+# Git
+.git
+.gitignore
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv
+venv/
+env/
+
+# IDE/Editor specific
+.idea/
+.vscode/
+.DS_Store
+
+# Poetry cache
+.poetry-cache/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local config
+.env
+*.db
+output/
+
+# Migrations (if managed separately)
+# migrations/
+alembic.ini
+
+# Add any other files/directories you want to exclude 

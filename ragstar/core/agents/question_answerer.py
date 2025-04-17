@@ -126,7 +126,7 @@ class QuestionAnswerer:
         # Default to Postgres checkpointer
         # Assumes a function/config helper to get the connection string
         # You might need to adjust how the connection string is obtained
-        pg_conn_string = get_config_value("POSTGRES_URI")
+        pg_conn_string = get_config_value("database_url")
 
         # Create a connection pool with proper parameters as per LangGraph documentation
         # connection_kwargs must be passed as kwargs parameter to ConnectionPool
