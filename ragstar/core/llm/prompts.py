@@ -66,6 +66,7 @@ models:
 ```
 
 Make sure to:
+- Keep all descriptions complete but brief. Model description should be no more than two sentences, and column descriptions no more than one sentence each.
 - Provide clear, concise, and accurate descriptions
 - Include ALL columns that will be in the model's output, even if there are dozens of them
 - If the upstream model lists seem incomplete, carefully analyze the upstream models' SQL to determine their complete column output

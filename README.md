@@ -1,4 +1,4 @@
-# ragstar (previously dbt-llm-agent)
+# Meet Ragstar: Your AI Data Analyst for dbt Projects.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -7,7 +7,7 @@
 [![Linting: ruff](https://img.shields.io/badge/linting-ruff-red.svg)](https://github.com/astral-sh/ruff)
 [![Beta Status](https://img.shields.io/badge/status-beta-orange.svg)](https://github.com/pragunbhutani/ragstar)
 
-**Meet Ragstar: Your AI Data Analyst for dbt Projects.**
+** Previously known as dbt-llm-agent **
 
 Ragstar is an AI agent that learns the context of your dbt project to answer questions, generate documentation, and bring data insights closer to your users. Interact via Slack or CLI, and watch it improve over time with feedback.
 

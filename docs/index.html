@@ -3,340 +3,867 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Ragstar - RAG Agent Orchestration Framework</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title>Ragstar - AI Data Analyst for dbt Projects</title>
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
       rel="stylesheet"
     />
     <style>
-      body {
-        font-family: "Inter", sans-serif;
-      }
-      .fade-in {
-        animation: fadeIn 0.8s ease-out forwards;
-        opacity: 0;
-      }
-      @keyframes fadeIn {
-        to {
-          opacity: 1;
-        }
-      }
-      .delay-1 {
-        animation-delay: 0.1s;
-      }
-      .delay-2 {
-        animation-delay: 0.2s;
-      }
-      .delay-3 {
-        animation-delay: 0.3s;
-      }
-      .delay-4 {
-        animation-delay: 0.4s;
-      }
-      .delay-5 {
-        animation-delay: 0.5s;
-      }
-      .delay-6 {
-        animation-delay: 0.6s;
+      :root {
+        --primary: #4361ee;
+        --secondary: #3f37c9;
+        --accent: #f72585;
+        --light: #f8f9fa;
+        --dark: #212529;
+        --gray: #6c757d;
+        --success: #4cc9f0;
+        --warning: #f77f00;
+        --danger: #d62828;
+        --gradient: linear-gradient(135deg, var(--primary), var(--secondary));
       }
 
-      pre > code {
-        display: block;
-        white-space: pre;
-        word-wrap: normal;
-        overflow-x: auto;
-        background-color: #f3f4f6;
-        color: #1f2937;
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+      }
+
+      body {
+        background-color: var(--light);
+        color: var(--dark);
+        line-height: 1.6;
+      }
+
+      a {
+        text-decoration: none;
+        color: var(--primary);
+        transition: all 0.3s ease;
+      }
+
+      a:hover {
+        color: var(--secondary);
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 0 1rem;
+      }
+
+      .nav {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 1.5rem 0;
+      }
+
+      .logo {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: var(--primary);
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .logo i {
+        font-size: 1.8rem;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 2rem;
+      }
+
+      .nav-links a {
+        color: var(--dark);
+        font-weight: 500;
+      }
+
+      .nav-links a:hover {
+        color: var(--primary);
+      }
+
+      .btn {
+        display: inline-block;
+        padding: 0.75rem 1.5rem;
+        border-radius: 4px;
+        font-weight: 600;
+        text-align: center;
+        transition: all 0.3s ease;
+        cursor: pointer;
+      }
+
+      .btn-primary {
+        background: var(--gradient);
+        color: white;
+        border: none;
+      }
+
+      .btn-primary:hover {
+        background: linear-gradient(135deg, var(--secondary), var(--primary));
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(67, 97, 238, 0.3);
+      }
+
+      .btn-secondary {
+        background: transparent;
+        color: var(--primary);
+        border: 2px solid var(--primary);
+      }
+
+      .btn-secondary:hover {
+        background: var(--primary);
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(67, 97, 238, 0.15);
+      }
+
+      .hero {
+        padding: 4rem 0;
+        text-align: center;
+        background: linear-gradient(
+            rgba(255, 255, 255, 0.9),
+            rgba(255, 255, 255, 0.9)
+          ),
+          url("/api/placeholder/1200/400") center/cover;
+        border-radius: 16px;
+        margin-bottom: 3rem;
+      }
+
+      .hero h1 {
+        font-size: 3rem;
+        margin-bottom: 1rem;
+        color: var(--dark);
+      }
+
+      .hero p {
+        font-size: 1.25rem;
+        color: var(--gray);
+        margin-bottom: 2rem;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .badges {
+        display: flex;
+        justify-content: center;
+        gap: 0.5rem;
+        flex-wrap: wrap;
+        margin: 2rem 0;
+      }
+
+      .badge {
+        background-color: #f0f0f0;
+        color: var(--gray);
+        padding: 0.35rem 0.75rem;
+        border-radius: 50px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+      }
+
+      .features {
+        padding: 4rem 0;
+      }
+
+      .section-title {
+        text-align: center;
+        margin-bottom: 3rem;
+      }
+
+      .section-title h2 {
+        font-size: 2rem;
+        margin-bottom: 1rem;
+        position: relative;
+        display: inline-block;
+      }
+
+      .section-title h2::after {
+        content: "";
+        position: absolute;
+        bottom: -10px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 50px;
+        height: 3px;
+        background: var(--primary);
+        border-radius: 2px;
+      }
+
+      .feature-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+        margin-top: 2rem;
+      }
+
+      .feature-card {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        transition: all 0.3s ease;
+      }
+
+      .feature-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.1);
+      }
+
+      .feature-icon {
+        background: var(--gradient);
+        width: 60px;
+        height: 60px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-bottom: 1.5rem;
+      }
+
+      .feature-icon i {
+        color: white;
+        font-size: 1.5rem;
+      }
+
+      .feature-title {
+        font-size: 1.25rem;
+        margin-bottom: 1rem;
+        font-weight: 600;
+      }
+
+      .use-cases {
+        padding: 4rem 0;
+        background-color: #f9f9f9;
+        border-radius: 16px;
+      }
+
+      .use-case-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+      }
+
+      .use-case-card {
+        display: flex;
+        flex-direction: column;
+        background: white;
+        border-radius: 12px;
+        padding: 1.5rem;
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.05);
+      }
+
+      .use-case-card i {
+        color: var(--primary);
+        font-size: 2rem;
+        margin-bottom: 1rem;
+      }
+
+      .architecture {
+        padding: 4rem 0;
+      }
+
+      .arch-diagram {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        margin-top: 2rem;
+        text-align: center;
+      }
+
+      .arch-diagram img {
+        max-width: 100%;
+        height: auto;
+        border-radius: 8px;
+      }
+
+      .setup {
+        padding: 4rem 0;
+        background-color: #f9f9f9;
+        border-radius: 16px;
+      }
+
+      .setup-options {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 2rem;
+        margin-top: 2rem;
+      }
+
+      .setup-card {
+        background: white;
+        border-radius: 12px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+      }
+
+      .setup-card h3 {
+        margin-bottom: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+      }
+
+      .setup-card h3 i {
+        color: var(--primary);
+      }
+
+      .setup-card ol {
+        margin-left: 1.5rem;
+        margin-top: 1rem;
+      }
+
+      .setup-card li {
+        margin-bottom: 0.75rem;
+      }
+
+      .setup-card code {
+        background: #f5f5f5;
+        padding: 0.2rem 0.4rem;
+        border-radius: 4px;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 0.9rem;
+      }
+
+      .cta {
+        padding: 6rem 0;
+        text-align: center;
+        background: linear-gradient(
+            rgba(67, 97, 238, 0.1),
+            rgba(67, 97, 238, 0.1)
+          ),
+          url("/api/placeholder/1200/400") center/cover;
+        border-radius: 16px;
+        margin: 3rem 0;
+      }
+
+      .cta h2 {
+        font-size: 2.5rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .cta p {
+        margin-bottom: 2rem;
+        max-width: 600px;
+        margin-left: auto;
+        margin-right: auto;
+      }
+
+      .cta-buttons {
+        display: flex;
+        justify-content: center;
+        gap: 1rem;
+        flex-wrap: wrap;
+      }
+
+      .footer {
+        background-color: var(--dark);
+        color: white;
+        padding: 4rem 0 2rem;
+      }
+
+      .footer-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 2rem;
+      }
+
+      .footer-links h3 {
+        margin-bottom: 1.5rem;
+        font-size: 1.2rem;
+      }
+
+      .footer-links ul {
+        list-style: none;
+      }
+
+      .footer-links li {
+        margin-bottom: 0.75rem;
+      }
+
+      .footer-links a {
+        color: #adb5bd;
+        transition: color 0.3s ease;
+      }
+
+      .footer-links a:hover {
+        color: white;
+      }
+
+      .footer-bottom {
+        margin-top: 3rem;
+        text-align: center;
+        color: #6c757d;
+        padding-top: 2rem;
+        border-top: 1px solid #343a40;
+      }
+
+      .social-links {
+        display: flex;
+        gap: 1rem;
+        margin-top: 1rem;
+      }
+
+      .social-links a {
+        color: #adb5bd;
+        font-size: 1.2rem;
+        transition: color 0.3s ease;
+      }
+
+      .social-links a:hover {
+        color: white;
+      }
+
+      .code-block {
+        background: #2d333b;
+        color: #e6edf3;
+        border-radius: 8px;
         padding: 1rem;
-        border-radius: 0.375rem;
-        font-family: monospace;
+        overflow-x: auto;
+        font-family: "Courier New", Courier, monospace;
+        font-size: 0.9rem;
+        margin: 1rem 0;
       }
-      code:not(pre > code) {
-        background-color: #e5e7eb;
-        color: #be185d;
-        padding: 0.125rem 0.25rem;
-        border-radius: 0.25rem;
-        font-size: 0.875em;
+
+      .code-block pre {
+        margin: 0;
       }
-      /* Add some spacing for list items */
-      section ol li,
-      section ul li {
-        margin-bottom: 0.5rem;
+
+      @media (max-width: 768px) {
+        .hero h1 {
+          font-size: 2.5rem;
+        }
+
+        .feature-grid,
+        .use-case-grid,
+        .setup-options {
+          grid-template-columns: 1fr;
+        }
+
+        .nav-links {
+          display: none;
+        }
       }
     </style>
   </head>
-  <body class="bg-gray-50 text-gray-800">
-    <header
-      class="bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-md fade-in"
-    >
-      <div class="container mx-auto px-6 py-12 text-center">
-        <svg
-          class="w-16 h-16 mx-auto mb-4 text-indigo-200"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="2"
-            d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.708.707M12 21v-1m6.364-1.636l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M12 12a3 3 0 100-6 3 3 0 000 6z"
-          ></path>
-        </svg>
-        <h1 class="text-4xl md:text-5xl font-bold mb-2">Ragstar</h1>
-        <p class="text-lg md:text-xl text-indigo-100">
-          Your friendly RAG agent orchestration framework.
-        </p>
-      </div>
-    </header>
-
-    <main class="container mx-auto px-6 py-10">
-      <section id="about" class="mb-12 fade-in delay-1">
-        <h2 class="text-3xl font-semibold text-gray-900 mb-4 text-center">
-          About Ragstar
-        </h2>
-        <p
-          class="text-lg text-gray-700 leading-relaxed max-w-3xl mx-auto text-center"
-        >
-          Ragstar is an advanced LLM-based AI Agent framework designed for
-          interacting with and understanding complex projects, initially focused
-          on dbt (data build tool). It helps teams streamline documentation,
-          improve discovery, and gain deeper insights through natural language
-          interaction. Leverage the power of Large Language Models to make your
-          projects more accessible and maintainable.
-        </p>
-        <div class="mt-8 max-w-4xl mx-auto text-center">
-          <h3 class="text-2xl font-semibold text-gray-800 mb-4">
-            Key Features
-          </h3>
-          <ul
-            class="list-disc list-inside text-left inline-block text-gray-700 space-y-1"
+  <body>
+    <div class="container">
+      <nav class="nav">
+        <a href="#" class="logo">
+          <i class="fas fa-robot"></i>
+          Ragstar
+        </a>
+        <div class="nav-links">
+          <a href="#features">Features</a>
+          <a href="#use-cases">Use Cases</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#setup">Setup</a>
+          <a href="https://github.com/pragunbhutani/ragstar" target="_blank"
+            >GitHub</a
           >
-            <li>Natural Language Question Answering</li>
-            <li>Agentic Interpretation & Reasoning</li>
-            <li>Automated Documentation Generation</li>
-            <li>Semantic Search powered by Vector Embeddings</li>
-            <li>Integration via Manifest Files or Source Code</li>
-            <li>Postgres with pgvector Backend</li>
-            <li>Question & Feedback Tracking</li>
-            <li>Slack Integration</li>
-            <li>Extensible Architecture</li>
-          </ul>
+        </div>
+      </nav>
+
+      <section class="hero">
+        <h1>Meet Ragstar</h1>
+        <p>Your AI Data Analyst for dbt Projects</p>
+        <div class="badges">
+          <span class="badge"><i class="fas fa-tag"></i> Beta</span>
+          <span class="badge"><i class="fab fa-python"></i> Python 3.10+</span>
+          <span class="badge"><i class="fab fa-github"></i> MIT License</span>
+          <span class="badge"><i class="fas fa-code"></i> Black</span>
+          <span class="badge"><i class="fas fa-check-circle"></i> MyPy</span>
+          <span class="badge"><i class="fas fa-bug"></i> Ruff</span>
+        </div>
+        <div>
+          <a
+            href="https://github.com/pragunbhutani/ragstar"
+            class="btn btn-primary"
+          >
+            <i class="fab fa-github"></i> View on GitHub
+          </a>
+          <a href="#setup" class="btn btn-secondary">Get Started</a>
         </div>
       </section>
 
-      <section id="installation" class="mb-12 fade-in delay-2">
-        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
-          Installation & Setup
-        </h2>
-        <div
-          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
-        >
-          <p class="text-gray-700 mb-4">
-            Follow these steps to set up Ragstar:
-          </p>
-          <ol class="list-decimal list-inside text-gray-700 space-y-3">
-            <li>
-              <strong>Check Python Version:</strong> Ensure you have Python 3.10
-              or higher.
-              <pre class="mt-1"><code>python3 --version</code></pre>
-            </li>
-            <li>
-              <strong>Clone the repository:</strong>
-              <pre
-                class="mt-1"
-              ><code>git clone https://github.com/pragunbhutani/ragstar.git
-cd ragstar</code></pre>
-            </li>
-            <li>
-              <strong>Install dependencies:</strong> Using Poetry.
-              <pre
-                class="mt-1"
-              ><code># Install Poetry if needed: curl -sSL https://install.python-poetry.org | python3 -
-poetry install</code></pre>
-            </li>
-            <li>
-              <strong>Set up PostgreSQL:</strong> Requires PostgreSQL (11+) with
-              the <code>pgvector</code> extension.
-              <pre class="mt-1"><code># Example: Local setup
-createdb ragstar
-psql -d ragstar -c 'CREATE EXTENSION IF NOT EXISTS vector;'</code></pre>
-              See the
-              <a
-                href="https://github.com/pgvector/pgvector"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-blue-600 hover:underline"
-                >pgvector docs</a
-              >
-              for more options.
-            </li>
-            <li>
-              <strong>Configure environment variables:</strong> Copy
-              <code>.env.example</code> to <code>.env</code> and fill in your
-              details (<code>OPENAI_API_KEY</code>, <code>POSTGRES_URI</code>,
-              etc.).
-              <pre class="mt-1"><code>cp .env.example .env
-# vim .env # Or use your favorite editor</code></pre>
-            </li>
-            <li>
-              <strong>Initialize the database schema:</strong>
-              <pre class="mt-1"><code>poetry run ragstar init-db</code></pre>
-            </li>
-            <li>
-              <strong>Initialize your project:</strong> Load metadata using one
-              of the modes (cloud, local, source). Example using local mode:
-              <pre
-                class="mt-1"
-              ><code># Make sure DBT_PROJECT_PATH is set in .env or provided via --project-path
-poetry run ragstar init local --project-path /path/to/your/dbt/project</code></pre>
-            </li>
-          </ol>
-          <p class="text-sm text-gray-600 mt-4">
-            <em
-              >For full details on initialization modes and dbt Cloud setup,
-              please refer to the
-              <a
-                href="https://github.com/pragunbhutani/ragstar#setup"
-                target="_blank"
-                rel="noopener noreferrer"
-                class="text-blue-600 hover:underline"
-                >README</a
-              >.</em
-            >
-          </p>
+      <section class="features" id="features">
+        <div class="section-title">
+          <h2>Key Features</h2>
+          <p>Powerful AI capabilities for your dbt project</p>
+        </div>
+
+        <div class="feature-grid">
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fas fa-comments"></i>
+            </div>
+            <h3 class="feature-title">Natural Language Q&A</h3>
+            <p>
+              Ask questions about models, sources, metrics, lineage, and more in
+              plain English. Get answers that make sense, not just data dumps.
+            </p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fas fa-brain"></i>
+            </div>
+            <h3 class="feature-title">Agentic Intelligence</h3>
+            <p>
+              Ragstar intelligently analyzes dbt models, understanding logic and
+              context to provide insights that matter to your team.
+            </p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fas fa-file-alt"></i>
+            </div>
+            <h3 class="feature-title">Automated Documentation</h3>
+            <p>
+              Automatically generate model and column descriptions where they're
+              missing, improving data catalog quality.
+            </p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fas fa-search"></i>
+            </div>
+            <h3 class="feature-title">Semantic Search</h3>
+            <p>
+              Find relevant assets based on meaning, not just keywords, making
+              data discovery intuitive and powerful.
+            </p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fab fa-slack"></i>
+            </div>
+            <h3 class="feature-title">Slack Integration</h3>
+            <p>
+              Built-in Slackbot for easy interaction, bringing data insights
+              directly to your team's workflow.
+            </p>
+          </div>
+
+          <div class="feature-card">
+            <div class="feature-icon">
+              <i class="fas fa-sync"></i>
+            </div>
+            <h3 class="feature-title">Feedback Loop</h3>
+            <p>
+              Track questions and feedback to continuously improve answers and
+              recommendations over time.
+            </p>
+          </div>
         </div>
       </section>
 
-      <section id="usage" class="mb-12 fade-in delay-3">
-        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
-          Using Ragstar (CLI)
-        </h2>
-        <div
-          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
-        >
-          <p class="text-gray-700 mb-4">
-            Once initialized, use the CLI to interact with Ragstar:
-          </p>
-          <div class="space-y-4">
-            <div>
-              <h4 class="font-semibold text-gray-800">
-                1. Process Documentation & Embeddings:
-              </h4>
-              <p class="text-sm text-gray-600 mb-1">
-                Generate embeddings for existing docs, or interpret+embed models
-                without docs.
+      <section class="use-cases" id="use-cases">
+        <div class="container">
+          <div class="section-title">
+            <h2>Use Cases</h2>
+            <p>How teams leverage Ragstar to improve data workflows</p>
+          </div>
+
+          <div class="use-case-grid">
+            <div class="use-case-card">
+              <i class="fas fa-bolt"></i>
+              <h3>Accelerate Data Discovery</h3>
+              <p>
+                Quickly find relevant dbt models and understand their purpose
+                without digging through code.
               </p>
-              <pre><code># Embed existing docs for all models
-poetry run ragstar embed --select "*"
-
-# Interpret, save, and embed models tagged 'staging'
-poetry run ragstar interpret --select "tag:staging" --save --embed</code></pre>
             </div>
-            <div>
-              <h4 class="font-semibold text-gray-800">2. Ask Questions:</h4>
-              <p class="text-sm text-gray-600 mb-1">
-                Query your project using natural language.
+
+            <div class="use-case-card">
+              <i class="fas fa-user-plus"></i>
+              <h3>Improve Onboarding</h3>
+              <p>
+                Help new team members understand the dbt project structure and
+                logic faster.
               </p>
-              <pre><code>poetry run ragstar ask "Explain the fct_orders model"
-poetry run ragstar ask "Which models depend on stg_users?"</code></pre>
             </div>
-            <div>
-              <h4 class="font-semibold text-gray-800">3. Provide Feedback:</h4>
-              <p class="text-sm text-gray-600 mb-1">
-                Help improve the agent's responses.
+
+            <div class="use-case-card">
+              <i class="fas fa-book"></i>
+              <h3>Maintain Documentation</h3>
+              <p>
+                Keep dbt documentation up-to-date with automated generation and
+                suggestions.
               </p>
-              <pre><code># List previous questions
-poetry run ragstar questions
-
-# Mark question 1 as useful
-poetry run ragstar feedback 1 --useful
-
-# Mark question 2 as not useful and provide correction
-poetry run ragstar feedback 2 --not-useful --text "The upstream source is incorrect."</code></pre>
             </div>
-            <div>
-              <h4 class="font-semibold text-gray-800">4. Other Commands:</h4>
-              <pre><code># List models
-poetry run ragstar list
 
-# Get details for a specific model
-poetry run ragstar model-details my_model_name</code></pre>
+            <div class="use-case-card">
+              <i class="fas fa-shield-alt"></i>
+              <h3>Enhance Data Governance</h3>
+              <p>
+                Gain better visibility into data lineage and model dependencies.
+              </p>
+            </div>
+
+            <div class="use-case-card">
+              <i class="fas fa-bug"></i>
+              <h3>Debug dbt Models</h3>
+              <p>
+                Ask clarifying questions about model logic and calculations.
+              </p>
             </div>
           </div>
-          <p class="text-sm text-gray-600 mt-4">
-            This covers the main CLI commands. Refer to the
-            <a
-              href="https://github.com/pragunbhutani/ragstar#usage"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-blue-600 hover:underline"
-              >README</a
+        </div>
+      </section>
+
+      <section class="architecture" id="architecture">
+        <div class="section-title">
+          <h2>Architecture</h2>
+          <p>How Ragstar works under the hood</p>
+        </div>
+
+        <div class="arch-diagram">
+          <div style="text-align: left">
+            <h3>Key Components:</h3>
+            <ul
+              style="
+                list-style-type: disc;
+                margin-left: 1.5rem;
+                margin-top: 1rem;
+              "
             >
-            for more advanced options and programmatic usage.
-          </p>
+              <li>
+                <strong>dbt Project Parsing:</strong> Extracts comprehensive
+                metadata from dbt artifacts or source files.
+              </li>
+              <li>
+                <strong>PostgreSQL + pgvector:</strong> Central knowledge store
+                with vector embeddings for semantic search.
+              </li>
+              <li>
+                <strong>Vector Embeddings:</strong> Numerical representations of
+                model documentation capturing semantic meaning.
+              </li>
+              <li>
+                <strong>Large Language Models:</strong> Powers natural language
+                understanding and generation.
+              </li>
+              <li>
+                <strong>Agentic Reasoning:</strong> Step-by-step reasoning
+                process for model interpretation.
+              </li>
+              <li>
+                <strong>CLI Interface:</strong> Command-line tools for
+                interacting with the system.
+              </li>
+            </ul>
+          </div>
         </div>
       </section>
 
-      <section id="slackbot" class="mb-12 fade-in delay-4">
-        <h2 class="text-3xl font-semibold text-gray-900 mb-6 text-center">
-          Slackbot Integration
-        </h2>
-        <div
-          class="bg-white p-6 rounded-lg shadow-md border border-gray-200 max-w-3xl mx-auto"
-        >
-          <p class="text-gray-700 mb-4">
-            Interact with your Ragstar agents directly from Slack:
-          </p>
-          <ol class="list-decimal list-inside text-gray-700 mb-4 space-y-2">
-            <li>
-              Configure Slack API tokens (<code>SLACK_BOT_TOKEN</code>,
-              <code>SLACK_APP_TOKEN</code>) in your <code>.env</code> file.
-            </li>
-            <li>Run the Slackbot application:</li>
-          </ol>
-          <pre><code>poetry run python -m ragstar.integrations.slackbot</code></pre>
-          <p class="text-sm text-gray-600 mt-4">
-            Mention the bot in your Slack workspace to start interacting.
-          </p>
+      <section class="setup" id="setup">
+        <div class="section-title">
+          <h2>Setup & Installation</h2>
+          <p>Get started with Ragstar in minutes</p>
+        </div>
+
+        <div class="setup-options">
+          <div class="setup-card">
+            <h3><i class="fab fa-docker"></i> Docker Compose (Recommended)</h3>
+            <p>
+              The easiest way to get started with Ragstar is using Docker
+              Compose.
+            </p>
+            <ol>
+              <li>
+                Clone the repository:
+                <div class="code-block">
+                  <pre>
+git clone https://github.com/pragunbhutani/ragstar.git
+cd ragstar</pre
+                  >
+                </div>
+              </li>
+              <li>
+                Configure environment variables:
+                <div class="code-block">
+                  <pre>
+cp .env.example .env
+# Edit .env with your API keys and configuration</pre
+                  >
+                </div>
+              </li>
+              <li>
+                Build and run with Docker Compose:
+                <div class="code-block">
+                  <pre>docker compose up --build -d</pre>
+                </div>
+              </li>
+              <li>
+                Initialize with dbt project data:
+                <div class="code-block">
+                  <pre>
+docker compose exec app ragstar init cloud
+# or
+docker compose exec app ragstar init local
+# or
+docker compose exec app ragstar init source</pre
+                  >
+                </div>
+              </li>
+              <li>
+                Build the knowledge base:
+                <div class="code-block">
+                  <pre>docker compose exec app ragstar embed --select "*"</pre>
+                </div>
+              </li>
+            </ol>
+          </div>
+
+          <div class="setup-card">
+            <h3><i class="fab fa-python"></i> Local Python Environment</h3>
+            <p>For advanced users who prefer not to use Docker.</p>
+            <ol>
+              <li>
+                Check prerequisites:
+                <ul>
+                  <li>Python 3.10+</li>
+                  <li>Poetry</li>
+                  <li>PostgreSQL with pgvector</li>
+                </ul>
+              </li>
+              <li>
+                Clone and install:
+                <div class="code-block">
+                  <pre>
+git clone https://github.com/pragunbhutani/ragstar.git
+cd ragstar
+poetry install</pre
+                  >
+                </div>
+              </li>
+              <li>
+                Configure environment variables:
+                <div class="code-block">
+                  <pre>
+cp .env.example .env
+# Edit .env with your configuration</pre
+                  >
+                </div>
+              </li>
+              <li>
+                Initialize the database:
+                <div class="code-block">
+                  <pre>poetry run ragstar init-db</pre>
+                </div>
+              </li>
+              <li>
+                Load dbt project data:
+                <div class="code-block">
+                  <pre>
+poetry run ragstar init cloud
+# or
+poetry run ragstar init local</pre
+                  >
+                </div>
+              </li>
+            </ol>
+          </div>
         </div>
       </section>
 
-      <section id="get-involved" class="mb-12 text-center fade-in delay-5">
-        <h2 class="text-3xl font-semibold text-gray-900 mb-4">Get Involved</h2>
-        <p class="text-lg text-gray-700 leading-relaxed max-w-3xl mx-auto mb-6">
-          Ragstar is an open-source project. Check out the GitHub repository to
-          see the latest progress, explore the code, and contribute!
+      <section class="cta">
+        <h2>Ready to democratize your data?</h2>
+        <p>
+          Ragstar makes it easy for anyone to ask questions about your dbt
+          project and get intelligent answers.
         </p>
-        <a
-          href="https://github.com/pragunbhutani/ragstar"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="inline-block bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-8 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:-translate-y-1"
-        >
-          View on GitHub
-        </a>
-      </section>
-    </main>
-
-    <footer class="bg-gray-800 text-gray-300 py-6 mt-12 fade-in delay-6">
-      <div class="container mx-auto px-6 text-center">
-        <p>&copy; 2024 Ragstar Project. All rights reserved.</p>
-        <p class="text-sm mt-1">
-          Released under the
+        <div class="cta-buttons">
           <a
-            href="https://github.com/pragunbhutani/ragstar/blob/main/LICENSE"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-blue-400 hover:text-blue-300 underline"
+            href="https://github.com/pragunbhutani/ragstar"
+            class="btn btn-primary"
           >
-            MIT License </a
-          >.
-        </p>
+            <i class="fab fa-github"></i> View on GitHub
+          </a>
+          <a
+            href="https://github.com/pragunbhutani/ragstar/issues"
+            class="btn btn-secondary"
+          >
+            <i class="fas fa-question-circle"></i> Get Support
+          </a>
+        </div>
+      </section>
+    </div>
+
+    <footer class="footer">
+      <div class="container">
+        <div class="footer-container">
+          <div class="footer-links">
+            <h3>Ragstar</h3>
+            <ul>
+              <li><a href="#features">Features</a></li>
+              <li><a href="#use-cases">Use Cases</a></li>
+              <li><a href="#architecture">Architecture</a></li>
+              <li><a href="#setup">Setup</a></li>
+            </ul>
+          </div>
+
+          <div class="footer-links">
+            <h3>Resources</h3>
+            <ul>
+              <li>
+                <a href="https://github.com/pragunbhutani/ragstar">GitHub</a>
+              </li>
+              <li>
+                <a href="https://github.com/pragunbhutani/ragstar/issues"
+                  >Issues</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://github.com/pragunbhutani/ragstar/blob/main/LICENSE"
+                  >License</a
+                >
+              </li>
+            </ul>
+          </div>
+
+          <div class="footer-links">
+            <h3>Connect</h3>
+            <ul>
+              <li>
+                <a href="https://github.com/pragunbhutani/ragstar/issues"
+                  >Support</a
+                >
+              </li>
+              <li>
+                <a
+                  href="https://github.com/pragunbhutani/ragstar/blob/main/CONTRIBUTING.md"
+                  >Contribute</a
+                >
+              </li>
+            </ul>
+            <div class="social-links">
+              <a href="https://github.com/pragunbhutani/ragstar"
+                ><i class="fab fa-github"></i
+              ></a>
+            </div>
+          </div>
+        </div>
+
+        <div class="footer-bottom">
+          <p>
+            &copy; 2023-2025
+            <a href="https://pragunbhutani.com">Pragun Bhutani</a>. Licensed
+            under <a href="https://opensource.org/licenses/MIT">MIT</a>.
+          </p>
+        </div>
       </div>
     </footer>
   </body>
