@@ -39,10 +39,12 @@ class UpstreamModelInput(BaseModel):
         description="List of upstream dbt model names to fetch raw SQL for."
     )
 
+
 # Define the structure for the documentation dictionary
 class ColumnDocumentation(BaseModel):
     name: str = Field(description="The name of the column.")
     description: str = Field(description="The description of the column.")
+
 
 class ModelDocumentation(BaseModel):
     name: str = Field(description="The name of the dbt model.")
@@ -52,6 +54,7 @@ class ModelDocumentation(BaseModel):
     columns: List[ColumnDocumentation] = Field(
         description="A detailed list of all columns produced by the final SELECT statement (including aliases) with descriptions."
     )
+
 
 class FinishInterpretationInput(BaseModel):
     documentation: ModelDocumentation = Field(
@@ -72,7 +75,9 @@ class InterpretationState(TypedDict):
     fetched_sql_map: Dict[
         str, Optional[str]
     ]  # Stores raw SQL for fetched models (name -> SQL or None/Error)
-    final_documentation: Optional[Dict[str, Any]] # Stores the documentation dict from finish_interpretation
+    final_documentation: Optional[
+        Dict[str, Any]
+    ]  # Stores the documentation dict from finish_interpretation
     is_finished: bool  # Flag set by update_state_node after finish_interpretation runs
 
 
@@ -167,8 +172,17 @@ class ModelInterpreter:
                         )
 
             # Log only the keys (model names) instead of the full SQL content at INFO level
-            result_summary = {name: (f"Length: {len(sql)}" if isinstance(sql, str) and not sql.startswith("Error:") else ("Error" if isinstance(sql, str) else type(sql).__name__)) for name, sql in results.items()}
-            logger.info(f"Tool get_models_raw_sql finished. Results summary: {result_summary}")
+            result_summary = {
+                name: (
+                    f"Length: {len(sql)}"
+                    if isinstance(sql, str) and not sql.startswith("Error:")
+                    else ("Error" if isinstance(sql, str) else type(sql).__name__)
+                )
+                for name, sql in results.items()
+            }
+            logger.info(
+                f"Tool get_models_raw_sql finished. Results summary: {result_summary}"
+            )
             return results
 
         @tool(args_schema=FinishInterpretationInput)
@@ -191,20 +205,23 @@ class ModelInterpreter:
                 # Create a concise preview for logging
                 preview_dict = {
                     "name": documentation_dict.get("name", "N/A"),
-                    "description_preview": documentation_dict.get("description", "")[:100] + "...",
+                    "description_preview": documentation_dict.get("description", "")[
+                        :100
+                    ]
+                    + "...",
                     "num_columns": len(documentation_dict.get("columns", [])),
                 }
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: finish_interpretation(documentation={preview_dict}) [/bold magenta]"
                 )
-            logger.info(f"Executing tool: finish_interpretation for model {documentation_dict.get('name')}")
+            logger.info(
+                f"Executing tool: finish_interpretation for model {documentation_dict.get('name')}"
+            )
 
             # Basic validation is now handled by Pydantic during tool call parsing
             # We trust the input `documentation` is a valid ModelDocumentation object here
 
-            return (
-                "Final interpretation documentation received and workflow completion signaled."
-            )
+            return "Final interpretation documentation received and workflow completion signaled."
 
         self._tools = [get_models_raw_sql, finish_interpretation]
         self._tool_executor = ToolNode(self._tools, handle_tool_errors=True)
@@ -257,20 +274,28 @@ class ModelInterpreter:
         messages = state.get("messages", [])
         agent_llm = self._get_agent_llm()
 
-        messages_to_send = list(messages) # Start with existing messages from state
+        messages_to_send = list(messages)  # Start with existing messages from state
 
         # === Existing Logging ===
         if self.verbose:
             self.console.print("[dim]Message structure *before* sending to LLM:[/dim]")
             for i, msg in enumerate(messages_to_send):
                 msg_type = type(msg).__name__
-                content_preview = str(getattr(msg, 'content', ''))[:70].replace("\n", " ") + "..." if len(str(getattr(msg, 'content', ''))) > 70 else str(getattr(msg, 'content', ''))
+                content_preview = (
+                    str(getattr(msg, "content", ""))[:70].replace("\n", " ") + "..."
+                    if len(str(getattr(msg, "content", ""))) > 70
+                    else str(getattr(msg, "content", ""))
+                )
                 tool_calls_info = ""
                 tool_id_info = ""
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
-                     tool_calls_info = f" [bold](with {len(msg.tool_calls)} tool_calls)[/bold]"
+                    tool_calls_info = (
+                        f" [bold](with {len(msg.tool_calls)} tool_calls)[/bold]"
+                    )
                 if hasattr(msg, "tool_call_id") and msg.tool_call_id:
-                     tool_id_info = f" [bold](for tool_call_id: {msg.tool_call_id})[/bold]"
+                    tool_id_info = (
+                        f" [bold](for tool_call_id: {msg.tool_call_id})[/bold]"
+                    )
                 self.console.print(
                     f"  [{i}] {msg_type}{tool_calls_info}{tool_id_info}: {content_preview}"
                 )
@@ -311,43 +336,60 @@ class ModelInterpreter:
         # Ensure we only process the *latest* set of tool calls and results
         last_message = state["messages"][-1]
         if not isinstance(last_message, ToolMessage):
-             # If the last message isn't a ToolMessage, look for the preceding AIMessage
-             last_ai_message_index = -1
-             for i in range(len(state["messages"]) - 1, -1, -1):
-                 if isinstance(state["messages"][i], AIMessage):
-                     last_ai_message_index = i
-                     break
-             if last_ai_message_index == -1 or not getattr(state["messages"][last_ai_message_index], 'tool_calls', None):
-                  logger.debug("No recent AIMessage with tool calls found to process.")
-                  # Loop back if the agent just sent a text response without intending to finish
-                  return {"is_finished": False}
+            # If the last message isn't a ToolMessage, look for the preceding AIMessage
+            last_ai_message_index = -1
+            for i in range(len(state["messages"]) - 1, -1, -1):
+                if isinstance(state["messages"][i], AIMessage):
+                    last_ai_message_index = i
+                    break
+            if last_ai_message_index == -1 or not getattr(
+                state["messages"][last_ai_message_index], "tool_calls", None
+            ):
+                logger.debug("No recent AIMessage with tool calls found to process.")
+                # Loop back if the agent just sent a text response without intending to finish
+                return {"is_finished": False}
 
-             latest_ai_msg = state["messages"][last_ai_message_index]
-             # Find tool messages corresponding to *this* AI message's tool calls
-             latest_tool_call_ids = {
-                 tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                 for tc in latest_ai_msg.tool_calls
-             }
-             latest_tool_messages = [
-                 msg for msg in state["messages"][last_ai_message_index + 1:] # Look *after* the AI message
-                 if isinstance(msg, ToolMessage) and getattr(msg, 'tool_call_id', None) in latest_tool_call_ids
-             ]
+            latest_ai_msg = state["messages"][last_ai_message_index]
+            # Find tool messages corresponding to *this* AI message's tool calls
+            latest_tool_call_ids = {
+                tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                for tc in latest_ai_msg.tool_calls
+            }
+            latest_tool_messages = [
+                msg
+                for msg in state["messages"][
+                    last_ai_message_index + 1 :
+                ]  # Look *after* the AI message
+                if isinstance(msg, ToolMessage)
+                and getattr(msg, "tool_call_id", None) in latest_tool_call_ids
+            ]
         else:
-             # This case should be less common if the graph adds ToolMessages correctly,
-             # but handle it defensively. Assume the last ToolMessage is the one to process.
-             latest_tool_messages = [last_message]
-             # Try to find the AIMessage that invoked it
-             latest_ai_msg = None
-             for i in range(len(state["messages"]) - 2, -1, -1):
-                 msg = state["messages"][i]
-                 if isinstance(msg, AIMessage) and getattr(msg, 'tool_calls', None):
-                      call_ids = {tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None) for tc in msg.tool_calls}
-                      if last_message.tool_call_id in call_ids:
-                           latest_ai_msg = msg
-                           break
-             if not latest_ai_msg:
-                  logger.warning("Could not find invoking AIMessage for the last ToolMessage.")
-                  return {"is_finished": False} # Cannot process finish_interpretation without args
+            # This case should be less common if the graph adds ToolMessages correctly,
+            # but handle it defensively. Assume the last ToolMessage is the one to process.
+            latest_tool_messages = [last_message]
+            # Try to find the AIMessage that invoked it
+            latest_ai_msg = None
+            for i in range(len(state["messages"]) - 2, -1, -1):
+                msg = state["messages"][i]
+                if isinstance(msg, AIMessage) and getattr(msg, "tool_calls", None):
+                    call_ids = {
+                        (
+                            tc.get("id")
+                            if isinstance(tc, dict)
+                            else getattr(tc, "id", None)
+                        )
+                        for tc in msg.tool_calls
+                    }
+                    if last_message.tool_call_id in call_ids:
+                        latest_ai_msg = msg
+                        break
+            if not latest_ai_msg:
+                logger.warning(
+                    "Could not find invoking AIMessage for the last ToolMessage."
+                )
+                return {
+                    "is_finished": False
+                }  # Cannot process finish_interpretation without args
 
         if self.verbose:
             self.console.print(
@@ -367,20 +409,22 @@ class ModelInterpreter:
                 if isinstance(tool_content, str):
                     try:
                         import json
+
                         parsed_content = json.loads(tool_content)
                     except json.JSONDecodeError:
                         # If it's not JSON, treat it as a plain string
                         parsed_content = tool_content
                 else:
-                     # If it's not a string, use it directly (e.g., if it's already a dict)
-                     parsed_content = tool_content
+                    # If it's not a string, use it directly (e.g., if it's already a dict)
+                    parsed_content = tool_content
 
                 if isinstance(parsed_content, dict):
                     # For dicts (like get_models_raw_sql result), show keys only
                     content_summary = f"Result keys: {list(parsed_content.keys())}"
                 elif isinstance(parsed_content, str):
                     # For strings, show a truncated preview
-                    content_summary = f'Result (string, length {len(parsed_content)}): "{parsed_content[:80].replace("\n", " ")}..."'
+                    cleaned_content = parsed_content[:80].replace("\\n", " ")
+                    content_summary = f'Result (string, length {len(parsed_content)}): "{cleaned_content}..."'
                 else:
                     # Fallback for other types
                     content_summary = f"Result type: {type(parsed_content)}"
@@ -396,19 +440,26 @@ class ModelInterpreter:
                     if isinstance(tool_content, dict):
                         sql_results = tool_content
                     elif isinstance(tool_content, str):
-                         try:
-                              import json
-                              sql_results = json.loads(tool_content)
-                              if not isinstance(sql_results, dict):
-                                   raise ValueError("Parsed JSON is not a dict")
-                         except (json.JSONDecodeError, ValueError) as json_e:
-                              logger.warning(f"Failed to parse get_models_raw_sql result string as dict: {json_e}. Content: {tool_content[:200]}")
-                              sql_results = {"error": f"Failed to parse tool result: {tool_content[:100]}"} # Store an error instead
+                        try:
+                            import json
+
+                            sql_results = json.loads(tool_content)
+                            if not isinstance(sql_results, dict):
+                                raise ValueError("Parsed JSON is not a dict")
+                        except (json.JSONDecodeError, ValueError) as json_e:
+                            logger.warning(
+                                f"Failed to parse get_models_raw_sql result string as dict: {json_e}. Content: {tool_content[:200]}"
+                            )
+                            sql_results = {
+                                "error": f"Failed to parse tool result: {tool_content[:100]}"
+                            }  # Store an error instead
 
                     if isinstance(sql_results, dict):
-                         fetched_sql_updates.update(sql_results)
-                         logger.info(f"Updated state with fetched SQL for models: {list(sql_results.keys())}")
-                         if self.verbose:
+                        fetched_sql_updates.update(sql_results)
+                        logger.info(
+                            f"Updated state with fetched SQL for models: {list(sql_results.keys())}"
+                        )
+                        if self.verbose:
                             count = len(sql_results)
                             errors = sum(
                                 1
@@ -419,9 +470,13 @@ class ModelInterpreter:
                                 f"[dim]    -> Stored/updated SQL for {count} models ({errors} errors).[/dim]"
                             )
                     else:
-                         logger.warning(f"Tool '{tool_name}' result was not processed into a dictionary. Type: {type(tool_content)}")
-                         if self.verbose:
-                             self.console.print(f"[yellow dim]    -> Result was not a dict. Not stored. Type: {type(tool_content)}[/yellow dim]")
+                        logger.warning(
+                            f"Tool '{tool_name}' result was not processed into a dictionary. Type: {type(tool_content)}"
+                        )
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow dim]    -> Result was not a dict. Not stored. Type: {type(tool_content)}[/yellow dim]"
+                            )
 
                 except Exception as e:
                     logger.error(
@@ -437,29 +492,50 @@ class ModelInterpreter:
                 finish_called = True
                 documentation_dict = None
                 # Find the documentation dict argument from the invoking AIMessage's tool call
-                if latest_ai_msg and getattr(latest_ai_msg, 'tool_calls', None):
+                if latest_ai_msg and getattr(latest_ai_msg, "tool_calls", None):
                     for tc in latest_ai_msg.tool_calls:
-                        call_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
-                        call_name = tc.get("name") if isinstance(tc, dict) else getattr(tc, "name", None)
+                        call_id = (
+                            tc.get("id")
+                            if isinstance(tc, dict)
+                            else getattr(tc, "id", None)
+                        )
+                        call_name = (
+                            tc.get("name")
+                            if isinstance(tc, dict)
+                            else getattr(tc, "name", None)
+                        )
 
-                        if call_name == "finish_interpretation" and call_id == tool_call_id:
-                            args = tc.get("args") if isinstance(tc, dict) else getattr(tc, "args", None)
+                        if (
+                            call_name == "finish_interpretation"
+                            and call_id == tool_call_id
+                        ):
+                            args = (
+                                tc.get("args")
+                                if isinstance(tc, dict)
+                                else getattr(tc, "args", None)
+                            )
                             if isinstance(args, dict):
                                 # The argument should be named 'documentation' and already be a dict
                                 documentation_dict = args.get("documentation")
-                            break # Found the matching call
+                            break  # Found the matching call
 
                 if isinstance(documentation_dict, dict):
                     updates["final_documentation"] = documentation_dict
-                    logger.info(f"Stored final documentation dictionary from finish_interpretation.")
+                    logger.info(
+                        f"Stored final documentation dictionary from finish_interpretation."
+                    )
                     if self.verbose:
                         # Log keys or structure instead of full YAML
-                        doc_preview = {k: type(v).__name__ for k, v in documentation_dict.items()}
+                        doc_preview = {
+                            k: type(v).__name__ for k, v in documentation_dict.items()
+                        }
                         self.console.print(
                             f"[green dim]    -> Stored final documentation object. Structure: {doc_preview}[/green dim]"
                         )
                 else:
-                    logger.warning("Couldn't extract documentation dictionary from finish_interpretation call args.")
+                    logger.warning(
+                        "Couldn't extract documentation dictionary from finish_interpretation call args."
+                    )
                     if self.verbose:
                         self.console.print(
                             f"[yellow dim]    -> Couldn't retrieve documentation dict argument from tool call.[/yellow dim]"
@@ -467,7 +543,9 @@ class ModelInterpreter:
 
                 updates["is_finished"] = True
                 if self.verbose:
-                    self.console.print("[green bold]    -> Signaling workflow completion.[/green bold]")
+                    self.console.print(
+                        "[green bold]    -> Signaling workflow completion.[/green bold]"
+                    )
 
         # Update the state with the accumulated SQL map if changed
         if fetched_sql_updates != state.get("fetched_sql_map", {}):
@@ -478,7 +556,9 @@ class ModelInterpreter:
             updates["is_finished"] = finish_called
 
         if self.verbose and not updates:
-            self.console.print("[dim]  No state changes detected in this update step.[/dim]")
+            self.console.print(
+                "[dim]  No state changes detected in this update step.[/dim]"
+            )
 
         return updates
 
@@ -550,7 +630,10 @@ Follow the interpretation process outlined in the system message. Start by analy
         initial_state = InterpretationState(
             model_name=model_name,
             raw_sql=raw_sql,
-            messages=[initial_system_message, initial_human_message], # Include messages directly
+            messages=[
+                initial_system_message,
+                initial_human_message,
+            ],  # Include messages directly
             fetched_sql_map={},
             final_documentation=None,
             is_finished=False,
@@ -560,15 +643,16 @@ Follow the interpretation process outlined in the system message. Start by analy
             final_state_result = self.graph_app.invoke(initial_state, config=config)
             # Handle potential variations in how the final state is returned
             if isinstance(final_state_result, dict):
-                 final_state = final_state_result
-            elif hasattr(final_state_result, 'values'): # Check if it's a StateSnapshot
-                 final_state = final_state_result.values
+                final_state = final_state_result
+            elif hasattr(final_state_result, "values"):  # Check if it's a StateSnapshot
+                final_state = final_state_result.values
             else:
-                  logger.error(f"Unexpected final state format: {type(final_state_result)}. Cannot extract results.")
-                  final_state = {} # Fallback to empty dict
+                logger.error(
+                    f"Unexpected final state format: {type(final_state_result)}. Cannot extract results."
+                )
+                final_state = {}  # Fallback to empty dict
 
-
-            final_documentation = final_state.get("final_documentation") # Use new key
+            final_documentation = final_state.get("final_documentation")  # Use new key
             success = bool(final_documentation)
             fetched_sql_map = final_state.get("fetched_sql_map", {})
 
@@ -579,11 +663,13 @@ Follow the interpretation process outlined in the system message. Start by analy
             # Return the result dictionary containing the documentation object
             return {
                 "model_name": model_name,
-                "documentation": final_documentation, # Use new key
+                "documentation": final_documentation,  # Use new key
                 "fetched_sql_map": fetched_sql_map,
                 "success": success,
                 # Optionally pass back messages or other debug info if needed by CLI
-                "messages": final_state.get("messages", []) if not success else [] # Only include messages on failure?
+                "messages": (
+                    final_state.get("messages", []) if not success else []
+                ),  # Only include messages on failure?
             }
 
         except Exception as e:
@@ -611,11 +697,16 @@ Follow the interpretation process outlined in the system message. Start by analy
                 "fetched_sql_map": error_state.get("fetched_sql_map", {}),
                 "success": False,
                 "error": str(e),
-                "messages": error_state.get("messages", []) # Include messages on error
+                "messages": error_state.get(
+                    "messages", []
+                ),  # Include messages on error
             }
 
     def save_interpreted_documentation(
-        self, model_name: str, documentation: Optional[Dict[str, Any]], embed: bool = False
+        self,
+        model_name: str,
+        documentation: Optional[Dict[str, Any]],
+        embed: bool = False,
     ) -> Dict[str, Any]:
         """Save interpreted documentation (provided as a dictionary) for a model."""
         if not documentation:
@@ -632,11 +723,11 @@ Follow the interpretation process outlined in the system message. Start by analy
         session = self.model_storage.Session()
         try:
             # Use the documentation dictionary directly
-            model_data = documentation # Rename for clarity within this scope
+            model_data = documentation  # Rename for clarity within this scope
 
             # Basic validation of the dictionary structure
             if not isinstance(model_data, dict):
-                 raise ValueError("Provided documentation is not a dictionary.")
+                raise ValueError("Provided documentation is not a dictionary.")
 
             if (
                 "name" not in model_data
@@ -654,9 +745,10 @@ Follow the interpretation process outlined in the system message. Start by analy
                     f"Model name mismatch in documentation dict ('{dict_model_name}') and function call ('{model_name}'). Using '{model_name}' for database lookup."
                 )
 
-
             # Extract interpretation data
-            interpreted_description = model_data.get("description", "") # Default to empty string if missing
+            interpreted_description = model_data.get(
+                "description", ""
+            )  # Default to empty string if missing
             interpreted_columns = {}
 
             # Process columns, expecting a list of dictionaries
@@ -673,8 +765,9 @@ Follow the interpretation process outlined in the system message. Start by analy
                             f"Skipping invalid column entry in documentation dict for {model_name}: {col_data}"
                         )
             elif "columns" in model_data:
-                 logger.warning(f"'columns' field in documentation for {model_name} is not a list: {type(model_data['columns'])}")
-
+                logger.warning(
+                    f"'columns' field in documentation for {model_name} is not a list: {type(model_data['columns'])}"
+                )
 
             # Fetch the existing ModelTable record
             model_record = (
@@ -693,7 +786,9 @@ Follow the interpretation process outlined in the system message. Start by analy
 
             # Update the record directly
             model_record.interpreted_description = interpreted_description
-            model_record.interpreted_columns = interpreted_columns # Assumes JSON field type in DB
+            model_record.interpreted_columns = (
+                interpreted_columns  # Assumes JSON field type in DB
+            )
 
             session.add(model_record)
             session.commit()
@@ -715,11 +810,11 @@ Follow the interpretation process outlined in the system message. Start by analy
                     include_documentation=True
                 )
 
-                if model_text_for_embedding.strip(): # Check if there's actual content
+                if model_text_for_embedding.strip():  # Check if there's actual content
                     self.vector_store.store_model_embedding(
                         model_name=model_record.name,
                         model_text=model_text_for_embedding,
-                        force=True # Force update since we just saved interpretation
+                        force=True,  # Force update since we just saved interpretation
                     )
                     logger.info(f"Successfully re-embedded model {model_name}")
                 else:
@@ -727,17 +822,18 @@ Follow the interpretation process outlined in the system message. Start by analy
                         f"Could not generate non-empty text representation for {model_name} from DB record for embedding."
                     )
 
-
             return {"success": True, "model_name": model_name}
 
-        except ValueError as ve: # Catch specific validation errors
-             logger.error(f"Validation error saving documentation for {model_name}: {ve}")
-             session.rollback()
-             return {
-                 "success": False,
-                 "error": f"Invalid documentation format: {ve}",
-                 "model_name": model_name,
-             }
+        except ValueError as ve:  # Catch specific validation errors
+            logger.error(
+                f"Validation error saving documentation for {model_name}: {ve}"
+            )
+            session.rollback()
+            return {
+                "success": False,
+                "error": f"Invalid documentation format: {ve}",
+                "model_name": model_name,
+            }
         except Exception as e:
             logger.error(
                 f"Error saving interpreted documentation for {model_name}: {e}",

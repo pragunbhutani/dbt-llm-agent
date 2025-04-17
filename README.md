@@ -113,13 +113,13 @@ Setting up Ragstar involves configuring environment variables and initializing t
 
     ```bash
     # If using dbt Cloud configuration (credentials in .env):
-    docker compose exec ragstar_app ragstar init cloud
+    docker compose exec app ragstar init cloud
 
     # If using local dbt project path (DBT_PROJECT_PATH in .env):
-    docker compose exec ragstar_app ragstar init local
+    docker compose exec app ragstar init local
 
     # If using local dbt source code (DBT_PROJECT_PATH in .env):
-    docker compose exec ragstar_app ragstar init source
+    docker compose exec app ragstar init source
     ```
 
     - Use `cloud`, `local`, or `source` depending on the dbt configuration you set in `.env`.
@@ -132,9 +132,9 @@ Setting up Ragstar involves configuring environment variables and initializing t
     - **Embed (Required for Q&A):** Create vector embeddings for semantic search.
 
     ```bash
-    # Example: Interpret models tagged 'staging', save, and then embed ALL models
-    docker compose exec ragstar_app ragstar interpret --select "tag:staging" --save
-    docker compose exec ragstar_app ragstar embed --select "*"
+    # Example: Interpret models tagged 'knowledge', save, and then embed ALL models
+    docker compose exec app ragstar interpret --select "tag:knowledge" --save
+    docker compose exec app ragstar embed --select "*"
 
     # Example: Embed all models directly (if documentation exists)
     docker compose exec ragstar_app ragstar embed --select "*"

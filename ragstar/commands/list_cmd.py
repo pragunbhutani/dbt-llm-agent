@@ -12,7 +12,7 @@ from rich.table import Table
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
 from ragstar.utils.model_selector import ModelSelector
-from dotenv import load_dotenv_once
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -43,7 +43,7 @@ def list_models(select, output_json, verbose):
     """
     set_logging_level(verbose)
 
-    load_dotenv_once()
+    load_dotenv()
 
     # Load configuration from environment
     postgres_uri = get_config_value("database_url")

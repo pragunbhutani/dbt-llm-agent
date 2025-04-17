@@ -103,18 +103,3 @@ def format_model_reference(model_name: str) -> str:
         A formatted model reference string
     """
     return f"ref('{model_name}')"
-
-
-def load_dotenv_once():
-    """Load environment variables from .env file if not already loaded.
-    This function should be called only once at the beginning of the application.
-    """
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(override=True)
-        logger.debug("Loaded environment variables from .env file")
-    except ImportError:
-        logger.warning(
-            "python-dotenv not installed. Environment variables may not be properly loaded."
-        )

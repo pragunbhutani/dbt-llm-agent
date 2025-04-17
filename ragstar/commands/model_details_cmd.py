@@ -8,10 +8,12 @@ import json
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
+from rich.syntax import Syntax
+from typing import Optional
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
-from dotenv import load_dotenv_once
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = get_logger(__name__)
@@ -44,7 +46,7 @@ def model_details(model_name, verbose, output_json, output_yaml, use_interpretat
     """
     set_logging_level(verbose)
 
-    load_dotenv_once()
+    load_dotenv()
 
     # Load configuration from environment
     postgres_uri = get_config_value("database_url")

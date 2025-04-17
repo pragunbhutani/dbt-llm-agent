@@ -25,14 +25,14 @@ logger = get_logger("alembic")
 load_dotenv()
 
 # Set the SQLAlchemy URL from environment if available
-postgres_uri = os.getenv("POSTGRES_URI")
-if postgres_uri:
-    config.set_main_option("sqlalchemy.url", postgres_uri)
+database_url = os.getenv("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
 else:
     # Check if URL is not set in config, provide a warning
     if not config.get_main_option("sqlalchemy.url"):
         raise ValueError(
-            "Database URL not set. Please set POSTGRES_URI environment variable "
+            "Database URL not set. Please set DATABASE_URL environment variable "
             "or update sqlalchemy.url in alembic.ini"
         )
 

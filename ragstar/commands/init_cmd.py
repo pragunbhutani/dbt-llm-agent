@@ -18,8 +18,14 @@ from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import (
     get_config_value,
     set_logging_level,
-    load_dotenv_once,
+    # update_env_file, # Removed as function is not defined
+    # check_for_updates, # Removed as function is not defined
+    # is_ragstar_initialized, # Removed as function is not defined
+    # get_ragstar_dir, # Removed as function is not defined
 )
+
+# from ragstar.utils.version import get_current_version # Removed as module/function not found and not used
+from dotenv import load_dotenv
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.core.parsers.source_code_parser import SourceCodeParser
 from ragstar.core.parsers.manifest_parser import ManifestParser
@@ -70,8 +76,8 @@ def cloud(
     set_logging_level(verbose)
     logger.info("Initializing using dbt Cloud API...")
 
-    # Load configuration
-    load_dotenv_once()
+    # Load existing env vars, mainly for checking if already initialized
+    load_dotenv()
 
     postgres_uri = get_config_value("database_url")
     if not postgres_uri:
@@ -313,8 +319,8 @@ def local(project_path, force, verbose):
 
     logger.info(f"Initializing using local dbt project at: {project_path_obj}")
 
-    # Load configuration
-    load_dotenv_once()
+    # Load existing env vars, mainly for checking if already initialized
+    load_dotenv()
 
     postgres_uri = get_config_value("database_url")
     if not postgres_uri:
@@ -438,8 +444,8 @@ def source(project_path, force, verbose):
 
     logger.info(f"Initializing using source code from: {project_path}")
 
-    # Load configuration from environment
-    load_dotenv_once()
+    # Load existing env vars, mainly for checking if already initialized
+    load_dotenv()
 
     postgres_uri = get_config_value("database_url")
     if not postgres_uri:

@@ -41,6 +41,9 @@ def feedback(question_id, useful, not_useful, feedback_text, verbose):
     """
     set_logging_level(verbose)
 
+    # Load environment variables
+    load_dotenv()
+
     # Validate arguments - Allow providing text without useful/not-useful flags
     if not (useful or not_useful or feedback_text):
         logger.error(
@@ -51,8 +54,6 @@ def feedback(question_id, useful, not_useful, feedback_text, verbose):
         logger.error("Cannot specify both --useful and --not-useful")
         sys.exit(1)
 
-    # Load configuration from environment
-    load_dotenv_once()
     console.print("[bold green]Interpreting feedback...[/bold green]")
 
     openai_api_key = get_config_value("openai_api_key")

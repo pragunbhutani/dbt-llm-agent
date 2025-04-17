@@ -6,6 +6,7 @@ import click
 import sys
 import os
 import json
+import yaml
 from pathlib import Path
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -13,7 +14,7 @@ from typing import Dict, List, Optional
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
-from dotenv import load_dotenv_once
+from dotenv import load_dotenv
 
 # Initialize logger
 logger = get_logger(__name__)

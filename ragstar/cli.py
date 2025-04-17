@@ -8,7 +8,10 @@ import os
 
 # Set up logging
 from ragstar.utils.logging import setup_logging, get_logger
-from ragstar.utils.cli_utils import load_dotenv_once, get_config_value
+from ragstar.utils.cli_utils import get_config_value, set_logging_level
+
+# from ragstar.utils.config import ensure_config_dir # Removed as function is not defined
+from dotenv import load_dotenv
 
 # Initialize logging with default settings
 setup_logging()
@@ -47,8 +50,6 @@ def cli(ctx, config):
     config_source = "Default environment variables/.env"
     if config:
         try:
-            from dotenv import load_dotenv
-
             load_dotenv(dotenv_path=config, override=True)
             config_source = config
             logger.debug(f"Loaded environment variables from {config}")
@@ -62,6 +63,10 @@ def cli(ctx, config):
             # For now, continue and log the source used below
 
     logger.info(f"Using config source: {config_source}")
+
+    # Load environment variables early, before command logic runs
+    # This ensures settings like DB_URL are available for command setup
+    load_dotenv()
 
 
 # Register all commands
@@ -117,7 +122,7 @@ def main():
         setup_logging()
 
     # Load environment variables from .env file
-    load_dotenv_once()
+    load_dotenv()
 
     cli()
 

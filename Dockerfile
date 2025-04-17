@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-ARG PYTHON_VERSION=3.11
+ARG PYTHON_VERSION=3.10
 FROM python:${PYTHON_VERSION}-slim
 
 # Set environment variables
@@ -27,13 +27,15 @@ RUN pip install poetry
 COPY pyproject.toml poetry.lock ./
 
 # Install project dependencies
-RUN poetry install --no-dev --no-root
+RUN poetry install --no-root
 
 # Copy the rest of the application code
 COPY . .
+COPY ragstar/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
 # Install the project itself
-RUN poetry install --no-dev
+RUN poetry install
 
 # Expose the port the app runs on (replace 8000 if your app uses a different port)
 EXPOSE 8000
@@ -41,4 +43,4 @@ EXPOSE 8000
 # Specify the command to run on container start (replace with your actual run command)
 # Example: CMD ["poetry", "run", "uvicorn", "ragstar.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
 # You might need to adjust this based on how your API server is started.
-CMD ["tail", "-f", "/dev/null"] # Placeholder command, replace this! 
+ENTRYPOINT ["/entrypoint.sh"]
