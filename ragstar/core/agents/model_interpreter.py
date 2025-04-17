@@ -702,6 +702,82 @@ Follow the interpretation process outlined in the system message. Start by analy
                 ),  # Include messages on error
             }
 
+    def interpret_model_workflow(self, model_name: str) -> Dict[str, Any]:
+        """
+        Simpler workflow mode: fetch raw SQL of target model and all upstream models,
+        then call LLM once to generate documentation as YAML and parse it.
+        """
+        # Fetch target model
+        model = self.model_storage.get_model(model_name)
+        if not model:
+            return {
+                "model_name": model_name,
+                "documentation": None,
+                "success": False,
+                "error": f"Model {model_name} not found in storage.",
+            }
+        raw_sql = model.raw_sql
+        if not raw_sql:
+            return {
+                "model_name": model_name,
+                "documentation": None,
+                "success": False,
+                "error": f"No raw SQL for model {model_name}.",
+            }
+        # Build upstream information by raw SQL
+        upstream_models = model.all_upstream_models or []
+        upstream_info = ""
+        for name in upstream_models:
+            m = self.model_storage.get_model(name)
+            if m and m.raw_sql:
+                upstream_info += (
+                    f"\nModel Name: {name}\n\nSQL Code:\n```sql\n{m.raw_sql}\n```\n"
+                )
+            else:
+                upstream_info += f"\nModel Name: {name}\n\nSQL Code: [Error: raw SQL not found for model '{name}']\n"
+        # Format prompt using existing template
+        prompt = MODEL_INTERPRETATION_PROMPT.format(
+            model_name=model_name,
+            model_sql=raw_sql,
+            upstream_info=upstream_info or "None",
+        )
+        if self.verbose:
+            self.console.print(
+                f"[dim]Workflow mode prompt for {model_name}:\n{prompt}[/dim]"
+            )
+        try:
+            # Call LLM once
+            response = self.llm.get_completion(prompt=prompt)
+            # Strip YAML code fences if present to avoid yaml scanning errors
+            cleaned = re.sub(r"^```[^\n]*\n", "", response)
+            cleaned = re.sub(r"\n```[^\n]*$", "", cleaned)
+            cleaned = cleaned.strip()
+            parsed = yaml.safe_load(cleaned)
+            models_list = parsed.get("models") if isinstance(parsed, dict) else None
+            if isinstance(models_list, list) and models_list:
+                documentation = models_list[0]
+                return {
+                    "model_name": model_name,
+                    "documentation": documentation,
+                    "success": True,
+                    "raw_response": response,
+                }
+            else:
+                return {
+                    "model_name": model_name,
+                    "documentation": None,
+                    "success": False,
+                    "error": "Failed to parse LLM response into documentation",
+                    "raw_response": response,
+                }
+        except Exception as e:
+            return {
+                "model_name": model_name,
+                "documentation": None,
+                "success": False,
+                "error": str(e),
+            }
+
     def save_interpreted_documentation(
         self,
         model_name: str,

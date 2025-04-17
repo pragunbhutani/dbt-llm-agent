@@ -51,6 +51,11 @@ logger = get_logger(__name__)
     help="Recursively interpret all upstream models, even if they have existing interpretations",
 )
 @click.option(
+    "--workflow",
+    is_flag=True,
+    help="Use simpler workflow mode for interpretation",
+)
+@click.option(
     "--iterations",
     "-i",
     type=click.IntRange(0, 5),
@@ -65,6 +70,7 @@ def interpret(
     only_when_missing,
     recursive,
     force_recursive,
+    workflow,
     iterations,
 ):
     """Interpret dbt models and generate documentation.
@@ -104,6 +110,12 @@ def interpret(
     logger.info(
         f"Using {iterations} verification iteration(s) for model interpretation"
     )
+
+    # Warn if workflow mode is enabled with recursive flags
+    if workflow and (recursive or force_recursive):
+        logger.warning(
+            "Ignoring --recursive or --force-recursive flags in workflow mode."
+        )
 
     # Add warning if recursive flags are used without save
     if (recursive or force_recursive) and not save:
@@ -201,10 +213,14 @@ def interpret(
                 continue
 
             logger.info(f"Interpreting model: {model_name} ({i+1}/{total_models})")
-            logger.info(f"Using agentic workflow for {model_name}")
-
-            # Get interpretations from the agent - now interpreter
-            result = interpreter.run_interpretation_workflow(model_name)
+            # Choose mode
+            mode = "workflow" if workflow else "agentic"
+            logger.info(f"Using {mode} workflow for {model_name}")
+            # Get interpretations based on mode
+            if workflow:
+                result = interpreter.interpret_model_workflow(model_name)
+            else:
+                result = interpreter.run_interpretation_workflow(model_name)
 
             if not result.get("success", False):
                 logger.error(
