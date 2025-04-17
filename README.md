@@ -252,10 +252,10 @@ Most commands should be run **inside the `app` container** using `docker compose
 
 ```bash
 # Example: Ask a question
-docker compose exec ragstar_app ragstar ask "Explain the fct_orders model"
+docker compose exec app ragstar ask "Explain the fct_orders model"
 
 # Example: Interpret and embed a model
-docker compose exec ragstar_app ragstar interpret --select "fct_orders" --save --embed
+docker compose exec app ragstar interpret --select "fct_orders" --save --embed
 
 # Example: Run the Slackbot (will run in the foreground of the exec command)
 # Note: The API server runs automatically via the Dockerfile's CMD.
