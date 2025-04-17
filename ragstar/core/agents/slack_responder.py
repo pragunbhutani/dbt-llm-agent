@@ -67,6 +67,20 @@ class RespondToThreadInput(BaseModel):
     )
 
 
+# --- NEW: Input schema for acknowledgement message ---
+class AcknowledgeQuestionInput(BaseModel):
+    channel_id: str = Field(description="The ID of the Slack channel.")
+    thread_ts: str = Field(
+        description="The timestamp of the parent message in the thread to acknowledge."
+    )
+    acknowledgement_text: str = Field(
+        description="A brief, friendly message acknowledging the user's question and summarizing your understanding of it before proceeding."
+    )
+
+
+# --- END NEW SCHEMA ---
+
+
 # --- LangGraph State Definition ---
 class SlackResponderState(TypedDict):
     """Represents the state of the Slack responding agent."""
@@ -77,6 +91,9 @@ class SlackResponderState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     thread_history: Optional[List[Dict[str, Any]]]  # Store fetched thread messages
     contextual_question: Optional[str]  # Question formulated with context
+    acknowledgement_sent: Optional[bool] = (
+        None  # Flag to indicate if acknowledgement was sent
+    )
     final_answer: Optional[str]  # Answer received from QuestionAnswerer
     error_message: Optional[str] = (
         None  # Store error messages, e.g., from failed tool calls
@@ -173,6 +190,7 @@ class SlackResponder:
     def _define_tools(self):
         """Define the tools used by the agent."""
 
+        # --- Tool: Fetch Slack Thread History ---
         @tool(args_schema=FetchThreadInput)
         def fetch_slack_thread(channel_id: str, thread_ts: str) -> List[Dict[str, Any]]:
             """Fetches the message history from a specific Slack thread.
@@ -183,23 +201,7 @@ class SlackResponder:
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: fetch_slack_thread(channel_id='{channel_id}', thread_ts='{thread_ts}')[/bold magenta]"
                 )
-            # TODO: Implement actual Slack API call using self.slack_client
-            # Example:
-            # history = get_thread_history(self.slack_client, channel_id, thread_ts)
-            # return history
-            # logger.warning(
-            #     "fetch_slack_thread tool not fully implemented (needs Slack client). Returning placeholder."
-            # )
-            # return [
-            #     {"user": "user1", "text": "Placeholder message 1", "ts": thread_ts},
-            #     {"user": "user2", "text": "Placeholder message 2"},
-            # ]  # Placeholder
             try:
-                # Note: Slack SDK methods are typically async when using AsyncWebClient
-                # LangGraph tools ideally should be synchronous, or the graph needs to handle async tool execution.
-                # For simplicity here, we'll call the async method from a sync context, which isn't ideal.
-                # A better approach involves using an async LangGraph or running the sync tool in an event loop.
-                # This example uses `asyncio.run` for simplicity, but consider alternatives in production.
                 import asyncio
 
                 async def _fetch():
@@ -213,7 +215,6 @@ class SlackResponder:
 
                 if result["ok"]:
                     messages = result.get("messages", [])
-                    # Extract relevant info, e.g., user, text, ts
                     history = [
                         {
                             "user": msg.get("user"),
@@ -232,7 +233,6 @@ class SlackResponder:
                         f"Slack API error (conversations.replies): {result['error']}"
                     )
                     logger.error(error_msg)
-                    # Return structured error
                     return {
                         "error": error_msg,
                         "details": {"slack_error": result["error"]},
@@ -240,7 +240,6 @@ class SlackResponder:
             except SlackApiError as e:
                 error_msg = f"Slack API Error fetching thread: {e.response['error']}"
                 logger.error(error_msg, exc_info=self.verbose)
-                # Return structured error
                 return {
                     "error": error_msg,
                     "details": {"slack_error": e.response["error"]},
@@ -248,13 +247,77 @@ class SlackResponder:
             except Exception as e:
                 error_msg = f"Unexpected error fetching thread: {e}"
                 logger.error(error_msg, exc_info=self.verbose)
-                # Return structured error
                 return {"error": error_msg, "details": {"exception": str(e)}}
 
+        # --- NEW Tool: Acknowledge Question ---
+        @tool(args_schema=AcknowledgeQuestionInput)
+        def acknowledge_question(
+            channel_id: str, thread_ts: str, acknowledgement_text: str
+        ) -> Dict[str, Any]:
+            """Posts a brief acknowledgement message to the Slack thread *before* getting the final answer.
+            Use this tool AFTER fetching the thread history and formulating your understanding of the user's request.
+            The message should confirm receipt and briefly state your understanding of the question.
+            Example: "Got it. Just to confirm, you're asking about [rephrased question]? I'll look into this and get back to you."
+            Returns a dictionary indicating success or failure.
+            """
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: acknowledge_question(channel_id='{channel_id}', thread_ts='{thread_ts}', text='{acknowledgement_text[:50]}...')[/bold magenta]"
+                )
+            try:
+                import asyncio
+
+                async def _post_ack():
+                    # Keep acknowledgement simple text for now
+                    return await self.slack_client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=acknowledgement_text,
+                    )
+
+                result = asyncio.run(_post_ack())
+                if result["ok"]:
+                    if self.verbose:
+                        self.console.print(
+                            f"[green] -> Successfully posted acknowledgement to {channel_id}/{thread_ts}[/green]"
+                        )
+                    return {"success": True, "message": "Acknowledgement sent."}
+                else:
+                    error_msg = (
+                        f"Slack API error (chat.postMessage for ack): {result['error']}"
+                    )
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "details": {"slack_error": result["error"]},
+                    }
+            except SlackApiError as e:
+                error_msg = (
+                    f"Slack API Error posting acknowledgement: {e.response['error']}"
+                )
+                logger.error(error_msg, exc_info=self.verbose)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "details": {"slack_error": e.response["error"]},
+                }
+            except Exception as e:
+                error_msg = f"Unexpected error posting acknowledgement: {e}"
+                logger.error(error_msg, exc_info=self.verbose)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "details": {"exception": str(e)},
+                }
+
+        # --- END NEW Tool ---
+
+        # --- Tool: Ask Question Answerer ---
         @tool(args_schema=AskQuestionAnswererInput)
         def ask_question_answerer(question: str) -> Dict[str, Any]:
             """Sends a question to the specialized QuestionAnswerer agent to get an answer based on dbt models.
-            Use this tool after analyzing the Slack thread context (if necessary).
+            Use this tool AFTER analyzing the Slack thread context AND sending an acknowledgement message using 'acknowledge_question'.
             Formulate the 'question' input carefully, incorporating thread context if it helps clarify the user's intent.
             """
             if self.verbose:
@@ -286,12 +349,14 @@ class SlackResponder:
                     "final_answer": f"Error contacting QuestionAnswerer: {e}",
                 }
 
+        # --- Tool: Respond to Slack Thread (Final Answer) ---
         @tool(args_schema=RespondToThreadInput)
         def respond_to_slack_thread(
             channel_id: str, thread_ts: str, answer_text: str
         ) -> Dict[str, Any]:
-            """Posts a message back to the specified Slack thread.
-            Use this tool ONLY when you have the final answer from the QuestionAnswerer agent and are ready to respond to the user.
+            """Posts the *final answer* message back to the specified Slack thread.
+            Use this tool ONLY when you have the final answer from the QuestionAnswerer agent AND have corrected its formatting for Slack mrkdwn.
+            Do NOT use this for the initial acknowledgement message.
             Returns a dictionary indicating success or failure.
             """
             if self.verbose:
@@ -359,6 +424,7 @@ class SlackResponder:
 
         self._tools = [
             fetch_slack_thread,
+            acknowledge_question,  # Add new tool
             ask_question_answerer,
             respond_to_slack_thread,
         ]
@@ -466,6 +532,11 @@ class SlackResponder:
             self.console.print(
                 f"[dim]Thread history fetched: {'Yes' if state.get('thread_history') else 'No'}[/dim]"
             )
+            # --- ADDED Logging for acknowledgement_sent ---
+            self.console.print(
+                f"[dim]Acknowledgement sent: {'Yes' if state.get('acknowledgement_sent') else 'No'}[/dim]"
+            )
+            # --- END ADDED Logging ---
             self.console.print(
                 f"[dim]Final answer ready: {'Yes' if state.get('final_answer') else 'No'}[/dim]"
             )
@@ -474,20 +545,22 @@ class SlackResponder:
 
         # Initial prompt construction
         if not messages:
-            system_prompt = """You are an AI assistant integrated with Slack. Your goal is to understand user questions asked in Slack threads and get answers using a specialized 'QuestionAnswerer' agent.
+            # --- MODIFIED: Updated Initial System Prompt ---
+            system_prompt = """You are an AI assistant integrated with Slack. Your goal is to understand user questions asked in Slack threads, acknowledge them, and get answers using a specialized 'QuestionAnswerer' agent.
 
 Workflow:
 1. A user asks a question in a Slack thread. You receive the question, channel ID, and thread timestamp.
 2. Use the 'fetch_slack_thread' tool ONCE to get the recent message history for context.
-3. Analyze the original question AND the thread history. If the history provides important context (e.g., clarifying a previous point, referring to an earlier topic), formulate a combined question. Otherwise, just use the original question.
-4. Use the 'ask_question_answerer' tool with the formulated question. This tool will invoke another agent to find the answer based on dbt models.
-5. **CRITICAL**: Once you receive the final answer from 'ask_question_answerer', you MUST **verify and correct** its formatting to strictly adhere to Slack's `mrkdwn` syntax before proceeding. Pay close attention to the formatting rules below.
-6. Use the 'respond_to_slack_thread' tool to post this **correctly formatted** answer back into the original Slack thread.
-7. Your final step should always be calling 'respond_to_slack_thread' with the verified and corrected answer. Do not try to chat further after getting the answer.
+3. Analyze the original question AND the thread history. Formulate your understanding of the complete request.
+4. **CRITICAL STEP:** Use the 'acknowledge_question' tool to send a brief message to the user confirming you received their question and summarizing your understanding (e.g., "Got it. Just confirming you're asking about X? I'll look into that.").
+5. AFTER sending the acknowledgement, use the 'ask_question_answerer' tool with the formulated question (incorporating context from history). This tool invokes another agent to find the answer based on dbt models.
+6. Once you receive the final answer from 'ask_question_answerer', you MUST **verify and correct** its formatting to strictly adhere to Slack's `mrkdwn` syntax (see rules below).
+7. Use the 'respond_to_slack_thread' tool to post this **correctly formatted final answer** back into the original Slack thread.
+8. Your final action should always be calling 'respond_to_slack_thread' with the verified and corrected final answer.
 
-**STRICT SLACK MARKDOWN (mrkdwn) FORMATTING RULES:**
+**STRICT SLACK MARKDOWN (mrkdwn) FORMATTING RULES (for the *final* answer):**
 Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-messages#markup
-- **NO Markdown headings (# or ##).** Slack does not support these. Use *bold text* instead.
+- **NO Markdown headings (# or ##).** Use *bold text* instead.
 - Use *bold text* for emphasis or section names (surrounded by asterisks: *your text*).
 - Use _italic text_ for minor emphasis (surrounded by underscores: _your text_).
 - Use `inline code` for model names, fields, or technical terms (surrounded by backticks: `your text`).
@@ -495,30 +568,37 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
 - Use >blockquote for quoting text (add > before the text: >your text).
 - Use bulleted lists starting with * or - followed by a space (* your text).
 - Use numbered lists starting with 1. followed by a space (1. your text).
-- Check for stray Markdown elements that are not Slack-compatible.
 
-**Your responsibility:** Review the answer from QuestionAnswerer. If it contains formatting errors (like `#` headings or ```sql blocks), correct them before calling `respond_to_slack_thread`. Do NOT add or modify the actual SQL query content itself, only the formatting and the surrounding text's formatting.
+**Your responsibility:**
+- Fetch history -> Analyze -> **Acknowledge** -> Ask QA -> Verify/Format Answer -> Respond with Final Answer.
+- Ensure the acknowledgement via 'acknowledge_question' happens *before* 'ask_question_answerer'.
+- Ensure the final answer via 'respond_to_slack_thread' uses correct Slack mrkdwn formatting.
 """
+            # --- END MODIFIED Prompt ---
             # Use single quotes for f-string, double for dict keys
-            initial_human_message = f'New question received from Slack:\\nChannel ID: {state["channel_id"]}\\nThread TS: {state["thread_ts"]}\\nQuestion: "{state["original_question"]}"\\n\\nPlease fetch the thread history to understand the context.'
+            initial_human_message = f'New question received from Slack:\\nChannel ID: {state["channel_id"]}\\nThread TS: {state["thread_ts"]}\\nQuestion: "{state["original_question"]}"\\n\\nPlease fetch the thread history first.'
             messages_for_llm = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=initial_human_message),
             ]
         else:
-            # Add guidance based on current state for subsequent calls
+            # --- MODIFIED: Updated Guidance Logic ---
             guidance_items = []
             if not state.get("thread_history"):
-                guidance_items.append("You should use 'fetch_slack_thread' now.")
+                guidance_items.append("You MUST use 'fetch_slack_thread' now.")
+            elif not state.get("acknowledgement_sent"):
+                guidance_items.append(
+                    "Analyze the thread history and original question. Formulate a brief acknowledgement message summarizing your understanding and use the 'acknowledge_question' tool now."
+                )
             elif not state.get("final_answer"):
                 guidance_items.append(
-                    "Analyze the thread history and the original question. Formulate the question for the 'ask_question_answerer' tool."
+                    "You have sent the acknowledgement. Now, formulate the detailed question for the 'ask_question_answerer' tool, incorporating context from the thread history if necessary."
                 )
-            else:
-                # Final answer is ready, instruct to VERIFY, FIX, and respond.
+            else:  # Final answer is ready
                 guidance_items.append(
                     f"You have received the final answer. **CRITICAL ACTION**: Review the answer text for strict adherence to Slack `mrkdwn` format. **Correct any errors** (e.g., remove '#', '##' headings, ensure code blocks are ``` without language specifiers, use *bold*). Do NOT modify the SQL query content itself, only the formatting. Once verified and corrected, use 'respond_to_slack_thread' to post the fixed answer to channel {state['channel_id']} in thread {state['thread_ts']}."
                 )
+            # --- END MODIFIED Guidance ---
 
             guidance = "Guidance: " + " ".join(guidance_items)
             messages_for_llm = list(messages)  # Make a copy
@@ -636,6 +716,36 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                     logger.warning(error_msg)
                     updates["error_message"] = error_msg
                     updates["thread_history"] = None
+
+            # --- NEW: Handle acknowledge_question result ---
+            elif tool_name == "acknowledge_question":
+                if isinstance(parsed_content, dict):
+                    if parsed_content.get("success"):
+                        updates["acknowledgement_sent"] = True
+                        updates["error_message"] = None  # Clear error on success
+                        if self.verbose:
+                            self.console.print(
+                                f"[dim] -> Updated state: acknowledgement_sent = True.[/dim]"
+                            )
+                    else:
+                        # Tool reported failure
+                        updates["error_message"] = parsed_content.get(
+                            "error",
+                            "acknowledge_question failed without specific error.",
+                        )
+                        updates["acknowledgement_sent"] = (
+                            False  # Explicitly set false on error
+                        )
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow] -> Setting error state from acknowledge_question: {updates['error_message']}[/yellow]"
+                            )
+                else:
+                    error_msg = f"acknowledge_question tool returned unexpected content: {parsed_content}"
+                    logger.warning(error_msg)
+                    updates["error_message"] = error_msg
+                    updates["acknowledgement_sent"] = False
+            # --- END NEW HANDLER ---
 
             elif tool_name == "ask_question_answerer":
                 # Expecting a dict with 'success' key
@@ -843,6 +953,7 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             "configurable": {"thread_id": workflow_id}
         }  # Use workflow_id for LangGraph memory
 
+        # --- MODIFIED: Update initial state ---
         initial_state = SlackResponderState(
             original_question=question,
             channel_id=channel_id,
@@ -850,8 +961,12 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             messages=[],
             thread_history=None,
             contextual_question=None,
+            acknowledgement_sent=None,  # Initialize new state field
             final_answer=None,
+            error_message=None,  # Ensure error starts as None
+            response_sent=None,  # Ensure response_sent starts as None
         )
+        # --- END MODIFIED ---
 
         if self.verbose:
             self.console.print(

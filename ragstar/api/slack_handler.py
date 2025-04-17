@@ -131,18 +131,8 @@ async def startup_event():
             # Check if the responder agent is ready (initialized in startup)
             if not slack_responder:
                 logger.error("SlackResponder not initialized. Cannot process mention.")
-                try:
-                    await say(
-                        text="Sorry, I encountered an internal error and cannot process your request right now. Please try again later.",
-                        thread_ts=thread_ts,
-                    )
-                except Exception as e:
-                    logger.error(f"Failed to send error message to Slack: {e}")
                 return
 
-            logger.info(
-                f"Triggering SlackResponder workflow for mention in {channel_id}/{thread_ts}"
-            )
             # Run the potentially blocking workflow in a separate thread using asyncio.to_thread
             # This prevents blocking Bolt's async event loop
             try:

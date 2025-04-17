@@ -21,7 +21,7 @@ class LLMClient:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         embedding_model: Optional[str] = None,
-        temperature: float = 0.0,
+        temperature: float = 1.0,
     ):
         """Initialize the LLM client.
 
@@ -29,7 +29,7 @@ class LLMClient:
             api_key: The API key to use for the LLM service
             model: The model name to use for completions
             embedding_model: The model name to use for embeddings
-            temperature: The temperature to use for completions
+            temperature: The temperature to use for completions (reads from config if available)
         """
         # Get API key from parameter or config
         self.api_key = api_key or get_config_value("openai_api_key")
@@ -43,22 +43,23 @@ class LLMClient:
         self.embedding_model = embedding_model or get_config_value(
             "openai_embedding_model", "text-embedding-3-small"
         )
-        self.temperature = temperature
+        # Read temperature from config, falling back to the parameter (defaulting to 1.0)
+        self.temperature = float(get_config_value("temperature", temperature))
 
         # Initialize OpenAI client (Raw client - might be needed elsewhere? Let's keep for now)
         # self.client = OpenAI(api_key=self.api_key) # COMMENTED OUT or REMOVE LATER if unused
 
         # ADDED: Initialize LangChain clients
-        # MODIFIED: Only pass temperature if model is not o3-mini (or potentially others)
+        # MODIFIED: Always pass the determined temperature
         chat_client_kwargs = {
             "api_key": self.api_key,
             "model": self.model,
+            "temperature": self.temperature,  # Always pass temperature
         }
-        if (
-            self.model != "o3-mini"
-        ):  # Add other models here if they also don't support temp
-            chat_client_kwargs["temperature"] = self.temperature
-
+        # if (
+        #     self.model != "o3-mini"
+        # ):
+        #     chat_client_kwargs["temperature"] = self.temperature
         self.chat_client = ChatOpenAI(**chat_client_kwargs)
         # END MODIFIED
 
