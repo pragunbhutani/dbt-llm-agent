@@ -6,7 +6,7 @@ import click
 import sys
 import logging
 from dotenv import load_dotenv
-from rich import console
+from rich.console import Console
 
 from ragstar.utils.logging import get_logger
 from ragstar.utils.cli_utils import get_config_value, set_logging_level
@@ -14,6 +14,8 @@ from ragstar.utils.cli_utils import get_config_value, set_logging_level
 # Initialize logger
 logger = get_logger(__name__)
 
+# Initialize console for rich output
+console = Console()
 
 @click.command()
 @click.argument("question_id", type=int)
