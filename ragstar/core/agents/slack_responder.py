@@ -31,7 +31,7 @@ from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.storage.question_storage import QuestionStorage
 from ragstar.core.agents.question_answerer import (
     QuestionAnswerer,
-)  # Adjust import if needed
+)
 
 # Need to potentially create a slack integration module
 # from ragstar.integrations.slack import get_thread_history, post_message_to_thread
@@ -57,14 +57,15 @@ class AskQuestionAnswererInput(BaseModel):
     )
 
 
-class RespondToThreadInput(BaseModel):
-    channel_id: str = Field(description="The ID of the Slack channel to respond in.")
-    thread_ts: str = Field(
-        description="The timestamp of the parent message in the thread to respond to."
-    )
-    answer_text: str = Field(
-        description="The final answer text to post in the Slack thread."
-    )
+# --- REMOVED: RespondToThreadInput Schema ---
+# class RespondToThreadInput(BaseModel):
+#     channel_id: str = Field(description="The ID of the Slack channel to respond in.")
+#     thread_ts: str = Field(
+#         description="The timestamp of the parent message in the thread to respond to."
+#     )
+#     answer_text: str = Field(
+#         description="The final answer text to post in the Slack thread."
+#     )
 
 
 # --- NEW: Input schema for acknowledgement message ---
@@ -75,6 +76,35 @@ class AcknowledgeQuestionInput(BaseModel):
     )
     acknowledgement_text: str = Field(
         description="A brief, friendly message acknowledging the user's question and summarizing your understanding of it before proceeding."
+    )
+
+
+# --- NEW: Input schema for final response with snippet ---
+class PostFinalResponseInput(BaseModel):
+    channel_id: str = Field(description="The ID of the Slack channel to respond in.")
+    thread_ts: str = Field(
+        description="The timestamp of the parent message in the thread to respond to."
+    )
+    message_text: str = Field(
+        description="The user-facing message text introducing the SQL query snippet."
+    )
+    sql_query: str = Field(
+        description="The final, verified SQL query content to be uploaded as a snippet."
+    )
+    optional_notes: Optional[str] = Field(
+        description="Optional notes or footnotes to include in the message after the snippet reference.",
+        default=None,
+    )
+
+
+# --- NEW: Input schema for simple text response ---
+class PostTextResponseInput(BaseModel):
+    channel_id: str = Field(description="The ID of the Slack channel to respond in.")
+    thread_ts: str = Field(
+        description="The timestamp of the parent message in the thread to respond to."
+    )
+    message_text: str = Field(
+        description="The plain text message to post in the Slack thread (e.g., explaining a verification failure or asking for clarification)."
     )
 
 
@@ -94,7 +124,12 @@ class SlackResponderState(TypedDict):
     acknowledgement_sent: Optional[bool] = (
         None  # Flag to indicate if acknowledgement was sent
     )
-    final_answer: Optional[str]  # Answer received from QuestionAnswerer
+    # --- REMOVED: qa_structured_result field ---
+    # qa_structured_result: Optional[Dict[str, Any]] # Stores the dict from QuestionAnswererResult
+    # --- NEW: Fields for QA text answer and context ---
+    qa_final_answer: Optional[str]  # The final text answer from QA
+    qa_models: Optional[List[Dict[str, Any]]]  # Models QA used
+    qa_feedback: Optional[List[Dict[str, Any]]]  # Feedback QA used
     error_message: Optional[str] = (
         None  # Store error messages, e.g., from failed tool calls
     )
@@ -313,12 +348,77 @@ class SlackResponder:
 
         # --- END NEW Tool ---
 
+        # --- NEW Tool: Post Simple Text Response ---
+        @tool(args_schema=PostTextResponseInput)
+        def post_text_response(
+            channel_id: str, thread_ts: str, message_text: str
+        ) -> Dict[str, Any]:
+            """Posts a simple plain text message to the specified Slack thread.
+            Use this tool for messages that do NOT include a SQL snippet, such as:
+            - Explaining why SQL verification failed after receiving the answer from QuestionAnswerer.
+            - Informing the user if QuestionAnswerer couldn't generate an answer.
+            - Asking for clarification if the initial request is ambiguous (after attempting to understand context).
+            Returns a dictionary indicating success or failure.
+            """
+            if self.verbose:
+                self.console.print(
+                    f"[bold magenta]🛠️ Executing Tool: post_text_response(channel_id='{channel_id}', thread_ts='{thread_ts}', text='{message_text[:50]}...')[/bold magenta]"
+                )
+            try:
+                import asyncio
+
+                async def _post_text():
+                    return await self.slack_client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=message_text,  # Simple text message
+                    )
+
+                result = asyncio.run(_post_text())
+                if result["ok"]:
+                    if self.verbose:
+                        self.console.print(
+                            f"[green] -> Successfully posted simple text response to {channel_id}/{thread_ts}[/green]"
+                        )
+                    return {"success": True, "message": "Text response sent."}
+                else:
+                    error_msg = f"Slack API error (chat.postMessage for text response): {result['error']}"
+                    logger.error(error_msg)
+                    return {
+                        "success": False,
+                        "error": error_msg,
+                        "details": {"slack_error": result["error"]},
+                    }
+            except SlackApiError as e:
+                error_msg = (
+                    f"Slack API Error posting text response: {e.response['error']}"
+                )
+                logger.error(error_msg, exc_info=self.verbose)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "details": {"slack_error": e.response["error"]},
+                }
+            except Exception as e:
+                error_msg = f"Unexpected error posting text response: {e}"
+                logger.error(error_msg, exc_info=self.verbose)
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "details": {"exception": str(e)},
+                }
+
+        # --- END NEW TOOL ---
+
         # --- Tool: Ask Question Answerer ---
         @tool(args_schema=AskQuestionAnswererInput)
+        # --- MODIFIED: Return type includes text answer and context ---
         def ask_question_answerer(question: str) -> Dict[str, Any]:
             """Sends a question to the specialized QuestionAnswerer agent to get an answer based on dbt models.
             Use this tool AFTER analyzing the Slack thread context AND sending an acknowledgement message using 'acknowledge_question'.
             Formulate the 'question' input carefully, incorporating thread context if it helps clarify the user's intent.
+            Returns a dictionary containing the final answer text, models searched, and feedback considered on success,
+            or a dictionary containing an 'error' key on failure.
             """
             if self.verbose:
                 self.console.print(
@@ -327,106 +427,154 @@ class SlackResponder:
             self.console.print(
                 f"[blue]❓ Passing question to QuestionAnswerer: '{question[:100]}...'[/blue]"
             )
-            # Run the QuestionAnswerer workflow
-            # Note: QuestionAnswerer runs its own graph, potentially with its own memory.
-            # We might need a way to link these workflows or handle potential blocking.
-            # For now, run it synchronously. Consider async execution later.
             try:
-                qa_result = self.question_answerer.run_agentic_workflow(question)
-                # Extract the relevant part (the final answer)
-                final_answer = qa_result.get(
-                    "final_answer", "QuestionAnswerer did not provide an answer."
-                )
-                # Return success structure
-                return {"success": True, "final_answer": final_answer}
+                # --- MODIFIED: Expects dict with final_answer, searched_models, relevant_feedback ---\n                qa_result_dict = self.question_answerer.run_agentic_workflow(question)\n\n                # --- MODIFIED: Check for truthiness of the 'error' key instead of 'is not None' ---\n                # Check if the result indicates an error from QA workflow\n                if qa_result_dict and qa_result_dict.get(\"error\"): # Check if error key exists and is truthy\n                    error_content = qa_result_dict['error'] # Get the actual error content\n                    logger.error(\n                        f\"QuestionAnswerer workflow returned an error: {error_content}\"\n                    )\n                    return {\n                        \"success\": False, # Keep this structure for update_state_node compatibility for now\n                        \"error\": f\"QuestionAnswerer failed: {error_content}\", # Use the actual error\n                        \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                        \"models\": qa_result_dict.get(\"searched_models\", []),\n                        \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                    }\n                elif qa_result_dict and \"final_answer\" in qa_result_dict:\n                    # Return success structure with the answer text and context\n                    return {\n                        \"success\": True, # Keep this structure\n                        \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                        \"models\": qa_result_dict.get(\"searched_models\", []),\n                        \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                        \"error\": None # Explicitly add error: None on success\n                    }\n                else:\n                    # Handle unexpected empty or malformed result\n                    error_msg = "QuestionAnswerer workflow returned an unexpected result format."\n                    logger.error(f"{error_msg} Result: {qa_result_dict}")
+                qa_result_dict = self.question_answerer.run_agentic_workflow(question)
+
+                # Check if the result indicates an error from QA workflow
+                if qa_result_dict and qa_result_dict.get("error"):
+                    error_content = qa_result_dict["error"]
+                    logger.error(
+                        f"QuestionAnswerer workflow returned an error: {error_content}"
+                    )
+                    return {
+                        "success": False,
+                        "error": f"QuestionAnswerer failed: {error_content}",
+                        "final_answer": qa_result_dict.get("final_answer"),
+                        "models": qa_result_dict.get("searched_models", []),
+                        "feedback": qa_result_dict.get("relevant_feedback", []),
+                    }
+                elif qa_result_dict and "final_answer" in qa_result_dict:
+                    # Return success structure with the answer text and context
+                    return {
+                        "success": True,
+                        "final_answer": qa_result_dict.get("final_answer"),
+                        "models": qa_result_dict.get("searched_models", []),
+                        "feedback": qa_result_dict.get("relevant_feedback", []),
+                        "error": None,
+                    }
+                else:
+                    # Handle unexpected empty or malformed result
+                    error_msg = "QuestionAnswerer workflow returned an unexpected result format."
+                    logger.error(f"{error_msg} Result: {qa_result_dict}")
+                    return {"success": False, "error": error_msg}
             except Exception as e:
                 error_msg = f"Error running QuestionAnswerer workflow: {e}"
                 logger.error(error_msg, exc_info=self.verbose)
-                # Return error structure
                 return {
                     "success": False,
                     "error": error_msg,
-                    "final_answer": f"Error contacting QuestionAnswerer: {e}",
                 }
 
-        # --- Tool: Respond to Slack Thread (Final Answer) ---
-        @tool(args_schema=RespondToThreadInput)
-        def respond_to_slack_thread(
-            channel_id: str, thread_ts: str, answer_text: str
+        # --- NEW Tool: Post Final Response with Snippet ---
+        @tool(args_schema=PostFinalResponseInput)
+        def post_final_response_with_snippet(
+            channel_id: str,
+            thread_ts: str,
+            message_text: str,
+            sql_query: str,
+            optional_notes: Optional[str] = None,
         ) -> Dict[str, Any]:
-            """Posts the *final answer* message back to the specified Slack thread.
-            Use this tool ONLY when you have the final answer from the QuestionAnswerer agent AND have corrected its formatting for Slack mrkdwn.
-            Do NOT use this for the initial acknowledgement message.
-            Returns a dictionary indicating success or failure.
+            """Posts the final response message and uploads the SQL query as a text snippet to the specified Slack thread.
+            Use this tool ONLY after verifying the SQL query from QuestionAnswerer and composing the accompanying message text and notes.
             """
             if self.verbose:
                 self.console.print(
-                    f"[bold magenta]🛠️ Executing Tool: respond_to_slack_thread(channel_id='{channel_id}', thread_ts='{thread_ts}', answer_text='{answer_text[:100]}...')[/bold magenta]"
+                    f"[bold magenta]🛠️ Executing Tool: post_final_response_with_snippet(channel_id='{channel_id}', thread_ts='{thread_ts}', message='{message_text[:50]}...', notes='{str(optional_notes)[:50]}...')",
                 )
             try:
                 import asyncio
 
-                # Similar async issue as above
-                async def _post():
-                    # Use blocks for better formatting control with mrkdwn
-                    blocks = [
-                        {
-                            "type": "section",
-                            "text": {"type": "mrkdwn", "text": answer_text},
-                        }
-                    ]
-                    return await self.slack_client.chat_postMessage(
+                async def _upload_and_post():
+                    # 1. Post the main message referencing the snippet-to-be-uploaded
+                    full_message = message_text
+                    if optional_notes:
+                        full_message += f"\n\n*Notes:*\n{optional_notes}"
+
+                    post_result = await self.slack_client.chat_postMessage(
                         channel=channel_id,
-                        thread_ts=thread_ts,  # Important: reply in thread
-                        text=answer_text,  # Fallback text
-                        blocks=blocks,  # Use blocks for mrkdwn
+                        thread_ts=thread_ts,
+                        text=full_message,
+                        blocks=[
+                            {
+                                "type": "section",
+                                "text": {"type": "mrkdwn", "text": full_message},
+                            }
+                        ],
+                        unfurl_links=False,
+                        unfurl_media=False,
                     )
 
-                result = asyncio.run(_post())
+                    if not post_result or not post_result["ok"]:
+                        error_msg = f"Slack API error (chat.postMessage for final response): {post_result.get('error', 'Unknown post error')}"
+                        logger.error(error_msg)
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "details": {"slack_error": post_result.get("error")},
+                        }
 
-                if result["ok"]:
-                    if self.verbose:
-                        self.console.print(
-                            f"[green] -> Successfully posted message to thread {channel_id}/{thread_ts}[/green]"
-                        )
-                    # Return success structure
+                    # 2. Upload the SQL query as a snippet *after* the message
+                    upload_result = await self.slack_client.files_upload_v2(
+                        channel=channel_id,
+                        content=sql_query,
+                        # filetype="sql", # Removed unsupported parameter
+                        title="Generated SQL Query",
+                        # initial_comment=f"SQL query for thread {thread_ts}", # Removed as comment is in message above
+                        thread_ts=thread_ts,  # Keep in the same thread
+                    )
+
+                    # files_upload_v2 returns a different structure, check 'ok' directly
+                    if not upload_result or not upload_result.get(
+                        "ok"
+                    ):  # Check 'ok' in the response dict
+                        # Note: The message was already posted successfully at this point.
+                        # We might want to indicate partial success or post a follow-up error.
+                        # For now, report the upload failure.
+                        error_msg = f"Message posted, but Slack API error uploading snippet (files.upload_v2): {upload_result.get('error', 'Unknown upload error')}"
+                        logger.error(error_msg)
+                        # Return failure despite message success, as snippet failed.
+                        return {
+                            "success": False,
+                            "error": error_msg,
+                            "details": {"slack_error": upload_result.get("error")},
+                        }
+
+                    # If both message post and snippet upload succeed
                     return {
                         "success": True,
-                        "message": "Successfully posted message to Slack.",
+                        "message": "Successfully posted response and uploaded snippet.",
                     }
-                else:
-                    error_msg = f"Slack API error (chat.postMessage): {result['error']}"
-                    logger.error(error_msg)
-                    # Return error structure
-                    return {
-                        "success": False,
-                        "error": error_msg,
-                        "details": {"slack_error": result["error"]},
-                    }
+
+                result = asyncio.run(_upload_and_post())
+                return result  # Return the success/failure dict
+
             except SlackApiError as e:
-                error_msg = f"Slack API Error posting message: {e.response['error']}"
+                error_msg = f"Slack API Error posting final response/snippet: {e.response['error']}"
                 logger.error(error_msg, exc_info=self.verbose)
-                # Return error structure
                 return {
                     "success": False,
                     "error": error_msg,
                     "details": {"slack_error": e.response["error"]},
                 }
             except Exception as e:
-                error_msg = f"Unexpected error posting message: {e}"
+                error_msg = f"Unexpected error posting final response/snippet: {e}"
                 logger.error(error_msg, exc_info=self.verbose)
-                # Return error structure
                 return {
                     "success": False,
                     "error": error_msg,
                     "details": {"exception": str(e)},
                 }
 
+        # --- END NEW TOOL ---
+
+        # Store the tools as instance attributes
         self._tools = [
             fetch_slack_thread,
-            acknowledge_question,  # Add new tool
+            acknowledge_question,
+            post_text_response,  # Added new tool
             ask_question_answerer,
-            respond_to_slack_thread,
+            post_final_response_with_snippet,
         ]
 
     # --- LangGraph Graph Construction ---
@@ -508,6 +656,7 @@ class SlackResponder:
     # --- LangGraph Nodes ---
     def agent_node(self, state: SlackResponderState) -> Dict[str, Any]:
         """The main node that calls the LLM to decide the next action."""
+        # Check if the workflow is already complete (response sent)
         if state.get("response_sent"):
             if self.verbose:
                 self.console.print(
@@ -516,7 +665,6 @@ class SlackResponder:
                 self.console.print(
                     "[dim] -> Response flag is true. Ending workflow immediately.[/dim]"
                 )
-            # Return empty messages to signal completion, routing to END via tools_condition
             return {"messages": []}
 
         if self.verbose:
@@ -532,57 +680,110 @@ class SlackResponder:
             self.console.print(
                 f"[dim]Thread history fetched: {'Yes' if state.get('thread_history') else 'No'}[/dim]"
             )
-            # --- ADDED Logging for acknowledgement_sent ---
             self.console.print(
                 f"[dim]Acknowledgement sent: {'Yes' if state.get('acknowledgement_sent') else 'No'}[/dim]"
             )
-            # --- END ADDED Logging ---
+            # --- MODIFIED Logging for QA Result ---
             self.console.print(
-                f"[dim]Final answer ready: {'Yes' if state.get('final_answer') else 'No'}[/dim]"
+                f"[dim]QA final answer received: {'Yes' if state.get('qa_final_answer') else 'No'}[/dim]"
             )
+            # --- END MODIFIED Logging ---
 
         messages = state.get("messages", [])
+        # --- NEW: Get QA context from state ---
+        qa_final_answer_text = state.get("qa_final_answer")
+        qa_models_used = state.get("qa_models")
+        qa_feedback_used = state.get("qa_feedback")
+        thread_history = state.get("thread_history")
 
-        # Initial prompt construction
+        # --- Determine the next step based on state ---
         if not messages:
             # --- MODIFIED: Updated Initial System Prompt ---
-            system_prompt = """You are an AI assistant integrated with Slack. Your goal is to understand user questions asked in Slack threads, acknowledge them, and get answers using a specialized 'QuestionAnswerer' agent.
+            system_prompt = """You are an AI assistant integrated with Slack. Your primary role is to manage the workflow for answering user questions asked in Slack threads.
 
-Workflow:
-1. A user asks a question in a Slack thread. You receive the question, channel ID, and thread timestamp.
-2. Use the 'fetch_slack_thread' tool ONCE to get the recent message history for context.
-3. Analyze the original question AND the thread history. Formulate your understanding of the complete request.
-4. **CRITICAL STEP:** Use the 'acknowledge_question' tool to send a brief message to the user confirming you received their question and summarizing your understanding (e.g., "Got it. Just confirming you're asking about X? I'll look into that.").
-5. AFTER sending the acknowledgement, use the 'ask_question_answerer' tool with the formulated question (incorporating context from history). This tool invokes another agent to find the answer based on dbt models.
-6. Once you receive the final answer from 'ask_question_answerer', you MUST **verify and correct** its formatting to strictly adhere to Slack's `mrkdwn` syntax (see rules below).
-7. Use the 'respond_to_slack_thread' tool to post this **correctly formatted final answer** back into the original Slack thread.
-8. Your final action should always be calling 'respond_to_slack_thread' with the verified and corrected final answer.
+**Overall Workflow:**
+1.  A user asks a question in a Slack thread.
+2.  **Fetch Context:** Use `fetch_slack_thread` to get history.
+3.  **Acknowledge:** Use `acknowledge_question` to confirm receipt and understanding.
+4.  **Delegate to QA Agent:** Use `ask_question_answerer` with the formulated question to get a detailed text answer (containing SQL, explanations, notes) and context (models/feedback used) from a specialized agent.
+5.  **Process QA Result:** Once the QA agent responds, you (the SlackResponder) will receive its text answer, list of models used, and list of feedback considered.
+6.  **Verify & Prepare Final Response:** You will then analyze the QA agent's text answer, verify the SQL query within it against the provided context (models, feedback, thread history), extract notes, compose a user-facing message, and prepare to post it.
+7.  **Post Final Response:** Use `post_final_response_with_snippet` to upload the verified SQL as a snippet and post the final message.
 
-**STRICT SLACK MARKDOWN (mrkdwn) FORMATTING RULES (for the *final* answer):**
-Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-messages#markup
-- **NO Markdown headings (# or ##).** Use *bold text* instead.
-- Use *bold text* for emphasis or section names (surrounded by asterisks: *your text*).
-- Use _italic text_ for minor emphasis (surrounded by underscores: _your text_).
-- Use `inline code` for model names, fields, or technical terms (surrounded by backticks: `your text`).
-- Use code blocks for SQL queries or multi-line code (surrounded by triple backticks: ```your code```). **Crucially, do NOT specify a language** (like ```sql).
-- Use >blockquote for quoting text (add > before the text: >your text).
-- Use bulleted lists starting with * or - followed by a space (* your text).
-- Use numbered lists starting with 1. followed by a space (1. your text).
+**Your Current Task is determined by the state:**
+- If thread history is missing, call `fetch_slack_thread`.
+- If acknowledgement hasn't been sent, analyze history and call `acknowledge_question`.
+- If acknowledgement is sent but QA answer is missing, call `ask_question_answerer`.
+- If QA answer and context are available, perform step 6 (Verify & Prepare) and then step 7 (Post Final Response).
 
-**Your responsibility:**
-- Fetch history -> Analyze -> **Acknowledge** -> Ask QA -> Verify/Format Answer -> Respond with Final Answer.
-- Ensure the acknowledgement via 'acknowledge_question' happens *before* 'ask_question_answerer'.
-- Ensure the final answer via 'respond_to_slack_thread' uses correct Slack mrkdwn formatting.
+**Responsibility:** Manage this sequence. Call tools appropriately. When processing the QA result, ensure the verification step occurs before posting.
 """
             # --- END MODIFIED Prompt ---
-            # Use single quotes for f-string, double for dict keys
-            initial_human_message = f'New question received from Slack:\\nChannel ID: {state["channel_id"]}\\nThread TS: {state["thread_ts"]}\\nQuestion: "{state["original_question"]}"\\n\\nPlease fetch the thread history first.'
+            initial_human_message = f'New question received from Slack:\nChannel ID: {state["channel_id"]}\nThread TS: {state["thread_ts"]}\nQuestion: "{state["original_question"]}"\n\nPlease fetch the thread history first.'
             messages_for_llm = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=initial_human_message),
             ]
+        # --- NEW: Logic block for handling QA result ---
+        elif (
+            qa_final_answer_text
+            and qa_models_used is not None
+            and qa_feedback_used is not None
+        ):
+            # QA agent has returned its result, now verify and post
+            if self.verbose:
+                self.console.print(
+                    "[dim] -> QA result received. Preparing verification and final posting prompt.[/dim]"
+                )
+
+            # Construct a specific prompt for verification and final tool call
+            verification_system_prompt = f"""Your task is to process the final answer received from the QuestionAnswerer agent, verify its SQL query, and format the final response for Slack.
+
+**Context Provided:**
+1.  **Original User Question:** {state['original_question']}
+2.  **Slack Thread History:** {thread_history}
+3.  **QuestionAnswerer (QA) Final Answer Text:**
+    ```
+    {qa_final_answer_text}
+    ```
+4.  **Models Used by QA:** {qa_models_used}
+5.  **Feedback Considered by QA:** {qa_feedback_used}
+
+**Your Steps:**
+1.  **Extract SQL:** Identify and extract the complete SQL query from the 'QA Final Answer Text'. If no SQL query is present, note this.
+2.  **Extract Notes:** Identify and extract any footnotes or explanations intended for the user from the 'QA Final Answer Text' (usually in a 'Footnotes:' section after the SQL).
+3.  **Verify SQL (if extracted):**
+    *   **CRITICAL GROUNDING CHECK:** Does the extracted SQL query use ONLY tables, columns, and relationships explicitly mentioned or clearly derivable from the schemas listed in the 'Models Used by QA' context? Check carefully for any hallucinated table or column names. **If the query is NOT grounded (uses hallucinated elements), verification FAILS.**
+    *   **LOGICAL COMPLETENESS CHECK:** Does the SQL query logically attempt to answer the 'Original User Question' given the context? Acknowledge that the query might have limitations noted in the 'Footnotes' or if ideal models weren't available. **Verification PASSES if the SQL is *grounded*, even if it doesn't fully answer the question.** Your analysis of its limitations should be added to the `optional_notes`.
+    *   Is the SQL syntax likely correct (basic check)?
+4.  **Compose Message Text:** Write a brief, friendly introductory message for the Slack post (e.g., "Here's the SQL query based on the available data models:" or "Here's the SQL query generated based on the information provided. Please note the following limitations:").
+5.  **Call Final Tool:**
+    *   **If SQL was extracted AND verification passes (SQL is grounded, even if logically incomplete):** Call the `post_final_response_with_snippet` tool. Provide:
+        *   `channel_id`: {state['channel_id']}
+        *   `thread_ts`: {state['thread_ts']}
+        *   `message_text`: Your composed introductory message.
+        *   `sql_query`: The verified (grounded) SQL query you extracted.
+        *   `optional_notes`: Combine the notes/footnotes you extracted from the QA answer AND any limitations you identified during the 'LOGICAL COMPLETENESS CHECK'.
+    *   **If verification fails (SQL is ungrounded) OR no SQL was extracted from the QA answer:** Call the `post_text_response` tool with:
+        *   `channel_id`: {state['channel_id']}
+        *   `thread_ts`: {state['thread_ts']}
+        *   `message_text`: Your message explaining the verification failure (e.g., "I received a response, but the SQL query references tables/columns not found in our models, so I cannot share it." or "The QuestionAnswerer could not generate a valid SQL query based on the available data models to answer your request."). **Do NOT include the problematic SQL in this message.**
+"""
+            # Use the most recent messages plus the new system prompt
+            # Taking last ~4 messages for context + the system prompt should be enough
+            relevant_history = messages[-4:] if len(messages) > 4 else messages
+            messages_for_llm = relevant_history + [
+                SystemMessage(content=verification_system_prompt)
+            ]
+
+            if self.verbose:
+                self.console.print(
+                    "[dim] -> Constructed prompt for SQL verification and final posting.[/dim]"
+                )
+
+        # --- END NEW LOGIC BLOCK ---
         else:
-            # --- MODIFIED: Updated Guidance Logic ---
+            # Standard guidance logic (fetch history, acknowledge, ask QA)
             guidance_items = []
             if not state.get("thread_history"):
                 guidance_items.append("You MUST use 'fetch_slack_thread' now.")
@@ -590,15 +791,26 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                 guidance_items.append(
                     "Analyze the thread history and original question. Formulate a brief acknowledgement message summarizing your understanding and use the 'acknowledge_question' tool now."
                 )
-            elif not state.get("final_answer"):
+            # --- MODIFIED: Check for qa_final_answer instead of qa_result ---
+            elif not qa_final_answer_text:  # Check if QA answer text is missing
+                # --- MODIFIED: New guidance for compiling question for QA --- #
                 guidance_items.append(
-                    "You have sent the acknowledgement. Now, formulate the detailed question for the 'ask_question_answerer' tool, incorporating context from the thread history if necessary."
+                    "You have sent the acknowledgement. Now, review the original question and the full thread history."
                 )
-            else:  # Final answer is ready
                 guidance_items.append(
-                    f"You have received the final answer. **CRITICAL ACTION**: Review the answer text for strict adherence to Slack `mrkdwn` format. **Correct any errors** (e.g., remove '#', '##' headings, ensure code blocks are ``` without language specifiers, use *bold*). Do NOT modify the SQL query content itself, only the formatting. Once verified and corrected, use 'respond_to_slack_thread' to post the fixed answer to channel {state['channel_id']} in thread {state['thread_ts']}."
+                    "Compile the core information request from the conversation. Correct any spelling/grammar mistakes in the user's messages."
                 )
-            # --- END MODIFIED Guidance ---
+                guidance_items.append(
+                    "Simplify complex phrasing if necessary, but *preserve the original meaning and all key details mentioned by the user*."
+                )
+                guidance_items.append(
+                    "Pass this compiled and cleaned request as the 'question' argument to the `ask_question_answerer` tool."
+                )
+                # --- END MODIFIED --- #
+            # This else block should now be unreachable if the new block above works correctly
+            # else:
+            #     guidance_items.append("Error: State indicates QA answer received, but processing block was skipped.")
+            # --- END MODIFIED ---
 
             guidance = "Guidance: " + " ".join(guidance_items)
             messages_for_llm = list(messages)  # Make a copy
@@ -610,12 +822,12 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             ):
                 messages_for_llm.append(SystemMessage(content=guidance))
 
+        # --- LLM Invocation (Common for all paths) ---
         agent_llm = self._get_agent_llm()
         if self.verbose:
             self.console.print(
                 f"[blue dim]Sending {len(messages_for_llm)} messages to LLM...[/blue dim]"
             )
-            # Optional: Log message structure here if needed for debugging
 
         try:
             response = agent_llm.invoke(messages_for_llm)
@@ -625,8 +837,7 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                 )
                 if hasattr(response, "tool_calls") and response.tool_calls:
                     self.console.print(f"[dim]Tool calls: {response.tool_calls}[/dim]")
-            # The graph's add_messages will append this response to the state's 'messages' list
-            # Also clear any previous error message when agent runs successfully
+            # Clear error message state if LLM runs successfully
             return {"messages": [response], "error_message": None}
         except Exception as e:
             logger.error(f"Error invoking agent LLM: {e}", exc_info=self.verbose)
@@ -646,7 +857,7 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                 "[bold cyan]\n--- Updating SlackResponder State After Tool Execution ---[/bold cyan]"
             )
 
-        updates: Dict[str, Any] = {}
+        updates: Dict[str, Any] = {"error_message": None}  # Default clear error
         messages = state.get("messages", [])
         # Find the most recent ToolMessage, not necessarily the very last message
         last_tool_message = None
@@ -722,7 +933,7 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                 if isinstance(parsed_content, dict):
                     if parsed_content.get("success"):
                         updates["acknowledgement_sent"] = True
-                        updates["error_message"] = None  # Clear error on success
+                        # updates["error_message"] = None # Already cleared by default
                         if self.verbose:
                             self.console.print(
                                 f"[dim] -> Updated state: acknowledgement_sent = True.[/dim]"
@@ -748,61 +959,129 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             # --- END NEW HANDLER ---
 
             elif tool_name == "ask_question_answerer":
-                # Expecting a dict with 'success' key
+                # Expecting a dict potentially containing 'error', 'final_answer', 'models', 'feedback'
                 if isinstance(parsed_content, dict):
-                    if parsed_content.get("success"):
-                        updates["final_answer"] = parsed_content.get("final_answer")
-                        updates["error_message"] = None  # Clear error on success
+                    # --- MODIFIED: Check for truthiness of the 'error' key instead of 'is not None' ---\n                    # Check if the result indicates an error from QA workflow\n                    if qa_result_dict and qa_result_dict.get(\"error\"): # Check if error key exists and is truthy\n                        error_content = qa_result_dict['error'] # Get the actual error content\n                        logger.error(\n                            f\"QuestionAnswerer workflow returned an error: {error_content}\"\n                        )\n                        return {\n                            \"success\": False, # Keep this structure for update_state_node compatibility for now\n                            \"error\": f\"QuestionAnswerer failed: {error_content}\", # Use the actual error\n                            \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                            \"models\": qa_result_dict.get(\"searched_models\", []),\n                            \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                        }\n                    elif qa_result_dict and \"final_answer\" in qa_result_dict:\n                        # Return success structure with the answer text and context\n                        return {\n                            \"success\": True, # Keep this structure\n                            \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                            \"models\": qa_result_dict.get(\"searched_models\", []),\n                            \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                            \"error\": None # Explicitly add error: None on success\n                        }\n                    else:\n                        # Handle unexpected empty or malformed result\n                    error_msg = "QuestionAnswerer workflow returned an unexpected result format."\n                    logger.error(f"{error_msg} Result: {qa_result_dict}")
+                    qa_error = parsed_content.get("error")
+                    if not qa_error:  # Success if error is None or empty string
+                        # --- Store text answer and context ---
+                        updates["qa_final_answer"] = parsed_content.get("final_answer")
+                        updates["qa_models"] = parsed_content.get("models", [])
+                        updates["qa_feedback"] = parsed_content.get("feedback", [])
+                        updates["error_message"] = (
+                            None  # Explicitly clear SlackResponder error state
+                        )
                         if self.verbose:
                             self.console.print(
-                                f"[dim] -> Updated state with final answer from QuestionAnswerer.[/dim]"
+                                f"[dim] -> Updated state with final answer and context from QuestionAnswerer (Success detected: error is None).[/dim]"
                             )
+                            self.console.print(
+                                f"[dim]   -> Answer Text: {str(updates.get('qa_final_answer'))[:100]}..."
+                            )  # Use .get for safety
+                            self.console.print(
+                                f"[dim]   -> Models Used Count: {len(updates.get('qa_models', []))}"
+                            )
+                            self.console.print(
+                                f"[dim]   -> Feedback Items Count: {len(updates.get('qa_feedback', []))}"
+                            )
+                        # Validate that we received the final answer text
+                        if not updates.get("qa_final_answer"):
+                            error_msg = "ask_question_answerer tool succeeded (no error reported) but returned missing final_answer text."
+                            logger.warning(error_msg)
+                            updates["error_message"] = (
+                                error_msg  # Set SlackResponder error state
+                            )
+                            # Clear potentially partial data if answer is missing despite success
+                            updates["qa_models"] = None
+                            updates["qa_feedback"] = None
+                        # --- END MODIFIED Success Block ---
                     else:
-                        # Tool reported failure
-                        updates["error_message"] = parsed_content.get(
-                            "error",
-                            "QuestionAnswerer tool failed without specific error.",
+                        # --- Failure Case (error key has a value) ---
+                        updates["error_message"] = (
+                            f"QuestionAnswerer failed: {qa_error}"  # Use the actual error
                         )
-                        updates["final_answer"] = parsed_content.get(
-                            "final_answer"
-                        )  # Store partial/error answer if available
+                        # Store partial results if available from the error response
+                        updates["qa_final_answer"] = parsed_content.get("final_answer")
+                        updates["qa_models"] = parsed_content.get(
+                            "models"
+                        )  # Allow None
+                        updates["qa_feedback"] = parsed_content.get(
+                            "feedback"
+                        )  # Allow None
                         if self.verbose:
                             self.console.print(
                                 f"[yellow] -> Setting error state from ask_question_answerer: {updates['error_message']}[/yellow]"
                             )
                 else:
-                    error_msg = f"ask_question_answerer tool returned unexpected content: {parsed_content}"
-                    logger.warning(error_msg)
+                    # Handle unexpected content type
+                    error_msg = f"ask_question_answerer tool returned unexpected content type: {type(parsed_content).__name__}"
+                    logger.warning(f"{error_msg}. Content: {parsed_content}")
                     updates["error_message"] = error_msg
-                    updates["final_answer"] = str(parsed_content)
+                    updates["qa_final_answer"] = None
+                    updates["qa_models"] = None
+                    updates["qa_feedback"] = None
 
-            elif tool_name == "respond_to_slack_thread":
+            # --- MODIFIED: Handle new final response tool ---
+            elif tool_name == "post_final_response_with_snippet":
                 # Expecting dict with "success": True/False
                 if isinstance(parsed_content, dict):
                     if parsed_content.get("success"):
+                        # The check_if_response_sent node will set the flag.
                         updates["error_message"] = None  # Clear error on success
                         if self.verbose:
                             self.console.print(
-                                f"[dim] -> Received success result from respond_to_slack_thread: {parsed_content.get('message')}[/dim]"
+                                f"[dim] -> Received success result from post_final_response_with_snippet: {parsed_content.get('message')}[/dim]"
                             )
-                        # Important: After successfully responding, the graph should end.
-                        # The agent_node logic should ensure it doesn't loop.
                     else:
                         # Tool reported failure
                         updates["error_message"] = parsed_content.get(
                             "error",
-                            "respond_to_slack_thread failed without specific error.",
+                            "post_final_response_with_snippet failed without specific error.",
+                        )
+                        updates["response_sent"] = (
+                            False  # Ensure flag is false on error
                         )
                         if self.verbose:
                             self.console.print(
-                                f"[yellow] -> Setting error state from respond_to_slack_thread: {updates['error_message']}[/yellow]"
+                                f"[yellow] -> Setting error state from post_final_response_with_snippet: {updates['error_message']}[/yellow]"
                             )
                 else:
-                    # Unexpected format (ToolNode should return dict, but handle defensively)
-                    error_msg = f"respond_to_slack_thread tool returned unexpected content format: {type(parsed_content).__name__}"
+                    error_msg = f"post_final_response_with_snippet tool returned unexpected content format: {type(parsed_content).__name__}"
                     logger.warning(f"{error_msg}. Content: {parsed_content}")
                     updates["error_message"] = error_msg
-                # No other state updates needed here, the workflow should end after this tool normally.
+                    updates["response_sent"] = False  # Ensure flag is false on error
+
+            # --- NEW: Handle simple text response tool ---
+            elif tool_name == "post_text_response":
+                # Expecting dict with "success": True/False
+                if isinstance(parsed_content, dict):
+                    if parsed_content.get("success"):
+                        # This tool is also used for final responses (like verification failures).
+                        # The check_if_response_sent node will handle setting the flag based on context.
+                        updates["error_message"] = None  # Clear error on success
+                        if self.verbose:
+                            self.console.print(
+                                f"[dim] -> Received success result from post_text_response: {parsed_content.get('message')}[/dim]"
+                            )
+                    else:
+                        # Tool reported failure
+                        updates["error_message"] = parsed_content.get(
+                            "error",
+                            "post_text_response failed without specific error.",
+                        )
+                        updates["response_sent"] = (
+                            False  # Ensure flag is false on error
+                        )
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow] -> Setting error state from post_text_response: {updates['error_message']}[/yellow]"
+                            )
+                else:
+                    error_msg = f"post_text_response tool returned unexpected content format: {type(parsed_content).__name__}"
+                    logger.warning(f"{error_msg}. Content: {parsed_content}")
+                    updates["error_message"] = error_msg
+                    updates["response_sent"] = False  # Ensure flag is false on error
+            # --- END NEW HANDLER ---
 
             else:
                 if self.verbose:
@@ -902,26 +1181,65 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
         This node modifies the 'response_sent' flag in the state.
         """
         messages = state.get("messages", [])
-        last_tool_message = None
-        for msg in reversed(messages):
-            if isinstance(msg, ToolMessage):
-                last_tool_message = msg
+        state_has_qa_answer = state.get("qa_final_answer") is not None
+        last_tool_message: Optional[ToolMessage] = None
+        # Find the last ToolMessage and the AIMessage that preceded it
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], ToolMessage):
+                last_tool_message = messages[i]
                 break
 
-        if last_tool_message and last_tool_message.name == "respond_to_slack_thread":
-            # If the last tool message is from respond_to_slack_thread, and we reached here,
-            # it means should_continue_or_handle_error found no error.
-            if self.verbose:
-                self.console.print(
-                    "[green] -> Final response successfully sent to Slack. Ending workflow.[/green]"
+        # Define the names of tools that signify a final response
+        final_response_tool_names = [
+            "post_final_response_with_snippet",
+            "post_text_response",  # Also consider the simple text response tool
+        ]
+
+        # Check if the last tool was a final response tool
+        is_final_response_tool = (
+            last_tool_message and last_tool_message.name in final_response_tool_names
+        )
+
+        # Determine if workflow should end
+        if state_has_qa_answer and is_final_response_tool:
+            # If the QA answer is set and the last tool was a final response tool,
+            # and we reached here (meaning should_continue_or_handle_error found no error in the tool execution),
+            # we need to parse the tool's output content to confirm *it* succeeded.
+            try:
+                parsed_content = last_tool_message.content
+                if isinstance(parsed_content, str):
+                    import json
+
+                    parsed_content = json.loads(parsed_content)
+                if isinstance(parsed_content, dict) and parsed_content.get("success"):
+                    if self.verbose:
+                        self.console.print(
+                            f"[green] -> Final response successfully sent to Slack via snippet. Ending workflow.[/green]"
+                        )
+                    return {"response_sent": True}  # Update state flag
+                else:
+                    if self.verbose:
+                        self.console.print(
+                            f"[yellow] -> Final response tool {last_tool_message.name} ran but reported failure or content parsing failed. Not ending workflow yet.[/yellow]"
+                        )
+                    # Don't set response_sent to True if the tool itself failed internally or content parsing failed
+                    return {"response_sent": False}  # Explicitly set to False
+            except Exception as e:
+                logger.warning(
+                    f"Could not parse success status from post_final_response_with_snippet tool message content: {e}"
                 )
-            # Return state update indicating response was sent
-            return {"response_sent": True}
+                return {"response_sent": False}  # Explicitly set to False
         else:
-            # The last action wasn't sending the response, return no state update.
+            # Condition not met: QA answer wasn't set OR last tool wasn't a final response tool.
             if self.verbose:
+                tool_name = getattr(last_tool_message, "name", "N/A")
+                reason = (
+                    "QA answer not yet set"
+                    if not state_has_qa_answer
+                    else f"last tool ({tool_name}) was not a final response tool"
+                )
                 self.console.print(
-                    "[dim] -> Last action was not sending response, continuing agent loop.[/dim]"
+                    f"[dim] -> Workflow continuing because {reason}.[/dim]"
                 )
             # No update needed if response wasn't sent
             return {"response_sent": False}  # Explicitly set to False
@@ -962,7 +1280,9 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             thread_history=None,
             contextual_question=None,
             acknowledgement_sent=None,  # Initialize new state field
-            final_answer=None,
+            qa_final_answer=None,  # Initialize new state field
+            qa_models=None,  # Initialize new state field
+            qa_feedback=None,  # Initialize new state field
             error_message=None,  # Ensure error starts as None
             response_sent=None,  # Ensure response_sent starts as None
         )
@@ -999,7 +1319,11 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
             current_state_values = final_state
 
             final_error = current_state_values.get("error_message")
-            final_answer_provided = current_state_values.get("final_answer") is not None
+            # --- MODIFIED: Check qa_structured_result presence ---
+            final_answer_provided = (
+                current_state_values.get("qa_final_answer") is not None
+            )
+            # --- END MODIFIED ---
 
             if self.verbose:
                 if final_error:
@@ -1012,7 +1336,7 @@ Reference: https://slack.com/intl/en-in/help/articles/202288908-Format-your-mess
                 "success": final_error is None,  # Success means no error at the end
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
-                "final_answer_provided": final_answer_provided,
+                "final_answer_provided": final_answer_provided,  # Now indicates if structured result was generated
                 "error": final_error,  # Include final error message if any
             }
 
