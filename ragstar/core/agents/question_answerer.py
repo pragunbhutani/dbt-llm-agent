@@ -77,6 +77,8 @@ class QuestionAnsweringState(TypedDict):
     # --- RE-ADD: final_answer field ---
     final_answer: Optional[str]
     conversation_id: Optional[str]
+    # --- NEW: Add thread_context field ---
+    thread_context: Optional[List[Dict[str, Any]]]  # Raw history from Slack
 
 
 # --- Tool Definitions ---
@@ -579,30 +581,37 @@ class QuestionAnswerer:
         )
         # --- RE-ADD: Check for final_answer ---
         final_answer = state.get("final_answer")
+        # --- NEW: Get thread_context from state ---
+        thread_context = state.get("thread_context")
 
         # --- System Prompt Setup ---
+        # --- MODIFIED: Include thread_context in prompt ---
         system_prompt = f"""You are an AI assistant specialized in analyzing dbt projects and generating SQL queries based ONLY on provided dbt model context.
 
-        **Overall Goal:** Answer the user's question by:
-        1. Understanding the question and identifying necessary information.
+        **Overall Goal:** Answer the user's question (`original_question`) by:
+        1. Understanding the question *and the provided Slack thread context* (`thread_context`). Identify necessary information, paying close attention to clarifications or details mentioned in the thread.
         2. Iteratively searching for relevant dbt models using `search_dbt_models`.
         3. Searching for relevant past feedback using `search_past_feedback` (for similar questions) and `search_feedback_content` (for specific concepts).
-        4. Synthesizing information from models and feedback.
+        4. Synthesizing information from models, feedback, and the thread context.
         5. Generating a final, grounded SQL query and explanation using the `finish_workflow` tool.
 
         **CRITICAL RULE:** Your final action in this workflow MUST be a call to the `finish_workflow` tool. Do NOT output plain text or ask clarification questions as your final response. If you cannot fully answer the question with the available information, you MUST still call `finish_workflow` and explain the limitations in the 'Footnotes' section of the `final_answer`.
 
+        **Input Context:**
+        - `original_question`: The primary question, potentially compiled from the thread.
+        - `thread_context`: The history of the Slack conversation leading to the question. Use this to understand nuances, definitions, or constraints provided by the user.
+
         **Tool Usage Strategy:**
-        - `search_dbt_models`: Use iteratively (max {self.max_model_searches} times). Refine your query based on previous results. **IMPORTANT: If the user's question (check the initial HumanMessage and subsequent messages) mentions specific table names (e.g., 'fct_frontend_events') or column names (e.g., 'app_id'), prioritize using these exact names in your `query` argument for `search_dbt_models` to ensure the relevant models are found. Do not rely solely on generic semantic search terms if specific identifiers are available.** Stop searching if you have enough models or hit the limit.
-        - `search_past_feedback`: Use ONCE near the beginning if similar questions might exist.
-        - `search_feedback_content`: Use if you need clarification on specific terms/concepts found in models or the question, *before* generating the final answer.
-        - `finish_workflow`: Use ONLY when ready to provide the complete, final answer. Ensure the SQL is based *strictly* on the retrieved models. This MUST be your final action.
+        - `search_dbt_models`: Use iteratively (max {self.max_model_searches} times). Refine your query based on previous results AND information gleaned from `original_question` and `thread_context`. **IMPORTANT: If the user's question or thread context mentions specific table names (e.g., 'fct_frontend_events') or column names (e.g., 'app_id'), prioritize using these exact names in your `query` argument for `search_dbt_models`.** Stop searching if you have enough models or hit the limit.
+        - `search_past_feedback`: Use ONCE near the beginning if similar questions might exist (consider the core topic from `original_question` and `thread_context`).
+        - `search_feedback_content`: Use if you need clarification on specific terms/concepts found in models or the `thread_context`, *before* generating the final answer.
+        - `finish_workflow`: Use ONLY when ready to provide the complete, final answer. Ensure the SQL is based *strictly* on the retrieved models and addresses the full request understood from *both* the `original_question` and `thread_context`.
 
         **SQL Generation Rules (CRITICAL):**
-        - **Grounding:** ONLY use tables, columns, and relationships explicitly present in the `accumulated_models` provided in the state. DO NOT HALLUCINATE table or column names.
-        - **Completeness:** If the retrieved models are insufficient to fully answer the question, generate the best possible SQL using *only* the available information. Clearly state limitations in SQL comments or the 'Footnotes' section of the `final_answer` when calling `finish_workflow`.
+        - **Grounding:** ONLY use tables, columns, and relationships explicitly present in the `accumulated_models` provided in the state. DO NOT HALLUCINATE.
+        - **Completeness:** Generate the best possible SQL using *only* available information. Clearly state limitations (especially if `thread_context` asked for something not found in models) in SQL comments or the 'Footnotes' section of the `final_answer`.
         - **Style:** Follow the provided SQL style guide example.
-        - **No Slack Mrkdwn:** Do not use Slack formatting in the `final_answer` for `finish_workflow`.
+        - **No Slack Mrkdwn:** Do not use Slack formatting in the `final_answer`.
 
         **Current State:**
         - Models Found: {len(accumulated_models)}
@@ -610,6 +619,7 @@ class QuestionAnswerer:
         - Feedback Found (Similar Questions): {len(relevant_feedback_by_question)}
         - Feedback Found (Content Search): {len(relevant_feedback_by_content)}
         """
+        # --- END MODIFIED Prompt ---
 
         # --- ADDED: Include SQL style example in prompt if available ---
         if self.sql_style_example:
@@ -656,15 +666,36 @@ class QuestionAnswerer:
                 )
                 # --- END MODIFIED GUIDANCE ---
 
-        # Combine system prompt and messages
+        # --- Combine system prompt and messages ---
         messages_for_llm: List[
             Union[SystemMessage, HumanMessage, AIMessage, ToolMessage]
         ] = [SystemMessage(content=system_prompt)]
+
+        # --- NEW: Add thread context as a separate message for clarity? ---
+        # Or rely on it being in the system prompt description?
+        # Let's add it explicitly after the system prompt.
+        if thread_context:
+            # Simple string representation for now
+            context_str = "\n".join(
+                [
+                    f"{msg.get('user', 'Unknown')}: {msg.get('text', '')}"
+                    for msg in thread_context
+                ]
+            )
+            messages_for_llm.append(
+                SystemMessage(
+                    content=f"**Slack Thread Context:**\n```\n{context_str}\n```"
+                )
+            )
+        # --- END NEW ---
+
         # Add original question if messages list is empty (first turn)
+        # Note: original_question might now be slightly redundant if context has it,
+        # but keeping it helps anchor the primary request.
         if not messages:
             messages_for_llm.append(HumanMessage(content=original_question))
         else:
-            # Add existing message history
+            # Add existing message history (tool calls/results within QA workflow)
             messages_for_llm.extend(messages)
 
         # Add guidance as a final SystemMessage if needed
@@ -931,11 +962,14 @@ class QuestionAnswerer:
 
         return updates
 
-    def run_agentic_workflow(self, question: str) -> Dict[str, Any]:
+    def run_agentic_workflow(
+        self, question: str, thread_context: Optional[List[Dict[str, Any]]] = None
+    ) -> Dict[str, Any]:
         """Runs the agentic workflow to answer a question.
 
         Args:
-            question: The user's question.
+            question: The user's question compiled by the SlackResponder.
+            thread_context: Optional list of message dicts from the Slack thread.
 
         Returns:
             A dictionary containing the final answer or an error message.
@@ -949,6 +983,10 @@ class QuestionAnswerer:
             self.console.print(
                 f"[bold blue]🚀 Starting LangGraph workflow for: {question}[/bold blue]"
             )
+            if thread_context:
+                self.console.print(
+                    f"[dim] -> Received thread context with {len(thread_context)} messages.[/dim]"
+                )
 
         # Generate a unique thread ID for this execution
         thread_id = str(uuid.uuid4())
@@ -958,9 +996,9 @@ class QuestionAnswerer:
 
         config = {"configurable": {"thread_id": thread_id}}
 
-        # Define the initial state
+        # --- MODIFIED: Define the initial state including thread_context ---
         initial_state = QuestionAnsweringState(
-            original_question=question,
+            original_question=question,  # This is the compiled question from SlackResponder
             messages=[],
             accumulated_models=[],
             accumulated_model_names=set(),
@@ -968,11 +1006,13 @@ class QuestionAnswerer:
             relevant_feedback={"by_question": [], "by_content": []},
             search_queries_tried=set(),
             final_answer=None,  # Ensure final_answer starts as None
+            thread_context=thread_context,  # Pass the context here
+            conversation_id=None,  # conversation_id might not be needed here? review later
         )
 
         if self.verbose:
             self.console.print(
-                "[dim]Initial state prepared with system prompt and question[/dim]"
+                "[dim]Initial state prepared with system prompt, question, and thread context[/dim]"
             )
 
         try:
@@ -1000,6 +1040,56 @@ class QuestionAnswerer:
                     self.console.print(
                         "[green]✅ Workflow finished successfully with final answer.[/green]"
                     )
+
+                # --- NEW: Save the interaction to QuestionStorage ---
+                if self.question_storage:
+                    try:
+                        # Extract model names from the list of model dictionaries
+                        model_names_used = [
+                            m.get("name")
+                            for m in searched_models
+                            if isinstance(m, dict) and m.get("name")
+                        ]
+
+                        # Prepare metadata (ensure thread_context is serializable, might be large)
+                        interaction_metadata = {
+                            # Storing raw feedback objects might be complex, store simplified version or ids?
+                            # For now, let's store the structure received.
+                            "feedback_considered": relevant_feedback_items,
+                            # Thread context can be large, ensure DB/JSONB handles it.
+                            "slack_thread_context": initial_state.get("thread_context"),
+                        }
+
+                        # Call the correct method: record_question
+                        save_result = self.question_storage.record_question(
+                            question_text=initial_state[
+                                "original_question"
+                            ],  # Use the initial question passed
+                            answer_text=final_answer,
+                            model_names=model_names_used,  # Pass list of names
+                            metadata=interaction_metadata,  # Pass structured metadata
+                            # was_useful and feedback are set later via update_feedback
+                        )
+                        if self.verbose:
+                            # save_result should be the new question_id
+                            self.console.print(
+                                f"[dim] -> Saved interaction to QuestionStorage (ID: {save_result}).[/dim]"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to save interaction to QuestionStorage: {e}",
+                            exc_info=self.verbose,
+                        )
+                        if self.verbose:
+                            self.console.print(
+                                f"[yellow]Warning: Failed to save interaction to QuestionStorage: {e}[/yellow]"
+                            )
+                elif self.verbose:
+                    self.console.print(
+                        "[yellow dim] -> QuestionStorage not configured, skipping save.[/yellow dim]"
+                    )
+                # --- END NEW ---
+
                 return {
                     "final_answer": final_answer,
                     "searched_models": searched_models,

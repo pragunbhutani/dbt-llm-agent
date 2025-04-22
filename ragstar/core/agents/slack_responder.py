@@ -55,6 +55,10 @@ class AskQuestionAnswererInput(BaseModel):
     question: str = Field(
         description="The formulated question (potentially with context) to send to the QuestionAnswerer agent."
     )
+    thread_context: Optional[List[Dict[str, Any]]] = Field(
+        description="A list of message dictionaries representing the relevant Slack thread history.",
+        default=None,
+    )
 
 
 # --- REMOVED: RespondToThreadInput Schema ---
@@ -412,24 +416,31 @@ class SlackResponder:
 
         # --- Tool: Ask Question Answerer ---
         @tool(args_schema=AskQuestionAnswererInput)
-        # --- MODIFIED: Return type includes text answer and context ---
-        def ask_question_answerer(question: str) -> Dict[str, Any]:
-            """Sends a question to the specialized QuestionAnswerer agent to get an answer based on dbt models.
-            Use this tool AFTER analyzing the Slack thread context AND sending an acknowledgement message using 'acknowledge_question'.
+        def ask_question_answerer(
+            question: str, thread_context: Optional[List[Dict[str, Any]]] = None
+        ) -> Dict[str, Any]:
+            """Sends a question and optional thread context to the specialized QuestionAnswerer agent.
+            Use this tool AFTER analyzing the Slack thread context AND sending an acknowledgement message.
             Formulate the 'question' input carefully, incorporating thread context if it helps clarify the user's intent.
+            Provide the fetched 'thread_context' (list of message dicts) to give the QuestionAnswerer more background.
             Returns a dictionary containing the final answer text, models searched, and feedback considered on success,
             or a dictionary containing an 'error' key on failure.
             """
             if self.verbose:
+                context_summary = (
+                    f"{len(thread_context)} messages" if thread_context else "None"
+                )
                 self.console.print(
-                    f"[bold magenta]🛠️ Executing Tool: ask_question_answerer(question='{question[:100]}...')[/bold magenta]"
+                    f"[bold magenta]🛠️ Executing Tool: ask_question_answerer(question='{question[:100]}...', context={context_summary})[/bold magenta]"
                 )
             self.console.print(
                 f"[blue]❓ Passing question to QuestionAnswerer: '{question[:100]}...'[/blue]"
             )
             try:
-                # --- MODIFIED: Expects dict with final_answer, searched_models, relevant_feedback ---\n                qa_result_dict = self.question_answerer.run_agentic_workflow(question)\n\n                # --- MODIFIED: Check for truthiness of the 'error' key instead of 'is not None' ---\n                # Check if the result indicates an error from QA workflow\n                if qa_result_dict and qa_result_dict.get(\"error\"): # Check if error key exists and is truthy\n                    error_content = qa_result_dict['error'] # Get the actual error content\n                    logger.error(\n                        f\"QuestionAnswerer workflow returned an error: {error_content}\"\n                    )\n                    return {\n                        \"success\": False, # Keep this structure for update_state_node compatibility for now\n                        \"error\": f\"QuestionAnswerer failed: {error_content}\", # Use the actual error\n                        \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                        \"models\": qa_result_dict.get(\"searched_models\", []),\n                        \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                    }\n                elif qa_result_dict and \"final_answer\" in qa_result_dict:\n                    # Return success structure with the answer text and context\n                    return {\n                        \"success\": True, # Keep this structure\n                        \"final_answer\": qa_result_dict.get(\"final_answer\"),\n                        \"models\": qa_result_dict.get(\"searched_models\", []),\n                        \"feedback\": qa_result_dict.get(\"relevant_feedback\", []),\n                        \"error\": None # Explicitly add error: None on success\n                    }\n                else:\n                    # Handle unexpected empty or malformed result\n                    error_msg = "QuestionAnswerer workflow returned an unexpected result format."\n                    logger.error(f"{error_msg} Result: {qa_result_dict}")
-                qa_result_dict = self.question_answerer.run_agentic_workflow(question)
+                # --- MODIFIED: Pass thread_context to the workflow runner ---
+                qa_result_dict = self.question_answerer.run_agentic_workflow(
+                    question=question, thread_context=thread_context
+                )
 
                 # Check if the result indicates an error from QA workflow
                 if qa_result_dict and qa_result_dict.get("error"):
@@ -520,6 +531,7 @@ class SlackResponder:
                         content=sql_query,
                         # filetype="sql", # Removed unsupported parameter
                         title="Generated SQL Query",
+                        filename="generated_query.sql",
                         # initial_comment=f"SQL query for thread {thread_ts}", # Removed as comment is in message above
                         thread_ts=thread_ts,  # Keep in the same thread
                     )
@@ -793,18 +805,18 @@ class SlackResponder:
                 )
             # --- MODIFIED: Check for qa_final_answer instead of qa_result ---
             elif not qa_final_answer_text:  # Check if QA answer text is missing
-                # --- MODIFIED: New guidance for compiling question for QA --- #
+                # --- MODIFIED: New guidance for compiling question for QA, now including context --- #
                 guidance_items.append(
                     "You have sent the acknowledgement. Now, review the original question and the full thread history."
                 )
                 guidance_items.append(
-                    "Compile the core information request from the conversation. Correct any spelling/grammar mistakes in the user's messages."
+                    "Compile the core information request from the conversation into the 'question' argument. Correct spelling/grammar."
                 )
                 guidance_items.append(
-                    "Simplify complex phrasing if necessary, but *preserve the original meaning and all key details mentioned by the user*."
+                    "Simplify phrasing if necessary, but *preserve the original meaning and all key details mentioned by the user*."
                 )
                 guidance_items.append(
-                    "Pass this compiled and cleaned request as the 'question' argument to the `ask_question_answerer` tool."
+                    "You MUST also provide the full `thread_history` from the state in the `thread_context` argument when calling the `ask_question_answerer` tool."  # Emphasize passing context
                 )
                 # --- END MODIFIED --- #
             # This else block should now be unreachable if the new block above works correctly
@@ -820,7 +832,16 @@ class SlackResponder:
                 and isinstance(messages_for_llm[-1], SystemMessage)
                 and messages_for_llm[-1].content.startswith("Guidance:")
             ):
-                messages_for_llm.append(SystemMessage(content=guidance))
+                # --- NEW: Inject thread history into the context for the LLM's decision ---
+                # We need the LLM making the *tool call* to know about the history
+                # so it can correctly *populate* the thread_context argument.
+                history_str = (
+                    f"\\n\\n**Available Thread History:**\\n{thread_history}\\n"
+                    if thread_history
+                    else "\\n\\n**Thread History:** Not available or not fetched yet.\\n"
+                )
+                messages_for_llm.append(SystemMessage(content=history_str + guidance))
+            # --- END NEW --- #
 
         # --- LLM Invocation (Common for all paths) ---
         agent_llm = self._get_agent_llm()
