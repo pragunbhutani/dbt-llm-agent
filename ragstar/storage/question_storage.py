@@ -57,8 +57,11 @@ class QuestionStorage:
         with self.engine.connect() as conn:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             conn.commit()
+        # This will create all tables defined in Base metadata, including the new column
         Base.metadata.create_all(self.engine)
-        logger.info("Created question tracking tables (ensured vector extension)")
+        logger.info(
+            "Created/verified question tracking tables (ensured vector extension)"
+        )
 
     def _get_embedding(self, text_to_embed: str) -> Optional[List[float]]:
         """Generate embedding for the given text using OpenAI.
@@ -84,24 +87,30 @@ class QuestionStorage:
     def record_question(
         self,
         question_text: str,
+        original_message_text: Optional[str] = None,
+        original_message_ts: Optional[str] = None,
+        response_message_ts: Optional[str] = None,
         answer_text: Optional[str] = None,
         model_names: Optional[List[str]] = None,
         was_useful: Optional[bool] = None,
         feedback: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> int:
-        """Record a question and its answer in the database, including its embedding.
+        """Record a question and its answer, including embeddings.
 
         Args:
-            question_text: The text of the question
-            answer_text: The text of the answer
-            model_names: Names of models that were used to answer the question
-            was_useful: Whether the answer was useful
-            feedback: User feedback on the answer
-            metadata: Additional metadata
+            question_text: The text of the (potentially rephrased) question.
+            original_message_text: The original verbatim text from the user's message.
+            original_message_ts: The timestamp (ID) of the original user message.
+            response_message_ts: The timestamp (ID) of the bot's final response message.
+            answer_text: The text of the answer generated.
+            model_names: Names of models used to answer the question.
+            was_useful: Whether the answer was marked useful.
+            feedback: User feedback text.
+            metadata: Additional metadata.
 
         Returns:
-            The ID of the recorded question
+            The ID of the recorded question.
         """
         session = self.Session()
         try:
@@ -112,19 +121,34 @@ class QuestionStorage:
                 was_useful=was_useful,
                 feedback=feedback,
                 question_metadata=metadata or {},
+                original_message_text=original_message_text,
+                original_message_ts=original_message_ts,
+                response_message_ts=response_message_ts,
             )
 
             # Convert to ORM model
-            question_orm = domain_question.to_orm()
+            question_orm = (
+                domain_question.to_orm()
+            )  # This now includes None for embeddings initially
 
-            # Generate and add question embedding
+            # Generate and add question embedding (for the compiled question_text)
             question_embedding = self._get_embedding(question_text)
             if question_embedding:
                 question_orm.question_embedding = question_embedding
             else:
                 logger.warning(
-                    f"Could not generate embedding for question: {question_text[:50]}..."
+                    f"Could not generate embedding for question_text: {question_text[:50]}..."
                 )
+
+            # Generate and add original message embedding
+            if original_message_text:
+                original_embedding = self._get_embedding(original_message_text)
+                if original_embedding:
+                    question_orm.original_message_embedding = original_embedding
+                else:
+                    logger.warning(
+                        f"Could not generate embedding for original_message_text: {original_message_text[:50]}..."
+                    )
 
             # Generate and add feedback embedding if feedback text exists
             if feedback:
@@ -143,19 +167,20 @@ class QuestionStorage:
             # Add associated models if provided
             if model_names:
                 for model_name in model_names:
+                    # Assuming QuestionModelTable takes question_id and model_name
                     question_model = QuestionModelTable(
                         question_id=question_id,
                         model_name=model_name,
+                        # relevance_score might be needed if your model includes it
                     )
                     session.add(question_model)
 
-            # Commit changes
             session.commit()
             logger.info(f"Recorded question with ID {question_id}")
             return question_id
         except Exception as e:
             session.rollback()
-            logger.error(f"Error recording question: {e}")
+            logger.error(f"Error recording question: {e}", exc_info=True)
             raise
         finally:
             session.close()
@@ -283,62 +308,49 @@ class QuestionStorage:
         self,
         query_embedding: List[float],
         limit: int = 5,
-        similarity_threshold: float = 0.65,  # Updated threshold
+        similarity_threshold: float = 0.65,  # Cosine similarity threshold for question_text
     ) -> List[Question]:
-        """Find similar questions that have feedback (marked not useful or have feedback text).
+        """Find similar questions (based on compiled question_text) that have feedback.
 
         Args:
-            query_embedding: The embedding vector of the current question.
+            query_embedding: Embedding vector of the *current* question's compiled text.
             limit: Max number of similar questions to return.
-            similarity_threshold: Minimum cosine similarity for a question to be considered.
+            similarity_threshold: Minimum cosine similarity for question_text.
 
         Returns:
-            A list of Question domain objects, ordered by similarity and recency.
+            List of Question domain objects, ordered by similarity.
         """
         session = self.Session()
-        distance_threshold = (
-            1 - similarity_threshold
-        )  # Convert cosine similarity to cosine distance
+        distance_threshold = 1 - similarity_threshold
         try:
             similar_questions = (
                 session.query(QuestionTable)
                 .filter(
-                    # Consider questions with any feedback (text or was_useful flag set)
                     sa.or_(
                         QuestionTable.feedback.isnot(None),
-                        QuestionTable.was_useful.isnot(
-                            None
-                        ),  # Check if was_useful is set (True or False)
+                        QuestionTable.was_useful.isnot(None),
                     )
                 )
-                .filter(
-                    QuestionTable.question_embedding.isnot(None)
-                )  # Ensure embedding exists
+                .filter(QuestionTable.question_embedding.isnot(None))
                 .filter(
                     QuestionTable.question_embedding.cosine_distance(query_embedding)
-                    < distance_threshold
+                    < distance_threshold  # Use cosine distance
                 )
                 .order_by(
                     QuestionTable.question_embedding.cosine_distance(
                         query_embedding
                     ).asc()
                 )
-                .order_by(
-                    QuestionTable.updated_at.desc()
-                )  # Prioritize more recent feedback for ties
                 .limit(limit)
                 .all()
             )
-
-            # Convert ORM results to domain models
             return [q.to_domain() for q in similar_questions]
         except Exception as e:
-            logger.error(f"Error finding similar questions: {e}")
+            logger.error(f"Error finding similar questions with feedback: {e}")
             return []
         finally:
             session.close()
 
-    # --- NEW METHOD: Search feedback content ---
     def find_similar_feedback_content(
         self,
         query: str,
@@ -350,10 +362,10 @@ class QuestionStorage:
         Args:
             query: The text query to search for within feedback.
             limit: Max number of matching questions to return.
-            similarity_threshold: Minimum cosine similarity for feedback to be considered.
+            similarity_threshold: Minimum cosine similarity for feedback text.
 
         Returns:
-            A list of Question domain objects whose feedback is relevant, ordered by similarity.
+            List of Question domain objects whose feedback is relevant.
         """
         session = self.Session()
         query_embedding = self._get_embedding(query)
@@ -373,19 +385,16 @@ class QuestionStorage:
                 )
                 .filter(
                     QuestionTable.feedback_embedding.cosine_distance(query_embedding)
-                    < distance_threshold
+                    < distance_threshold  # Use cosine distance
                 )
                 .order_by(
                     QuestionTable.feedback_embedding.cosine_distance(
                         query_embedding
                     ).asc()
                 )
-                .order_by(QuestionTable.updated_at.desc())  # Tie-break by recency
                 .limit(limit)
                 .all()
             )
-
-            # Convert ORM results to domain models
             return [q.to_domain() for q in similar_feedback_questions]
         except Exception as e:
             logger.error(f"Error finding similar feedback content: {e}")
@@ -393,4 +402,63 @@ class QuestionStorage:
         finally:
             session.close()
 
-    # --- END NEW METHOD ---
+    # --- NEW METHOD: Search original message content --- #
+    def find_similar_original_messages(
+        self,
+        query_embedding: List[float],
+        limit: int = 3,
+        similarity_threshold: float = 0.7,  # Cosine similarity threshold for original message
+    ) -> List[Question]:
+        """Find past interactions where the *original user message text* is semantically similar to the query embedding.
+
+        This is useful for finding organizational context, definitions, or explanations
+        provided in past questions, distinct from searching compiled questions or feedback.
+
+        Args:
+            query_embedding: The embedding vector of the *current* original user message.
+            limit: Max number of similar original messages to return.
+            similarity_threshold: Minimum cosine similarity for original_message_text.
+
+        Returns:
+            A list of Question domain objects whose original message is relevant,
+            ordered by similarity.
+        """
+        session = self.Session()
+        # For cosine similarity 's', distance 'd' is 1 - s. We want distance < (1 - similarity_threshold)
+        distance_threshold = 1 - similarity_threshold
+
+        try:
+            similar_original_message_questions = (
+                session.query(QuestionTable)
+                .filter(
+                    QuestionTable.original_message_text.isnot(None),
+                    QuestionTable.original_message_embedding.isnot(None),
+                )
+                .filter(
+                    QuestionTable.original_message_embedding.cosine_distance(
+                        query_embedding
+                    )
+                    < distance_threshold  # Use cosine distance
+                )
+                .order_by(
+                    QuestionTable.original_message_embedding.cosine_distance(
+                        query_embedding
+                    ).asc()
+                )
+                # Optional: Add secondary sort by recency if needed
+                .order_by(QuestionTable.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+            # Convert ORM results to domain models
+            return [q.to_domain() for q in similar_original_message_questions]
+        except Exception as e:
+            logger.error(
+                f"Error finding similar original message content: {e}", exc_info=True
+            )
+            return []
+        finally:
+            session.close()
+
+    # --- END NEW METHOD --- #

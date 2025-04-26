@@ -138,6 +138,12 @@ class SlackResponderState(TypedDict):
         None  # Store error messages, e.g., from failed tool calls
     )
     response_sent: Optional[bool] = None  # Flag to indicate if final response was sent
+    response_message_ts: Optional[str] = (
+        None  # Timestamp of the final message posted by this agent
+    )
+    qa_similar_original_messages: Optional[
+        List[Dict[str, Any]]
+    ]  # Context QA used (from QA state)
 
 
 # --- Tool Definitions ---
@@ -222,6 +228,7 @@ class SlackResponder:
 
         self.console = console or Console()
         self.verbose = verbose
+        self.question_storage = question_storage  # Store question storage for recording
 
         self._define_tools()
         self.graph_app = self._build_graph()
@@ -380,11 +387,16 @@ class SlackResponder:
 
                 result = asyncio.run(_post_text())
                 if result["ok"]:
+                    posted_message_ts = result.get("ts")
                     if self.verbose:
                         self.console.print(
-                            f"[green] -> Successfully posted simple text response to {channel_id}/{thread_ts}[/green]"
+                            f"[green] -> Successfully posted simple text response to {channel_id}/{thread_ts} (ts: {posted_message_ts})[/green]"
                         )
-                    return {"success": True, "message": "Text response sent."}
+                    return {
+                        "success": True,
+                        "message": "Text response sent.",
+                        "message_ts": posted_message_ts,  # Return the timestamp
+                    }
                 else:
                     error_msg = f"Slack API error (chat.postMessage for text response): {result['error']}"
                     logger.error(error_msg)
@@ -454,6 +466,9 @@ class SlackResponder:
                         "final_answer": qa_result_dict.get("final_answer"),
                         "models": qa_result_dict.get("searched_models", []),
                         "feedback": qa_result_dict.get("relevant_feedback", []),
+                        "similar_original_messages": qa_result_dict.get(
+                            "similar_original_messages", []
+                        ),
                     }
                 elif qa_result_dict and "final_answer" in qa_result_dict:
                     # Return success structure with the answer text and context
@@ -462,6 +477,9 @@ class SlackResponder:
                         "final_answer": qa_result_dict.get("final_answer"),
                         "models": qa_result_dict.get("searched_models", []),
                         "feedback": qa_result_dict.get("relevant_feedback", []),
+                        "similar_original_messages": qa_result_dict.get(
+                            "similar_original_messages", []
+                        ),
                         "error": None,
                     }
                 else:
@@ -556,6 +574,7 @@ class SlackResponder:
                     return {
                         "success": True,
                         "message": "Successfully posted response and uploaded snippet.",
+                        "message_ts": post_result.get("ts"),
                     }
 
                 result = asyncio.run(_upload_and_post())
@@ -577,8 +596,6 @@ class SlackResponder:
                     "error": error_msg,
                     "details": {"exception": str(e)},
                 }
-
-        # --- END NEW TOOL ---
 
         # Store the tools as instance attributes
         self._tools = [
@@ -609,6 +626,8 @@ class SlackResponder:
             "check_if_response_sent",
             self.check_if_response_sent,  # Node to check if final response was sent
         )
+        # --- NEW NODE: Record Interaction --- #
+        workflow.add_node("record_interaction", self.record_interaction_node)
 
         # Set entry point
         workflow.set_entry_point("agent")
@@ -643,13 +662,17 @@ class SlackResponder:
             "check_if_response_sent",  # Origin is the node that just ran
             self.route_after_response_check,  # Use the routing function
             {
+                "record_interaction": "record_interaction",  # If response sent, record it
                 "agent": "agent",  # If response not sent, loop back to agent
-                END: END,  # If response was sent, end the graph
             },
         )
 
         # Error handler leads to END
         workflow.add_edge("error_responder", END)
+
+        # --- NEW: Edge from record_interaction to END --- #
+        workflow.add_edge("record_interaction", END)
+        # --- END NEW --- #
 
         # Compile the graph with optional memory
         return workflow.compile(checkpointer=self.memory)
@@ -695,10 +718,41 @@ class SlackResponder:
             self.console.print(
                 f"[dim]Acknowledgement sent: {'Yes' if state.get('acknowledgement_sent') else 'No'}[/dim]"
             )
-            # --- MODIFIED Logging for QA Result ---
+            # --- NEW: Log current messages in state --- #
             self.console.print(
-                f"[dim]QA final answer received: {'Yes' if state.get('qa_final_answer') else 'No'}[/dim]"
+                f"[dim]Current messages in state ({len(state.get('messages', []))}):[/dim]"
             )
+            for i, msg in enumerate(state.get("messages", [])):
+                msg_type = type(msg).__name__
+                content_preview = repr(msg.content)[:70] + (
+                    "..." if len(repr(msg.content)) > 70 else ""
+                )
+                if isinstance(msg, AIMessage):
+                    if msg.tool_calls:
+                        tool_call_count = len(msg.tool_calls)
+                        self.console.print(
+                            f"[dim]  State[{i}] {msg_type} (requesting {tool_call_count} tool call{'s' if tool_call_count > 1 else ''}): {content_preview}[/dim]"
+                        )
+                        for tc in msg.tool_calls:
+                            tc_name = tc.get("name", "N/A")
+                            tc_args = tc.get("args", {})
+                            self.console.print(
+                                f"[dim]    - Tool Call: {tc_name}, Args: {tc_args}[/dim]"
+                            )
+                    else:
+                        self.console.print(
+                            f"[dim]  State[{i}] {msg_type}: {content_preview}[/dim]"
+                        )
+                elif isinstance(msg, ToolMessage):
+                    tool_call_info = f" for tool_call_id: {msg.tool_call_id[:8]}..."
+                    self.console.print(
+                        f"[dim]  State[{i}] {msg_type}{tool_call_info}: {content_preview}[/dim]"
+                    )
+                else:  # Handle other message types
+                    self.console.print(
+                        f"[dim]  State[{i}] {msg_type}: {content_preview}[/dim]"
+                    )
+            # --- END NEW Logging Block --- #
             # --- END MODIFIED Logging ---
 
         messages = state.get("messages", [])
@@ -849,6 +903,39 @@ class SlackResponder:
             self.console.print(
                 f"[blue dim]Sending {len(messages_for_llm)} messages to LLM...[/blue dim]"
             )
+            # --- NEW: Log messages being sent --- #
+            self.console.print("[dim]Message structure *before* sending to LLM:[/dim]")
+            for i, msg in enumerate(messages_for_llm):
+                msg_type = type(msg).__name__
+                content_preview = repr(msg.content)[:70] + (
+                    "..." if len(repr(msg.content)) > 70 else ""
+                )
+                if isinstance(msg, AIMessage):
+                    if msg.tool_calls:
+                        tool_call_count = len(msg.tool_calls)
+                        self.console.print(
+                            f"[dim]  [{i}] {msg_type} (requesting {tool_call_count} tool call{'s' if tool_call_count > 1 else ''}): {content_preview}[/dim]"
+                        )
+                        for tc in msg.tool_calls:
+                            tc_name = tc.get("name", "N/A")
+                            tc_args = tc.get("args", {})
+                            self.console.print(
+                                f"[dim]      - Tool Call: {tc_name}, Args: {tc_args}[/dim]"
+                            )
+                    else:
+                        self.console.print(
+                            f"[dim]  [{i}] {msg_type}: {content_preview}[/dim]"
+                        )
+                elif isinstance(msg, ToolMessage):
+                    tool_call_info = f" for tool_call_id: {msg.tool_call_id[:8]}..."
+                    self.console.print(
+                        f"[dim]  [{i}] {msg_type}{tool_call_info}: {content_preview}[/dim]"
+                    )
+                else:  # Handle other message types
+                    self.console.print(
+                        f"[dim]  [{i}] {msg_type}: {content_preview}[/dim]"
+                    )
+            # --- END NEW Logging Block --- #
 
         try:
             response = agent_llm.invoke(messages_for_llm)
@@ -988,10 +1075,11 @@ class SlackResponder:
                         # --- Store text answer and context ---
                         updates["qa_final_answer"] = parsed_content.get("final_answer")
                         updates["qa_models"] = parsed_content.get("models", [])
-                        updates["qa_feedback"] = parsed_content.get("feedback", [])
-                        updates["error_message"] = (
-                            None  # Explicitly clear SlackResponder error state
+                        updates["qa_feedback"] = parsed_content.get("feedback", {})
+                        updates["qa_similar_original_messages"] = parsed_content.get(
+                            "similar_original_messages", []
                         )
+                        updates["error_message"] = None
                         if self.verbose:
                             self.console.print(
                                 f"[dim] -> Updated state with final answer and context from QuestionAnswerer (Success detected: error is None).[/dim]"
@@ -1015,6 +1103,7 @@ class SlackResponder:
                             # Clear potentially partial data if answer is missing despite success
                             updates["qa_models"] = None
                             updates["qa_feedback"] = None
+                            updates["qa_similar_original_messages"] = None
                         # --- END MODIFIED Success Block ---
                     else:
                         # --- Failure Case (error key has a value) ---
@@ -1029,6 +1118,9 @@ class SlackResponder:
                         updates["qa_feedback"] = parsed_content.get(
                             "feedback"
                         )  # Allow None
+                        updates["qa_similar_original_messages"] = parsed_content.get(
+                            "similar_original_messages"
+                        )
                         if self.verbose:
                             self.console.print(
                                 f"[yellow] -> Setting error state from ask_question_answerer: {updates['error_message']}[/yellow]"
@@ -1041,14 +1133,17 @@ class SlackResponder:
                     updates["qa_final_answer"] = None
                     updates["qa_models"] = None
                     updates["qa_feedback"] = None
+                    updates["qa_similar_original_messages"] = None
 
             # --- MODIFIED: Handle new final response tool ---
             elif tool_name == "post_final_response_with_snippet":
                 # Expecting dict with "success": True/False
                 if isinstance(parsed_content, dict):
                     if parsed_content.get("success"):
-                        # The check_if_response_sent node will set the flag.
-                        updates["error_message"] = None  # Clear error on success
+                        updates["response_message_ts"] = parsed_content.get(
+                            "message_ts"
+                        )
+                        updates["error_message"] = None
                         if self.verbose:
                             self.console.print(
                                 f"[dim] -> Received success result from post_final_response_with_snippet: {parsed_content.get('message')}[/dim]"
@@ -1059,9 +1154,7 @@ class SlackResponder:
                             "error",
                             "post_final_response_with_snippet failed without specific error.",
                         )
-                        updates["response_sent"] = (
-                            False  # Ensure flag is false on error
-                        )
+                        updates["response_sent"] = False
                         if self.verbose:
                             self.console.print(
                                 f"[yellow] -> Setting error state from post_final_response_with_snippet: {updates['error_message']}[/yellow]"
@@ -1070,16 +1163,17 @@ class SlackResponder:
                     error_msg = f"post_final_response_with_snippet tool returned unexpected content format: {type(parsed_content).__name__}"
                     logger.warning(f"{error_msg}. Content: {parsed_content}")
                     updates["error_message"] = error_msg
-                    updates["response_sent"] = False  # Ensure flag is false on error
+                    updates["response_sent"] = False
 
             # --- NEW: Handle simple text response tool ---
             elif tool_name == "post_text_response":
                 # Expecting dict with "success": True/False
                 if isinstance(parsed_content, dict):
                     if parsed_content.get("success"):
-                        # This tool is also used for final responses (like verification failures).
-                        # The check_if_response_sent node will handle setting the flag based on context.
-                        updates["error_message"] = None  # Clear error on success
+                        updates["response_message_ts"] = parsed_content.get(
+                            "message_ts"
+                        )
+                        updates["error_message"] = None
                         if self.verbose:
                             self.console.print(
                                 f"[dim] -> Received success result from post_text_response: {parsed_content.get('message')}[/dim]"
@@ -1090,9 +1184,7 @@ class SlackResponder:
                             "error",
                             "post_text_response failed without specific error.",
                         )
-                        updates["response_sent"] = (
-                            False  # Ensure flag is false on error
-                        )
+                        updates["response_sent"] = False
                         if self.verbose:
                             self.console.print(
                                 f"[yellow] -> Setting error state from post_text_response: {updates['error_message']}[/yellow]"
@@ -1101,7 +1193,7 @@ class SlackResponder:
                     error_msg = f"post_text_response tool returned unexpected content format: {type(parsed_content).__name__}"
                     logger.warning(f"{error_msg}. Content: {parsed_content}")
                     updates["error_message"] = error_msg
-                    updates["response_sent"] = False  # Ensure flag is false on error
+                    updates["response_sent"] = False
             # --- END NEW HANDLER ---
 
             else:
@@ -1266,13 +1358,118 @@ class SlackResponder:
             return {"response_sent": False}  # Explicitly set to False
 
     def route_after_response_check(self, state: SlackResponderState) -> str:
-        """Routes to END if response was sent, otherwise back to agent."""
+        """Routes to record_interaction if response was sent, otherwise back to agent."""
         if state.get("response_sent"):
-            # Response was sent successfully, end the workflow
-            return END
+            # Response was sent successfully, route to record the interaction
+            return "record_interaction"
         else:
             # Response not sent (or previous step wasn't respond_to_slack), continue
             return "agent"
+
+    # --- NEW NODE: Record Interaction --- #
+    def record_interaction_node(self, state: SlackResponderState) -> Dict[str, Any]:
+        """Calls QuestionStorage.record_question with all collected information."""
+        if self.verbose:
+            self.console.print(
+                "[bold blue]\n>>> Entering record_interaction_node <<<[/bold blue]"
+            )
+
+        if not self.question_storage:
+            if self.verbose:
+                self.console.print(
+                    "[yellow dim] -> QuestionStorage not configured, skipping recording.[/yellow dim]"
+                )
+            return {}  # End workflow here
+
+        try:
+            # Gather all the necessary data from the state
+            original_question = state.get("original_question")  # Use .get for safety
+            original_message_ts = state["thread_ts"]
+            response_message_ts = state.get("response_message_ts")
+            # Ensure question_text_for_db has a fallback even if original_question is None
+            question_text_for_db = (
+                state.get("contextual_question") or original_question or ""
+            )
+            answer_text = state.get("qa_final_answer")
+            models_used = state.get("qa_models", [])
+            feedback_considered = state.get("qa_feedback", {})
+            context_considered = state.get("qa_similar_original_messages", [])
+            thread_history = state.get("thread_history")
+
+            if not response_message_ts:
+                logger.warning(
+                    "Cannot record interaction: response_message_ts is missing from state."
+                )
+                if self.verbose:
+                    self.console.print(
+                        "[red] -> Cannot record: response_message_ts missing.[/red]"
+                    )
+                return {}  # Or potentially raise an error/route differently
+
+            # Extract model names
+            model_names = [
+                m.get("name")
+                for m in models_used
+                if isinstance(m, dict) and m.get("name")
+            ]
+
+            # Prepare metadata
+            metadata = {
+                "feedback_considered_by_qa": feedback_considered,  # Store structure from QA
+                "context_considered_by_qa": context_considered,  # Store structure from QA
+                "slack_thread_history": thread_history,  # Can be large
+                "channel_id": state["channel_id"],
+                # Add any other relevant metadata
+            }
+
+            if self.verbose:
+                # Safely log potentially None values before slicing
+                original_q_safe = str(original_question or "")[:60]
+                q_text_db_safe = str(question_text_for_db or "")[:60]
+                answer_text_safe = str(answer_text or "")[:60]
+
+                self.console.print(f"[dim] -> Recording interaction:")
+                self.console.print(
+                    f"[dim]    Original Question TS: {original_message_ts}"
+                )
+                self.console.print(f"[dim]    Response TS: {response_message_ts}")
+                self.console.print(f"[dim]    Original Text: {original_q_safe}...")
+                self.console.print(
+                    f"[dim]    Question Text for DB: {q_text_db_safe}..."
+                )
+                self.console.print(f"[dim]    Answer Text: {answer_text_safe}...")
+                self.console.print(f"[dim]    Models Used: {model_names}")
+
+            # Call the storage method (question_text_for_db should now be a string)
+            question_id = self.question_storage.record_question(
+                question_text=question_text_for_db,
+                original_message_text=original_question
+                or "",  # Ensure original_message_text is also string
+                original_message_ts=original_message_ts,
+                response_message_ts=response_message_ts,
+                answer_text=answer_text or "",  # Ensure answer_text is also string
+                model_names=model_names,
+                metadata=metadata,
+                # was_useful and feedback are set later via user interaction
+            )
+
+            if self.verbose:
+                self.console.print(
+                    f"[green] -> Successfully recorded interaction with ID: {question_id}[/green]"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to record interaction to QuestionStorage: {e}",
+                exc_info=self.verbose,
+            )
+            if self.verbose:
+                self.console.print(f"[red] -> Error recording interaction: {e}[/red]")
+            # Decide how to handle recording errors - potentially just log and end?
+
+        return {}  # This node leads to END
+
+    # --- END NEW NODE --- #
 
     # --- Workflow Execution ---
     def run_slack_workflow(
@@ -1300,12 +1497,14 @@ class SlackResponder:
             messages=[],
             thread_history=None,
             contextual_question=None,
-            acknowledgement_sent=None,  # Initialize new state field
-            qa_final_answer=None,  # Initialize new state field
-            qa_models=None,  # Initialize new state field
-            qa_feedback=None,  # Initialize new state field
-            error_message=None,  # Ensure error starts as None
-            response_sent=None,  # Ensure response_sent starts as None
+            acknowledgement_sent=None,
+            qa_final_answer=None,
+            qa_models=None,
+            qa_feedback=None,
+            qa_similar_original_messages=None,  # Init new field
+            error_message=None,
+            response_message_ts=None,  # Init new field
+            response_sent=None,
         )
         # --- END MODIFIED ---
 

@@ -6,8 +6,8 @@
   },
   "features": {
     "bot_user": {
-      "display_name": "RagstarBot",
-      "always_online": false
+      "display_name": "ragstar",
+      "always_online": true
     },
     "slash_commands": [
       {
@@ -27,7 +27,9 @@
         "app_mentions:read",
         "chat:write",
         "chat:write.public",
-        "channels:history"
+        "channels:history",
+        "files:read",
+        "files:write"
       ]
     }
   },
