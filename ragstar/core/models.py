@@ -736,6 +736,27 @@ class Question:
             # models_used relationship is handled separately via QuestionModelTable
         )
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert the domain model instance to a dictionary."""
+        return {
+            "id": self.id,
+            "question_text": self.question_text,
+            "answer_text": self.answer_text,
+            "was_useful": self.was_useful,
+            "feedback": self.feedback,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "question_metadata": self.question_metadata,
+            "model_names": self.model_names,
+            "original_message_text": self.original_message_text,
+            "original_message_ts": self.original_message_ts,
+            "response_message_ts": self.response_message_ts,
+            # Embeddings are usually large and not needed for this serialization purpose
+            # "question_embedding": self.question_embedding,
+            # "feedback_embedding": self.feedback_embedding,
+            # "original_message_embedding": self.original_message_embedding,
+        }
+
 
 @dataclass
 class ModelEmbedding:

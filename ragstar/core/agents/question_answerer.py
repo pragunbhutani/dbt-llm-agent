@@ -343,8 +343,9 @@ class QuestionAnswerer:
         @tool(args_schema=SearchFeedbackInput)
         def search_past_feedback(query: str) -> List[Any]:
             """Searches for feedback on previously asked questions whose core topic is *similar* to the provided query.
-            Use this ONCE at the beginning of the workflow if relevant feedback might exist.
-            Provide a concise query reflecting the core information need (e.g., the same refined query used for model search).
+            NOTE: Initial relevant feedback based on the original question is already provided in the state.
+            Use this tool ONLY if you need to search for feedback related to a *different* or more *specific* topic that emerged during the workflow.
+            Provide a concise query reflecting the new information need.
             The tool returns a list of relevant past question/feedback pairs."""
             if self.verbose:
                 self.console.print(
@@ -437,8 +438,9 @@ class QuestionAnswerer:
         @tool(args_schema=SearchFeedbackContentInput)
         def search_feedback_content(query: str) -> List[Any]:
             """Searches the *text content* of past feedback entries for specific information.
-            Use this tool *during* the workflow if you need clarification on a specific term, concept, or definition
-            that might have been mentioned in past feedback, even if related to a different original question.
+            NOTE: Initial relevant feedback content based on the original question is already provided in the state.
+            Use this tool ONLY if you need clarification on a *different* or more *specific* term, concept, or definition
+            that might have been mentioned in past feedback, beyond what was initially retrieved.
             Provide a targeted query for the specific information needed (e.g., 'definition of mandate', 'how to calculate watch time').
             The tool returns a list of past question/feedback pairs where the feedback content matched your query.
             """
@@ -520,8 +522,9 @@ class QuestionAnswerer:
         @tool(args_schema=SearchOrganizationalContextInput)
         def search_organizational_context(query: str) -> List[Dict[str, Any]]:
             """Searches past *original user questions* for relevant context, definitions, or explanations.
-            Use this early in the workflow to understand terms or concepts mentioned in the current question.
-            Provide a query based on the term or concept you need context for (e.g., 'what is mandate ID?', 'definition of active user').
+            NOTE: Initial relevant context based on the original question is already provided in the state ('similar_original_messages').
+            Use this tool ONLY if you need context related to a *different* or more *specific* term or concept than initially retrieved.
+            Provide a query based on the specific term or concept you need context for (e.g., 'what is mandate ID?', 'definition of active user').
             Returns a list of past interactions (question/answer pairs) where the original question text was similar to your query.
             """
             if self.verbose:
@@ -812,7 +815,7 @@ class QuestionAnswerer:
         thread_context = state.get("thread_context")
 
         # --- System Prompt Setup ---
-        # --- MODIFIED: Include thread_context, model list, and new context tool in prompt ---
+        # --- MODIFIED: Update prompt to reflect pre-fetched data ---
         # Convert model summary list to a more readable string format for the prompt
         model_list_str = "\n".join(
             [f"- `{m['name']}`: {m['description']}" for m in self.all_models_summary]
@@ -820,37 +823,83 @@ class QuestionAnswerer:
         if not model_list_str:
             model_list_str = "(No usable models found in storage)"
 
+        # Format pre-fetched context/feedback for the prompt
+        # Safely format feedback by question
+        feedback_q_list = []
+        for item in relevant_feedback_by_question:
+            q_text = getattr(item, "question_text", "N/A")
+            a_text = getattr(item, "answer_text", "N/A")
+            f_text = getattr(item, "feedback", "N/A")
+            useful = getattr(item, "was_useful", "N/A")
+            feedback_q_list.append(
+                f"  - Question: {q_text}\n    Answer: {a_text[:100]}...\n    Feedback: {f_text}\n    Useful: {useful}"
+            )
+        feedback_q_str = (
+            "\n".join(feedback_q_list) if feedback_q_list else "None found."
+        )
+
+        # Safely format feedback by content
+        feedback_c_list = []
+        for item in relevant_feedback_by_content:
+            q_text = getattr(item, "question_text", "N/A")
+            a_text = getattr(item, "answer_text", "N/A")
+            f_text = getattr(item, "feedback", "N/A")
+            useful = getattr(item, "was_useful", "N/A")
+            feedback_c_list.append(
+                f"  - Found in Feedback for Question: {q_text}\n    Answer: {a_text[:100]}...\n    Feedback Snippet: {f_text}...\n    Useful: {useful}"
+            )
+        feedback_c_str = (
+            "\n".join(feedback_c_list) if feedback_c_list else "None found."
+        )
+
+        # Safely format similar original messages
+        similar_msg_list = []
+        for (
+            item_dict
+        ) in similar_original_messages:  # Already converted to dicts in pre-fetch
+            orig_q = item_dict.get("original_message_text", "N/A")
+            ans_text = item_dict.get("answer_text", "N/A")
+            similar_msg_list.append(
+                f"  - Past Question: {orig_q}\n    Past Answer: {ans_text[:100]}..."
+            )
+        similar_msg_str = (
+            "\n".join(similar_msg_list) if similar_msg_list else "None found."
+        )
+
         system_prompt = f"""You are an AI assistant specialized in analyzing dbt projects and generating SQL queries based ONLY on provided dbt model context.
 
         **Overall Goal:** Answer the user's question (`original_question`) by:
-        1. Understanding the question *and the provided Slack thread context* (`thread_context`). Identify necessary information, paying close attention to clarifications or details mentioned in the thread.
+        1. Understanding the question, the provided Slack thread context (`thread_context`), and the pre-fetched historical context/feedback (provided below).
         2. **Examining the list of available models** (provided below) to identify potentially relevant ones based on names and descriptions.
         3. **Prioritizing `fetch_model_details`:** Use this tool first to get details for models selected from the list.
-        4. **Searching for Context:** Use `search_organizational_context` early to find relevant definitions or explanations from *past original user questions* if the current question contains specific terms or concepts.
-        5. **Searching for Feedback:** Use `search_past_feedback` (for similar questions) and `search_feedback_content` (for specific concepts within feedback text).
-        6. **Using `model_similarity_search` as a fallback:** If the initial list doesn't reveal clear candidates, or if `fetch_model_details` doesn't yield enough information, use vector similarity search to find models related to specific concepts or calculations.
-        7. Synthesizing information from models, context search results, feedback, and the thread context.
-        8. Generating a final, grounded SQL query and explanation using the `finish_workflow` tool.
+        4. **Using `model_similarity_search` as a fallback:** If the initial list doesn't reveal clear candidates, or if `fetch_model_details` doesn't yield enough information, use vector similarity search to find models related to specific concepts or calculations.
+        5. Synthesizing information from models, pre-fetched context/feedback, and the thread context.
+        6. Generating a final, grounded SQL query and explanation using the `finish_workflow` tool.
+        7. **Using Search Tools Sparingly:** Tools like `search_organizational_context`, `search_past_feedback`, and `search_feedback_content` are available but should only be used if the initial pre-fetched information is insufficient and you need to search for *different* or *more specific* information based on your intermediate findings (e.g., a model detail mentions a term not in the pre-fetched context).
 
         **CRITICAL RULE:** Your final action in this workflow MUST be a call to the `finish_workflow` tool. Do NOT output plain text or ask clarification questions as your final response. If you cannot fully answer the question with the available information, you MUST still call `finish_workflow` and explain the limitations in the 'Footnotes' section of the `final_answer`.
 
         **Input Context:**
         - `original_question`: The primary question, potentially compiled from the thread.
         - `thread_context`: The history of the Slack conversation leading to the question. Use this to understand nuances, definitions, or constraints provided by the user.
+        - **Pre-fetched Similar Original Messages:**
+{similar_msg_str}
+        - **Pre-fetched Feedback (Similar Questions):**
+{feedback_q_str}
+        - **Pre-fetched Feedback (Similar Content):**
+{feedback_c_str}
         - **Available Models:**
 {model_list_str}
 
         **Tool Usage Strategy:**
-        1.  **Analyze 'Available Models' list first.** Based on `original_question` and `thread_context`, identify models whose names/descriptions seem relevant.
+        1.  **Analyze 'Available Models' list AND Pre-fetched Context/Feedback first.** Based on `original_question`, `thread_context`, and the pre-fetched data, identify models whose names/descriptions seem relevant. Determine if pre-fetched info helps clarify the question or provides relevant definitions.
         2.  **Use `fetch_model_details`** to get schemas for models identified from the list.
-        3.  **Use `search_organizational_context`** if `original_question` or `thread_context` contains specific terms (e.g., 'mandate', 'active user', specific metrics) that might have been defined or explained in past *original* user questions. Use a query targeting the specific term.
-        4.  **Use `search_past_feedback`** ONCE near the beginning if similar *answered questions* might exist (consider the core topic).
-        5.  **Use `search_feedback_content`** if you need clarification on specific terms/concepts found in models or `thread_context` that might be in *past feedback text*.
-        6.  **Use `model_similarity_search` ONLY if:**
+        3.  **Use `model_similarity_search` ONLY if:**
             *   The 'Available Models' list and fetched details don't contain obvious candidates.
-            *   You need to search for models based on a specific concept or calculation (e.g., 'how is revenue calculated?'). Refine the query based on context found.
+            *   You need to search for models based on a specific concept or calculation not covered by pre-fetched context (e.g., 'how is revenue calculated?'). Refine the query based on context found.
             *   Limit: {self.max_vector_searches} calls. Use specific table/column names from `thread_context` if available.
-        7.  **Use `finish_workflow`** ONLY when ready for the complete, final answer. Base SQL *strictly* on retrieved models, considering context from `thread_context`, `similar_original_messages`, and `relevant_feedback`.
+        4.  **Use Context/Feedback Search Tools (`search_organizational_context`, `search_past_feedback`, `search_feedback_content`) ONLY if** the initial pre-fetched data is insufficient and you need to probe for *different* or *more specific* information based on your intermediate findings (e.g., a model detail mentions a term not in the pre-fetched context). Use targeted queries.
+        5.  **Use `finish_workflow`** ONLY when ready for the complete, final answer. Base SQL *strictly* on retrieved models, considering context from `thread_context` and *all* available feedback/context (pre-fetched and potentially from tool calls).
 
         **SQL Generation Rules (CRITICAL):**
         - **Grounding:** ONLY use tables, columns, relationships from `accumulated_models`. DO NOT HALLUCINATE.
@@ -861,9 +910,9 @@ class QuestionAnswerer:
         **Current State:**
         - Models Found: {len(accumulated_models)}
         - Vector Similarity Search Calls Used: {search_model_calls} / {self.max_vector_searches}
-        - Feedback Found (Similar Questions): {len(relevant_feedback_by_question)}
-        - Feedback Found (Content Search): {len(relevant_feedback_by_content)}
-        - Org Context Found (Similar Original Questions): {len(similar_original_messages)}
+        - Pre-fetched Feedback (Qs): {len(relevant_feedback_by_question)} items
+        - Pre-fetched Feedback (Content): {len(relevant_feedback_by_content)} items
+        - Pre-fetched Org Context (Msgs): {len(similar_original_messages)} items
         """
         # --- END MODIFIED Prompt ---
 
@@ -1319,24 +1368,106 @@ class QuestionAnswerer:
 
         config = {"configurable": {"thread_id": thread_id}}
 
-        # --- MODIFIED: Define the initial state including new field --- #
+        # --- BEGIN MODIFICATION: Pre-fetch context and feedback ---
+        initial_similar_messages = []
+        initial_feedback_by_question = []
+        initial_feedback_by_content = []
+
+        if self.question_storage:
+            if self.verbose:
+                self.console.print("[dim]Pre-fetching context and feedback...[/dim]")
+            try:
+                # Fetch similar original messages
+                query_embedding = self.question_storage._get_embedding(question)
+                if query_embedding:
+                    # TODO: Make thresholds configurable?
+                    initial_similar_messages = (
+                        self.question_storage.find_similar_original_messages(
+                            query_embedding=query_embedding,
+                            limit=3,
+                            similarity_threshold=0.7,
+                        )
+                        or []
+                    )  # Ensure list
+                    # Convert Question domain objects to dictionaries for state storage
+                    initial_similar_messages = [
+                        q.to_dict() for q in initial_similar_messages
+                    ]
+                    if self.verbose:
+                        self.console.print(
+                            f"[dim] -> Found {len(initial_similar_messages)} potentially relevant past original messages.[/dim]"
+                        )
+
+                    # Fetch similar questions with feedback
+                    initial_feedback_by_question = (
+                        self.question_storage.find_similar_questions_with_feedback(
+                            query_embedding=query_embedding,
+                            limit=3,
+                            similarity_threshold=0.30,
+                        )
+                        or []
+                    )  # Ensure list
+                    if self.verbose:
+                        self.console.print(
+                            f"[dim] -> Found {len(initial_feedback_by_question)} potentially relevant past feedback items (by question).[/dim]"
+                        )
+                else:
+                    if self.verbose:
+                        self.console.print(
+                            "[yellow dim] -> Could not generate embedding for initial context/feedback search.[/yellow dim]"
+                        )
+
+                # Fetch feedback by content similarity
+                # TODO: Make threshold configurable?
+                initial_feedback_by_content = (
+                    self.question_storage.find_similar_feedback_content(
+                        query=question, limit=3, similarity_threshold=0.6
+                    )
+                    or []
+                )  # Ensure list
+                if self.verbose:
+                    self.console.print(
+                        f"[dim] -> Found {len(initial_feedback_by_content)} potentially relevant past feedback items (by content).[/dim]"
+                    )
+
+            except Exception as e:
+                logger.error(
+                    f"Error pre-fetching context/feedback: {e}", exc_info=self.verbose
+                )
+                if self.verbose:
+                    self.console.print(
+                        f"[red dim] -> Error pre-fetching context/feedback: {e}[/red dim]"
+                    )
+        elif self.verbose:
+            self.console.print(
+                "[yellow dim] -> Question storage not available, skipping context/feedback pre-fetch.[/yellow dim]"
+            )
+
+        # --- END MODIFICATION ---
+
+        # --- MODIFIED: Define the initial state including new field and pre-fetched data --- #
         initial_state = QuestionAnsweringState(
             original_question=question,  # This is the compiled question from SlackResponder
             messages=[],
             accumulated_models=[],
             accumulated_model_names=set(),
             vector_search_calls=0,
-            relevant_feedback={"by_question": [], "by_content": []},
+            # --- MODIFIED: Populate feedback from pre-fetch ---
+            relevant_feedback={
+                "by_question": initial_feedback_by_question,
+                "by_content": initial_feedback_by_content,
+            },
             search_queries_tried=set(),
             final_answer=None,
             thread_context=thread_context,
             conversation_id=None,
-            similar_original_messages=[],  # Initialize new field
+            # --- MODIFIED: Populate messages from pre-fetch ---
+            similar_original_messages=initial_similar_messages,
         )
 
         if self.verbose:
             self.console.print(
-                "[dim]Initial state prepared with system prompt, question, and thread context[/dim]"
+                "[dim]Initial state prepared with pre-fetched context/feedback.[/dim]"
             )
 
         try:
