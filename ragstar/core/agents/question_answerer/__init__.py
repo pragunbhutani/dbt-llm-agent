@@ -3,7 +3,6 @@
 import logging
 from typing import Dict, List, Any, Optional, Union, Set, TypedDict
 import uuid
-import pathlib
 
 # Langchain & LangGraph Imports
 from langchain_core.messages import (
@@ -30,6 +29,9 @@ from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.core.models import DBTModel, ModelTable
 from ragstar.utils.cli_utils import get_config_value
+
+# --- NEW: Import prompt creation functions ---
+from .prompts import create_system_prompt, create_guidance_message
 
 from psycopg_pool import ConnectionPool
 
@@ -90,7 +92,6 @@ class QuestionAnsweringState(TypedDict):
     accumulated_model_names: Set[str]  # Names of models found
     vector_search_calls: int  # Track number of *vector* search calls
     relevant_feedback: Dict[str, List[Any]]  # Keys: 'by_question', 'by_content'
-    search_queries_tried: Set[str]  # Track search queries
     # --- RE-ADD: final_answer field ---
     final_answer: Optional[str]
     conversation_id: Optional[str]
@@ -207,32 +208,6 @@ class QuestionAnswerer:
 
         # Call setup() on the checkpointer instance
         self.memory.setup()
-
-        # --- ADDED: Load SQL style example ---
-        try:
-            # Construct path relative to the current file
-            style_file_path = pathlib.Path(__file__).parent / "sql_style_example.sql"
-            if style_file_path.is_file():
-                self.sql_style_example = style_file_path.read_text()
-                if self.verbose:
-                    self.console.print(
-                        f"[dim]Loaded SQL style example from: {style_file_path}[/dim]"
-                    )
-            else:
-                self.sql_style_example = None
-                logger.warning(
-                    f"SQL style example file not found at: {style_file_path}"
-                )
-                if self.verbose:
-                    self.console.print(
-                        f"[yellow]Warning: SQL style example file not found at: {style_file_path}[/yellow]"
-                    )
-        except Exception as e:
-            self.sql_style_example = None
-            logger.error(f"Error loading SQL style example: {e}", exc_info=self.verbose)
-            if self.verbose:
-                self.console.print(f"[red]Error loading SQL style example: {e}[/red]")
-        # --- END ADDED ---
 
         # Define tools and then compile the graph
         self._define_tools()
@@ -815,153 +790,26 @@ class QuestionAnswerer:
         thread_context = state.get("thread_context")
 
         # --- System Prompt Setup ---
-        # --- MODIFIED: Update prompt to reflect pre-fetched data ---
-        # Convert model summary list to a more readable string format for the prompt
-        model_list_str = "\n".join(
-            [f"- `{m['name']}`: {m['description']}" for m in self.all_models_summary]
+        # --- MODIFIED: Call prompt creation function (removed sql_style_example) --- #
+        system_prompt = create_system_prompt(
+            all_models_summary=self.all_models_summary,
+            relevant_feedback_by_question=relevant_feedback_by_question,
+            relevant_feedback_by_content=relevant_feedback_by_content,
+            similar_original_messages=similar_original_messages,
+            accumulated_models=accumulated_models,
+            search_model_calls=search_model_calls,
+            max_vector_searches=self.max_vector_searches,
         )
-        if not model_list_str:
-            model_list_str = "(No usable models found in storage)"
-
-        # Format pre-fetched context/feedback for the prompt
-        # Safely format feedback by question
-        feedback_q_list = []
-        for item in relevant_feedback_by_question:
-            q_text = getattr(item, "question_text", "N/A")
-            a_text = getattr(item, "answer_text", "N/A")
-            f_text = getattr(item, "feedback", "N/A")
-            useful = getattr(item, "was_useful", "N/A")
-            feedback_q_list.append(
-                f"  - Question: {q_text}\n    Answer: {a_text[:100]}...\n    Feedback: {f_text}\n    Useful: {useful}"
-            )
-        feedback_q_str = (
-            "\n".join(feedback_q_list) if feedback_q_list else "None found."
-        )
-
-        # Safely format feedback by content
-        feedback_c_list = []
-        for item in relevant_feedback_by_content:
-            q_text = getattr(item, "question_text", "N/A")
-            a_text = getattr(item, "answer_text", "N/A")
-            f_text = getattr(item, "feedback", "N/A")
-            useful = getattr(item, "was_useful", "N/A")
-            feedback_c_list.append(
-                f"  - Found in Feedback for Question: {q_text}\n    Answer: {a_text[:100]}...\n    Feedback Snippet: {f_text}...\n    Useful: {useful}"
-            )
-        feedback_c_str = (
-            "\n".join(feedback_c_list) if feedback_c_list else "None found."
-        )
-
-        # Safely format similar original messages
-        similar_msg_list = []
-        for (
-            item_dict
-        ) in similar_original_messages:  # Already converted to dicts in pre-fetch
-            orig_q = item_dict.get("original_message_text", "N/A")
-            ans_text = item_dict.get("answer_text", "N/A")
-            similar_msg_list.append(
-                f"  - Past Question: {orig_q}\n    Past Answer: {ans_text[:100]}..."
-            )
-        similar_msg_str = (
-            "\n".join(similar_msg_list) if similar_msg_list else "None found."
-        )
-
-        system_prompt = f"""You are an AI assistant specialized in analyzing dbt projects and generating SQL queries based ONLY on provided dbt model context.
-
-        **Overall Goal:** Answer the user's question (`original_question`) by:
-        1. Understanding the question, the provided Slack thread context (`thread_context`), and the pre-fetched historical context/feedback (provided below).
-        2. **Examining the list of available models** (provided below) to identify potentially relevant ones based on names and descriptions.
-        3. **Prioritizing `fetch_model_details`:** Use this tool first to get details for models selected from the list.
-        4. **Using `model_similarity_search` as a fallback:** If the initial list doesn't reveal clear candidates, or if `fetch_model_details` doesn't yield enough information, use vector similarity search to find models related to specific concepts or calculations.
-        5. Synthesizing information from models, pre-fetched context/feedback, and the thread context.
-        6. Generating a final, grounded SQL query and explanation using the `finish_workflow` tool.
-        7. **Using Search Tools Sparingly:** Tools like `search_organizational_context`, `search_past_feedback`, and `search_feedback_content` are available but should only be used if the initial pre-fetched information is insufficient and you need to search for *different* or *more specific* information based on your intermediate findings (e.g., a model detail mentions a term not in the pre-fetched context).
-
-        **CRITICAL RULE:** Your final action in this workflow MUST be a call to the `finish_workflow` tool. Do NOT output plain text or ask clarification questions as your final response. If you cannot fully answer the question with the available information, you MUST still call `finish_workflow` and explain the limitations in the 'Footnotes' section of the `final_answer`.
-
-        **Input Context:**
-        - `original_question`: The primary question, potentially compiled from the thread.
-        - `thread_context`: The history of the Slack conversation leading to the question. Use this to understand nuances, definitions, or constraints provided by the user.
-        - **Pre-fetched Similar Original Messages:**
-{similar_msg_str}
-        - **Pre-fetched Feedback (Similar Questions):**
-{feedback_q_str}
-        - **Pre-fetched Feedback (Similar Content):**
-{feedback_c_str}
-        - **Available Models:**
-{model_list_str}
-
-        **Tool Usage Strategy:**
-        1.  **Analyze 'Available Models' list AND Pre-fetched Context/Feedback first.** Based on `original_question`, `thread_context`, and the pre-fetched data, identify models whose names/descriptions seem relevant. Determine if pre-fetched info helps clarify the question or provides relevant definitions.
-        2.  **Use `fetch_model_details`** to get schemas for models identified from the list.
-        3.  **Use `model_similarity_search` ONLY if:**
-            *   The 'Available Models' list and fetched details don't contain obvious candidates.
-            *   You need to search for models based on a specific concept or calculation not covered by pre-fetched context (e.g., 'how is revenue calculated?'). Refine the query based on context found.
-            *   Limit: {self.max_vector_searches} calls. Use specific table/column names from `thread_context` if available.
-        4.  **Use Context/Feedback Search Tools (`search_organizational_context`, `search_past_feedback`, `search_feedback_content`) ONLY if** the initial pre-fetched data is insufficient and you need to probe for *different* or *more specific* information based on your intermediate findings (e.g., a model detail mentions a term not in the pre-fetched context). Use targeted queries.
-        5.  **Use `finish_workflow`** ONLY when ready for the complete, final answer. Base SQL *strictly* on retrieved models, considering context from `thread_context` and *all* available feedback/context (pre-fetched and potentially from tool calls).
-
-        **SQL Generation Rules (CRITICAL):**
-        - **Grounding:** ONLY use tables, columns, relationships from `accumulated_models`. DO NOT HALLUCINATE.
-        - **Completeness:** Generate best possible SQL using available info. State limitations (from missing models or unclear `thread_context` requests) in comments or 'Footnotes'.
-        - **Style:** Follow the provided SQL style guide example.
-        - **No Slack Mrkdwn:** Do not use Slack formatting in `final_answer`.
-
-        **Current State:**
-        - Models Found: {len(accumulated_models)}
-        - Vector Similarity Search Calls Used: {search_model_calls} / {self.max_vector_searches}
-        - Pre-fetched Feedback (Qs): {len(relevant_feedback_by_question)} items
-        - Pre-fetched Feedback (Content): {len(relevant_feedback_by_content)} items
-        - Pre-fetched Org Context (Msgs): {len(similar_original_messages)} items
-        """
         # --- END MODIFIED Prompt ---
 
-        # --- ADDED: Include SQL style example in prompt if available ---
-        if self.sql_style_example:
-            system_prompt += f"""
-
-**SQL Style Guide Example:**
-```sql
-{self.sql_style_example}
-```"""
-        else:
-            system_prompt += """
-
-**SQL Style Guide:** (Example not loaded) Please ensure SQL is well-commented and uses CTEs for clarity."""
-        # --- END ADDED ---
-
-        # --- Guidance Logic --- (May need slight adjustment based on new tool)
-        guidance_items = []
-
-        # Check if max model searches reached
-        if search_model_calls >= self.max_vector_searches:
-            guidance_items.append(
-                f"You have reached the maximum ({self.max_vector_searches}) vector similarity searches."
-            )
-            if not accumulated_models:
-                guidance_items.append(
-                    "No relevant models were found. You MUST now call `finish_workflow` and explain in the 'Footnotes' that you cannot answer the question due to missing model context."
-                )
-            else:
-                guidance_items.append(
-                    "You MUST now use the `finish_workflow` tool to generate the final answer based *only* on the models found so far, noting any limitations."
-                )
-        else:
-            guidance_items.append(
-                f"You have used the vector similarity search tool {search_model_calls} times (max {self.max_vector_searches})."
-            )
-            if not accumulated_models:
-                # --- MODIFIED GUIDANCE --- #
-                guidance_items.append(
-                    "No models found yet. Examine the 'Available Models' list. If relevant models seen, use `fetch_model_details`. Consider `search_organizational_context` if the question has specific terms needing definition. Otherwise, consider `model_similarity_search` with a specific query, or `search_past_feedback` if appropriate."
-                )
-                # --- END MODIFIED GUIDANCE --- #
-            else:
-                # --- MODIFIED GUIDANCE --- #
-                guidance_items.append(
-                    f"Analyze models found so far: {[m['name'] for m in accumulated_models]}. Do these + context/feedback answer the question? If yes, call `finish_workflow`. If not, can `fetch_model_details` get more? Is `search_organizational_context` needed for terms? Only use `model_similarity_search` if needed and under limit ({self.max_vector_searches}). Finish or fetch/search."
-                )
-                # --- END MODIFIED GUIDANCE --- #
+        # --- Guidance Logic ---
+        # --- MODIFIED: Call guidance creation function ---
+        guidance = create_guidance_message(
+            search_model_calls=search_model_calls,
+            max_vector_searches=self.max_vector_searches,
+            accumulated_models=accumulated_models,
+        )
+        # --- END MODIFIED GUIDANCE ---
 
         # --- Combine system prompt and messages ---
         messages_for_llm: List[
@@ -996,8 +844,8 @@ class QuestionAnswerer:
             messages_for_llm.extend(messages)
 
         # Add guidance as a final SystemMessage if needed
-        if guidance_items:
-            guidance = "Guidance: " + " ".join(guidance_items)
+        # --- MODIFIED: Use the generated guidance string ---
+        if guidance:
             # Add guidance if the last message isn't already the *exact same* guidance
             last_message = messages_for_llm[-1] if messages_for_llm else None
             if not (
@@ -1005,6 +853,7 @@ class QuestionAnswerer:
                 and last_message.content == guidance
             ):
                 messages_for_llm.append(SystemMessage(content=guidance))
+        # --- END MODIFIED ---
 
         if self.verbose:
             self.console.print("\n[blue]--- Calling Agent Model ---[/blue]")
@@ -1101,7 +950,6 @@ class QuestionAnswerer:
             state.get("accumulated_model_names", set())
         )  # Get a mutable copy
         search_model_calls = state.get("vector_search_calls", 0)
-        search_queries_tried = set(state.get("search_queries_tried", set()))
         # MODIFIED: Ensure relevant_feedback is initialized correctly
         relevant_feedback = state.get(
             "relevant_feedback", {}
@@ -1318,7 +1166,6 @@ class QuestionAnswerer:
         updates["accumulated_models"] = accumulated_models
         updates["accumulated_model_names"] = accumulated_model_names
         updates["vector_search_calls"] = search_model_calls
-        updates["search_queries_tried"] = search_queries_tried
         updates["relevant_feedback"] = relevant_feedback
         # --- NEW: Add context results to updates ---
         updates["similar_original_messages"] = similar_original_messages
@@ -1457,7 +1304,6 @@ class QuestionAnswerer:
                 "by_question": initial_feedback_by_question,
                 "by_content": initial_feedback_by_content,
             },
-            search_queries_tried=set(),
             final_answer=None,
             thread_context=thread_context,
             conversation_id=None,

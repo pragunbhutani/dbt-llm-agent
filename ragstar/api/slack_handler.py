@@ -9,7 +9,7 @@ from ragstar.core.llm.client import LLMClient
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.storage.question_storage import QuestionStorage
-from ragstar.core.agents.slack_responder import SlackResponder
+from ragstar.core.agents import SlackResponder
 from ragstar.utils.cli_utils import get_config_value
 from ragstar.utils.logging import setup_logging
 from ragstar.utils.slack import get_async_slack_client

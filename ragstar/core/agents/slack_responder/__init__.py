@@ -21,20 +21,22 @@ from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
 from rich.console import Console
 
-# RAGstar Imports (assuming QuestionAnswerer is accessible)
+# RAGstar Imports
+from ragstar.core.agents import QuestionAnswerer
 from ragstar.core.llm.client import LLMClient
 from ragstar.utils.cli_utils import get_config_value
-
-# Import components needed to initialize QuestionAnswerer
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.storage.question_storage import QuestionStorage
-from ragstar.core.agents.question_answerer import (
-    QuestionAnswerer,
+
+# --- NEW: Import prompt creation functions ---
+from .prompts import (
+    create_initial_system_prompt,
+    create_verification_system_prompt,
+    create_guidance_message,
 )
 
-# Need to potentially create a slack integration module
-# from ragstar.integrations.slack import get_thread_history, post_message_to_thread
+# --- END NEW ---
 
 # Import Slack SDK components
 from slack_sdk.web.async_client import AsyncWebClient
@@ -124,7 +126,7 @@ class SlackResponderState(TypedDict):
     thread_ts: str
     messages: Annotated[List[BaseMessage], add_messages]
     thread_history: Optional[List[Dict[str, Any]]]  # Store fetched thread messages
-    contextual_question: Optional[str]  # Question formulated with context
+    # contextual_question: Optional[str]  # Question formulated with context
     acknowledgement_sent: Optional[bool] = (
         None  # Flag to indicate if acknowledgement was sent
     )
@@ -764,28 +766,10 @@ class SlackResponder:
 
         # --- Determine the next step based on state ---
         if not messages:
-            # --- MODIFIED: Updated Initial System Prompt ---
-            system_prompt = """You are an AI assistant integrated with Slack. Your primary role is to manage the workflow for answering user questions asked in Slack threads.
-
-**Overall Workflow:**
-1.  A user asks a question in a Slack thread.
-2.  **Fetch Context:** Use `fetch_slack_thread` to get history.
-3.  **Acknowledge:** Use `acknowledge_question` to confirm receipt and understanding.
-4.  **Delegate to QA Agent:** Use `ask_question_answerer` with the formulated question to get a detailed text answer (containing SQL, explanations, notes) and context (models/feedback used) from a specialized agent.
-5.  **Process QA Result:** Once the QA agent responds, you (the SlackResponder) will receive its text answer, list of models used, and list of feedback considered.
-6.  **Verify & Prepare Final Response:** You will then analyze the QA agent's text answer, verify the SQL query within it against the provided context (models, feedback, thread history), extract notes, compose a user-facing message, and prepare to post it.
-7.  **Post Final Response:** Use `post_final_response_with_snippet` to upload the verified SQL as a snippet and post the final message.
-
-**Your Current Task is determined by the state:**
-- If thread history is missing, call `fetch_slack_thread`.
-- If acknowledgement hasn't been sent, analyze history and call `acknowledge_question`.
-- If acknowledgement is sent but QA answer is missing, call `ask_question_answerer`.
-- If QA answer and context are available, perform step 6 (Verify & Prepare) and then step 7 (Post Final Response).
-
-**Responsibility:** Manage this sequence. Call tools appropriately. When processing the QA result, ensure the verification step occurs before posting.
-"""
-            # --- END MODIFIED Prompt ---
-            initial_human_message = f'New question received from Slack:\nChannel ID: {state["channel_id"]}\nThread TS: {state["thread_ts"]}\nQuestion: "{state["original_question"]}"\n\nPlease fetch the thread history first.'
+            # --- MODIFIED: Call prompt function ---
+            system_prompt = create_initial_system_prompt()
+            # --- END MODIFIED ---
+            initial_human_message = f'New question received from Slack:\\nChannel ID: {state["channel_id"]}\\nThread TS: {state["thread_ts"]}\\nQuestion: "{state["original_question"]}"\\n\\nPlease fetch the thread history first.'
             messages_for_llm = [
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=initial_human_message),
@@ -802,39 +786,18 @@ class SlackResponder:
                     "[dim] -> QA result received. Preparing verification and final posting prompt.[/dim]"
                 )
 
-            # Construct a specific prompt for verification and final tool call
-            verification_system_prompt = f"""Your task is to process the final answer received from the QuestionAnswerer agent, verify its SQL query, and format the final response for Slack.
+            # --- MODIFIED: Call prompt function ---
+            verification_system_prompt = create_verification_system_prompt(
+                original_question=state["original_question"],
+                thread_history=thread_history,
+                qa_final_answer_text=qa_final_answer_text,
+                qa_models_used=qa_models_used,
+                qa_feedback_used=qa_feedback_used,  # Pass feedback
+                channel_id=state["channel_id"],
+                thread_ts=state["thread_ts"],
+            )
+            # --- END MODIFIED ---
 
-**Context Provided:**
-1.  **Original User Question:** {state['original_question']}
-2.  **Slack Thread History:** {thread_history}
-3.  **QuestionAnswerer (QA) Final Answer Text:**
-    ```
-    {qa_final_answer_text}
-    ```
-4.  **Models Used by QA:** {qa_models_used}
-5.  **Feedback Considered by QA:** {qa_feedback_used}
-
-**Your Steps:**
-1.  **Extract SQL:** Identify and extract the complete SQL query from the 'QA Final Answer Text'. If no SQL query is present, note this.
-2.  **Extract Notes:** Identify and extract any footnotes or explanations intended for the user from the 'QA Final Answer Text' (usually in a 'Footnotes:' section after the SQL).
-3.  **Verify SQL (if extracted):**
-    *   **CRITICAL GROUNDING CHECK:** Does the extracted SQL query use ONLY tables, columns, and relationships explicitly mentioned or clearly derivable from the schemas listed in the 'Models Used by QA' context? Check carefully for any hallucinated table or column names. **If the query is NOT grounded (uses hallucinated elements), verification FAILS.**
-    *   **LOGICAL COMPLETENESS CHECK:** Does the SQL query logically attempt to answer the 'Original User Question' given the context? Acknowledge that the query might have limitations noted in the 'Footnotes' or if ideal models weren't available. **Verification PASSES if the SQL is *grounded*, even if it doesn't fully answer the question.** Your analysis of its limitations should be added to the `optional_notes`.
-    *   Is the SQL syntax likely correct (basic check)?
-4.  **Compose Message Text:** Write a brief, friendly introductory message for the Slack post (e.g., "Here's the SQL query based on the available data models:" or "Here's the SQL query generated based on the information provided. Please note the following limitations:").
-5.  **Call Final Tool:**
-    *   **If SQL was extracted AND verification passes (SQL is grounded, even if logically incomplete):** Call the `post_final_response_with_snippet` tool. Provide:
-        *   `channel_id`: {state['channel_id']}
-        *   `thread_ts`: {state['thread_ts']}
-        *   `message_text`: Your composed introductory message.
-        *   `sql_query`: The verified (grounded) SQL query you extracted.
-        *   `optional_notes`: Combine the notes/footnotes you extracted from the QA answer AND any limitations you identified during the 'LOGICAL COMPLETENESS CHECK'.
-    *   **If verification fails (SQL is ungrounded) OR no SQL was extracted from the QA answer:** Call the `post_text_response` tool with:
-        *   `channel_id`: {state['channel_id']}
-        *   `thread_ts`: {state['thread_ts']}
-        *   `message_text`: Your message explaining the verification failure (e.g., "I received a response, but the SQL query references tables/columns not found in our models, so I cannot share it." or "The QuestionAnswerer could not generate a valid SQL query based on the available data models to answer your request."). **Do NOT include the problematic SQL in this message.**
-"""
             # Use the most recent messages plus the new system prompt
             # Taking last ~4 messages for context + the system prompt should be enough
             relevant_history = messages[-4:] if len(messages) > 4 else messages
@@ -849,53 +812,23 @@ class SlackResponder:
 
         # --- END NEW LOGIC BLOCK ---
         else:
-            # Standard guidance logic (fetch history, acknowledge, ask QA)
-            guidance_items = []
-            if not state.get("thread_history"):
-                guidance_items.append("You MUST use 'fetch_slack_thread' now.")
-            elif not state.get("acknowledgement_sent"):
-                guidance_items.append(
-                    "Analyze the thread history and original question. Formulate a brief acknowledgement message summarizing your understanding and use the 'acknowledge_question' tool now."
-                )
-            # --- MODIFIED: Check for qa_final_answer instead of qa_result ---
-            elif not qa_final_answer_text:  # Check if QA answer text is missing
-                # --- MODIFIED: New guidance for compiling question for QA, now including context --- #
-                guidance_items.append(
-                    "You have sent the acknowledgement. Now, review the original question and the full thread history."
-                )
-                guidance_items.append(
-                    "Compile the core information request from the conversation into the 'question' argument. Correct spelling/grammar."
-                )
-                guidance_items.append(
-                    "Simplify phrasing if necessary, but *preserve the original meaning and all key details mentioned by the user*."
-                )
-                guidance_items.append(
-                    "You MUST also provide the full `thread_history` from the state in the `thread_context` argument when calling the `ask_question_answerer` tool."  # Emphasize passing context
-                )
-                # --- END MODIFIED --- #
-            # This else block should now be unreachable if the new block above works correctly
-            # else:
-            #     guidance_items.append("Error: State indicates QA answer received, but processing block was skipped.")
+            # --- MODIFIED: Call guidance creation function ---
+            guidance = create_guidance_message(
+                thread_history=state.get("thread_history"),
+                acknowledgement_sent=state.get("acknowledgement_sent"),
+                qa_final_answer_text=qa_final_answer_text,
+            )
             # --- END MODIFIED ---
 
-            guidance = "Guidance: " + " ".join(guidance_items)
             messages_for_llm = list(messages)  # Make a copy
-            # Add guidance if the last message isn't already guidance
-            if not (
+            # Add guidance if the last message isn't already guidance and guidance exists
+            if guidance and not (
                 messages_for_llm
                 and isinstance(messages_for_llm[-1], SystemMessage)
-                and messages_for_llm[-1].content.startswith("Guidance:")
+                and messages_for_llm[-1].content
+                == guidance  # Check against the generated guidance
             ):
-                # --- NEW: Inject thread history into the context for the LLM's decision ---
-                # We need the LLM making the *tool call* to know about the history
-                # so it can correctly *populate* the thread_context argument.
-                history_str = (
-                    f"\\n\\n**Available Thread History:**\\n{thread_history}\\n"
-                    if thread_history
-                    else "\\n\\n**Thread History:** Not available or not fetched yet.\\n"
-                )
-                messages_for_llm.append(SystemMessage(content=history_str + guidance))
-            # --- END NEW --- #
+                messages_for_llm.append(SystemMessage(content=guidance))
 
         # --- LLM Invocation (Common for all paths) ---
         agent_llm = self._get_agent_llm()
@@ -1387,9 +1320,7 @@ class SlackResponder:
             original_message_ts = state["thread_ts"]
             response_message_ts = state.get("response_message_ts")
             # Ensure question_text_for_db has a fallback even if original_question is None
-            question_text_for_db = (
-                state.get("contextual_question") or original_question or ""
-            )
+            question_text_for_db = original_question or ""
             answer_text = state.get("qa_final_answer")
             models_used = state.get("qa_models", [])
             feedback_considered = state.get("qa_feedback", {})
@@ -1496,7 +1427,6 @@ class SlackResponder:
             thread_ts=thread_ts,
             messages=[],
             thread_history=None,
-            contextual_question=None,
             acknowledgement_sent=None,
             qa_final_answer=None,
             qa_models=None,

@@ -15,20 +15,31 @@ from langchain_core.messages import (
     SystemMessage,
 )
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg_pool import ConnectionPool
-from rich.markdown import Markdown
 
 from ragstar.core.llm.client import LLMClient
-from ragstar.core.llm.prompts import MODEL_INTERPRETATION_PROMPT
+
+# --- MODIFIED: Import from local prompts --- #
+# from ragstar.core.llm.prompts import MODEL_INTERPRETATION_PROMPT
+from .prompts import (
+    create_system_prompt,
+    create_initial_human_message,
+    # MODEL_INTERPRETATION_PROMPT,  # Remove import for removed workflow
+)
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.core.models import ModelTable  # For saving
 from ragstar.utils.cli_utils import get_config_value
+
+# --- NEW: Import prompt functions --- #
+# from .prompts import create_system_prompt, create_initial_human_message # Remove duplicate import
+
+# --- END NEW --- #
 
 logger = logging.getLogger(__name__)
 
@@ -590,41 +601,15 @@ class ModelInterpreter:
         if self.verbose:
             self.console.print(f"[dim]Workflow Thread ID: {thread_id}[/dim]")
 
-        # --- Create Initial Messages Here ---
-        system_prompt = """You are an expert dbt model interpreter. Your task is to analyze the SQL code for a target dbt model, recursively explore its upstream dependencies by fetching their raw SQL, and generate CONCISE documentation (as a structured object) suitable for dbt YAML files for the original target model.
-
-Process:
-1. **Analyze SQL:** Carefully analyze the provided SQL (from the initial Human message or subsequent Tool results for `get_models_raw_sql`) to understand its logic and identify ALL models referenced via `ref()`.
-2. **Check History:** Look back through the conversation history. Identify all models whose SQL has been successfully returned in `ToolMessage` results from the `get_models_raw_sql` tool. Also, remember the SQL for the target model (`{model_name}`) was provided initially.
-3. **Identify Needed SQL:** Determine which models referenced in the *most recently analyzed SQL* are NOT among those whose SQL you've already seen (from step 2).
-4. **Fetch Upstream SQL:** If there are unfetched referenced models needed for the analysis, use the `get_models_raw_sql` tool ONCE with a list of ALL such model names.
-5. **Recursive Analysis:** Analyze the newly fetched SQL (from the latest `ToolMessage`), identify further `ref()` calls, and repeat steps 2-4 until you have analyzed all necessary upstream SQL to fully understand the target model's data lineage and column derivations.
-6. **Synthesize Documentation:** Once your analysis is complete (meaning you've seen the SQL for the target and all recursive dependencies mentioned via `ref`), create the final documentation object for the *original target model* (`{model_name}`). Include:
-   - Accurate model name.
-   - A **brief, 1-2 sentence description** summarizing the model's purpose, suitable for a dbt `description:` field.
-   - A complete list of all output columns from the target model's final SELECT statement, with **concise descriptions** for each column, suitable for dbt column documentation.
-7. **Finish:** Call the `finish_interpretation` tool with the complete documentation object.
-
-**IMPORTANT:**
-- Generate **concise** descriptions. Avoid long paragraphs.
-- Use `get_models_raw_sql` only when needed, requesting all necessary SQL in a single batch per turn based on your analysis of the *latest* SQL and conversation history.
-- Do not re-request SQL for models already provided in previous `ToolMessage` results.
-- Only call `finish_interpretation` when you are certain you have analyzed the SQL for the target model and *all* its upstream dependencies referenced directly or indirectly via `ref()`.
-- Ensure the final output to `finish_interpretation` is a structured object with 'name', 'description', and 'columns' (each column having 'name' and 'description')."""
-
-        initial_prompt = f"""Please interpret the dbt model '{model_name}'. Its raw SQL is:
-
-```sql
-{raw_sql}
-```
-
-Follow the interpretation process outlined in the system message. Start by analyzing this initial SQL."""
-
-        initial_system_message = SystemMessage(
-            content=system_prompt.format(model_name=model_name)
+        # --- Create Initial Messages Here using imported functions --- #
+        system_prompt_text = create_system_prompt(model_name=model_name)
+        initial_human_message_text = create_initial_human_message(
+            model_name=model_name, raw_sql=raw_sql
         )
-        initial_human_message = HumanMessage(content=initial_prompt)
-        # --- End Initial Message Creation ---
+
+        initial_system_message = SystemMessage(content=system_prompt_text)
+        initial_human_message = HumanMessage(content=initial_human_message_text)
+        # --- End Initial Message Creation --- #
 
         # Define the initial state dictionary, including messages directly
         initial_state = InterpretationState(
@@ -700,82 +685,6 @@ Follow the interpretation process outlined in the system message. Start by analy
                 "messages": error_state.get(
                     "messages", []
                 ),  # Include messages on error
-            }
-
-    def interpret_model_workflow(self, model_name: str) -> Dict[str, Any]:
-        """
-        Simpler workflow mode: fetch raw SQL of target model and all upstream models,
-        then call LLM once to generate documentation as YAML and parse it.
-        """
-        # Fetch target model
-        model = self.model_storage.get_model(model_name)
-        if not model:
-            return {
-                "model_name": model_name,
-                "documentation": None,
-                "success": False,
-                "error": f"Model {model_name} not found in storage.",
-            }
-        raw_sql = model.raw_sql
-        if not raw_sql:
-            return {
-                "model_name": model_name,
-                "documentation": None,
-                "success": False,
-                "error": f"No raw SQL for model {model_name}.",
-            }
-        # Build upstream information by raw SQL
-        upstream_models = model.all_upstream_models or []
-        upstream_info = ""
-        for name in upstream_models:
-            m = self.model_storage.get_model(name)
-            if m and m.raw_sql:
-                upstream_info += (
-                    f"\nModel Name: {name}\n\nSQL Code:\n```sql\n{m.raw_sql}\n```\n"
-                )
-            else:
-                upstream_info += f"\nModel Name: {name}\n\nSQL Code: [Error: raw SQL not found for model '{name}']\n"
-        # Format prompt using existing template
-        prompt = MODEL_INTERPRETATION_PROMPT.format(
-            model_name=model_name,
-            model_sql=raw_sql,
-            upstream_info=upstream_info or "None",
-        )
-        if self.verbose:
-            self.console.print(
-                f"[dim]Workflow mode prompt for {model_name}:\n{prompt}[/dim]"
-            )
-        try:
-            # Call LLM once
-            response = self.llm.get_completion(prompt=prompt)
-            # Strip YAML code fences if present to avoid yaml scanning errors
-            cleaned = re.sub(r"^```[^\n]*\n", "", response)
-            cleaned = re.sub(r"\n```[^\n]*$", "", cleaned)
-            cleaned = cleaned.strip()
-            parsed = yaml.safe_load(cleaned)
-            models_list = parsed.get("models") if isinstance(parsed, dict) else None
-            if isinstance(models_list, list) and models_list:
-                documentation = models_list[0]
-                return {
-                    "model_name": model_name,
-                    "documentation": documentation,
-                    "success": True,
-                    "raw_response": response,
-                }
-            else:
-                return {
-                    "model_name": model_name,
-                    "documentation": None,
-                    "success": False,
-                    "error": "Failed to parse LLM response into documentation",
-                    "raw_response": response,
-                }
-        except Exception as e:
-            return {
-                "model_name": model_name,
-                "documentation": None,
-                "success": False,
-                "error": str(e),
             }
 
     def save_interpreted_documentation(
