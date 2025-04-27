@@ -1,5 +1,6 @@
 import logging
 import uuid
+import tiktoken
 from typing import Dict, List, Any, Optional, Set, TypedDict
 from typing_extensions import Annotated
 
@@ -23,7 +24,7 @@ from rich.console import Console
 
 # RAGstar Imports
 from ragstar.core.agents import QuestionAnswerer
-from ragstar.core.llm.client import LLMClient
+from ragstar.core.llm.client import LLMClient, TokenUsageLogger
 from ragstar.utils.cli_utils import get_config_value
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
@@ -143,6 +144,7 @@ class SlackResponderState(TypedDict):
     response_message_ts: Optional[str] = (
         None  # Timestamp of the final message posted by this agent
     )
+    response_file_message_ts: Optional[str] = None  # <<< RENAME state field
     qa_similar_original_messages: Optional[
         List[Dict[str, Any]]
     ]  # Context QA used (from QA state)
@@ -377,6 +379,12 @@ class SlackResponder:
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: post_text_response(channel_id='{channel_id}', thread_ts='{thread_ts}', text='{message_text[:50]}...')[/bold magenta]"
                 )
+
+            # --- ADD FOOTNOTE --- #
+            footnote = "\n\n_💡 React with 👍 or 👎 to this message to provide feedback. Mention me again to continue the conversation._"
+            full_message_text = message_text + footnote
+            # --- END ADD FOOTNOTE --- #
+
             try:
                 import asyncio
 
@@ -384,7 +392,7 @@ class SlackResponder:
                     return await self.slack_client.chat_postMessage(
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=message_text,  # Simple text message
+                        text=full_message_text,  # Use modified text
                     )
 
                 result = asyncio.run(_post_text())
@@ -466,8 +474,10 @@ class SlackResponder:
                         "success": False,
                         "error": f"QuestionAnswerer failed: {error_content}",
                         "final_answer": qa_result_dict.get("final_answer"),
-                        "models": qa_result_dict.get("searched_models", []),
-                        "feedback": qa_result_dict.get("relevant_feedback", []),
+                        "searched_models": qa_result_dict.get("searched_models", []),
+                        "relevant_feedback": qa_result_dict.get(
+                            "relevant_feedback", []
+                        ),
                         "similar_original_messages": qa_result_dict.get(
                             "similar_original_messages", []
                         ),
@@ -477,8 +487,10 @@ class SlackResponder:
                     return {
                         "success": True,
                         "final_answer": qa_result_dict.get("final_answer"),
-                        "models": qa_result_dict.get("searched_models", []),
-                        "feedback": qa_result_dict.get("relevant_feedback", []),
+                        "searched_models": qa_result_dict.get("searched_models", []),
+                        "relevant_feedback": qa_result_dict.get(
+                            "relevant_feedback", []
+                        ),
                         "similar_original_messages": qa_result_dict.get(
                             "similar_original_messages", []
                         ),
@@ -513,25 +525,27 @@ class SlackResponder:
                 self.console.print(
                     f"[bold magenta]🛠️ Executing Tool: post_final_response_with_snippet(channel_id='{channel_id}', thread_ts='{thread_ts}', message='{message_text[:50]}...', notes='{str(optional_notes)[:50]}...')",
                 )
+
+            # --- ADD FOOTNOTE --- #
+            footnote = "\n\n_💡 React with 👍 or 👎 to this message or the snippet to provide feedback. Mention me again to continue the conversation._"
+            full_message_body = message_text
+            if optional_notes:
+                full_message_body += f"\n\n*Notes:*\n{optional_notes}"
+            # Append footnote to the text message itself.
+            # Note: We could try adding it to the file's initial_comment, but it might not render well or be as visible.
+            full_message_body += footnote
+            # --- END ADD FOOTNOTE --- #
+
             try:
                 import asyncio
 
                 async def _upload_and_post():
-                    # 1. Post the main message referencing the snippet-to-be-uploaded
-                    full_message = message_text
-                    if optional_notes:
-                        full_message += f"\n\n*Notes:*\n{optional_notes}"
-
+                    # 1. Post the main message.
                     post_result = await self.slack_client.chat_postMessage(
                         channel=channel_id,
                         thread_ts=thread_ts,
-                        text=full_message,
-                        blocks=[
-                            {
-                                "type": "section",
-                                "text": {"type": "mrkdwn", "text": full_message},
-                            }
-                        ],
+                        text=full_message_body,  # Use text with footnote
+                        # No complex blocks needed here now
                         unfurl_links=False,
                         unfurl_media=False,
                     )
@@ -545,38 +559,67 @@ class SlackResponder:
                             "details": {"slack_error": post_result.get("error")},
                         }
 
+                    message_ts = post_result.get("ts")  # Get the message timestamp
+
                     # 2. Upload the SQL query as a snippet *after* the message
+                    # Use files_upload_v2 which returns more details
                     upload_result = await self.slack_client.files_upload_v2(
                         channel=channel_id,
                         content=sql_query,
-                        # filetype="sql", # Removed unsupported parameter
                         title="Generated SQL Query",
                         filename="generated_query.sql",
-                        # initial_comment=f"SQL query for thread {thread_ts}", # Removed as comment is in message above
                         thread_ts=thread_ts,  # Keep in the same thread
+                        # initial_comment="Here is the generated SQL query:", # Optional initial comment for the file
                     )
 
-                    # files_upload_v2 returns a different structure, check 'ok' directly
-                    if not upload_result or not upload_result.get(
-                        "ok"
-                    ):  # Check 'ok' in the response dict
-                        # Note: The message was already posted successfully at this point.
-                        # We might want to indicate partial success or post a follow-up error.
-                        # For now, report the upload failure.
-                        error_msg = f"Message posted, but Slack API error uploading snippet (files.upload_v2): {upload_result.get('error', 'Unknown upload error')}"
+                    if not upload_result or not upload_result.get("ok"):
+                        error_msg = f"Message posted (ts:{message_ts}), but Slack API error uploading snippet (files.upload_v2): {upload_result.get('error', 'Unknown upload error')}"
                         logger.error(error_msg)
-                        # Return failure despite message success, as snippet failed.
+                        # Return failure, but include the message_ts for potential partial logging
                         return {
                             "success": False,
                             "error": error_msg,
+                            "message_ts": message_ts,  # Include ts even on failure
                             "details": {"slack_error": upload_result.get("error")},
                         }
 
-                    # If both message post and snippet upload succeed
+                    # --- EXTRACT FILE'S MESSAGE TIMESTAMP --- #
+                    file_message_ts = None
+                    uploaded_file_info = upload_result.get("file")
+                    if uploaded_file_info:
+                        # The `shares` dict contains info about where the file is shared.
+                        # We expect it to be shared in the specified channel/thread.
+                        shares = uploaded_file_info.get("shares", {})
+                        # Look through public shares first (adjust if using private channels differently)
+                        public_shares = shares.get("public", {})
+                        if channel_id in public_shares:
+                            # Each share is a list of message objects where it was shared
+                            share_messages = public_shares[channel_id]
+                            if share_messages:
+                                # Find the share matching our thread_ts
+                                for share in share_messages:
+                                    if share.get("thread_ts") == thread_ts or (
+                                        not share.get("thread_ts") and not thread_ts
+                                    ):
+                                        # Found the message where this file was posted in our thread
+                                        file_message_ts = share.get("ts")
+                                        break  # Stop looking once found
+                        if not file_message_ts:
+                            logger.warning(
+                                f"Could not find matching share message ts for file {uploaded_file_info.get('id')} in channel {channel_id} thread {thread_ts}. Shares: {shares}"
+                            )
+                    else:
+                        logger.warning(
+                            f"files_upload_v2 response missing 'file' object. Response: {upload_result}"
+                        )
+                    # --- END EXTRACT FILE'S MESSAGE TIMESTAMP --- #
+
+                    # Return success with both message timestamps
                     return {
                         "success": True,
                         "message": "Successfully posted response and uploaded snippet.",
-                        "message_ts": post_result.get("ts"),
+                        "message_ts": message_ts,  # TS of the text message
+                        "file_message_ts": file_message_ts,  # TS of the file upload message
                     }
 
                 result = asyncio.run(_upload_and_post())
@@ -682,6 +725,7 @@ class SlackResponder:
     def _get_agent_llm(self):
         """Helper to get the LLM with tools bound."""
         chat_client_instance = self.llm.chat_client
+        # Restore the use of bind_tools
         if hasattr(chat_client_instance, "bind_tools"):
             return chat_client_instance.bind_tools(self._tools)
         else:
@@ -798,12 +842,11 @@ class SlackResponder:
             )
             # --- END MODIFIED ---
 
-            # Use the most recent messages plus the new system prompt
-            # Taking last ~4 messages for context + the system prompt should be enough
-            relevant_history = messages[-4:] if len(messages) > 4 else messages
-            messages_for_llm = relevant_history + [
-                SystemMessage(content=verification_system_prompt)
-            ]
+            # --- MODIFIED: Send only the verification prompt for the final step ---
+            # The verification prompt contains the QA answer and original context needed.
+            # Avoids sending previous tool messages which can cause structure errors (400 Bad Request).
+            messages_for_llm = [SystemMessage(content=verification_system_prompt)]
+            # --- END MODIFIED ---
 
             if self.verbose:
                 self.console.print(
@@ -830,54 +873,66 @@ class SlackResponder:
             ):
                 messages_for_llm.append(SystemMessage(content=guidance))
 
-        # --- LLM Invocation (Common for all paths) ---
-        agent_llm = self._get_agent_llm()
-        if self.verbose:
-            self.console.print(
-                f"[blue dim]Sending {len(messages_for_llm)} messages to LLM...[/blue dim]"
-            )
-            # --- NEW: Log messages being sent --- #
-            self.console.print("[dim]Message structure *before* sending to LLM:[/dim]")
-            for i, msg in enumerate(messages_for_llm):
-                msg_type = type(msg).__name__
-                content_preview = repr(msg.content)[:70] + (
-                    "..." if len(repr(msg.content)) > 70 else ""
-                )
-                if isinstance(msg, AIMessage):
-                    if msg.tool_calls:
-                        tool_call_count = len(msg.tool_calls)
-                        self.console.print(
-                            f"[dim]  [{i}] {msg_type} (requesting {tool_call_count} tool call{'s' if tool_call_count > 1 else ''}): {content_preview}[/dim]"
-                        )
-                        for tc in msg.tool_calls:
-                            tc_name = tc.get("name", "N/A")
-                            tc_args = tc.get("args", {})
-                            self.console.print(
-                                f"[dim]      - Tool Call: {tc_name}, Args: {tc_args}[/dim]"
-                            )
-                    else:
-                        self.console.print(
-                            f"[dim]  [{i}] {msg_type}: {content_preview}[/dim]"
-                        )
-                elif isinstance(msg, ToolMessage):
-                    tool_call_info = f" for tool_call_id: {msg.tool_call_id[:8]}..."
-                    self.console.print(
-                        f"[dim]  [{i}] {msg_type}{tool_call_info}: {content_preview}[/dim]"
-                    )
-                else:  # Handle other message types
-                    self.console.print(
-                        f"[dim]  [{i}] {msg_type}: {content_preview}[/dim]"
-                    )
-            # --- END NEW Logging Block --- #
-
+        # --- MODIFIED: Token Count Logging Before Request ---
         try:
-            response = agent_llm.invoke(messages_for_llm)
+            # Assuming o4-mini uses cl100k_base encoding like gpt-4/gpt-3.5
+            # Use the model name configured in LLMClient if available and different
+            encoding = tiktoken.get_encoding("cl100k_base")
+
+            # Estimate tokens based on message content length (simple method)
+            # A more accurate method would replicate OpenAI's exact chat format rules
+            num_tokens = 0
+            messages_for_token_count = []
+            for message in messages_for_llm:
+                # Basic token counting per message content
+                if isinstance(message.content, str):
+                    num_tokens += len(encoding.encode(message.content))
+                    messages_for_token_count.append(
+                        {"role": message.type, "content": message.content}
+                    )  # For potential future more accurate counting
+                elif isinstance(
+                    message.content, list
+                ):  # Handle list content (e.g. vision models, though not used here)
+                    for item in message.content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            num_tokens += len(encoding.encode(item.get("text", "")))
+                # Add buffer for message roles, etc.
+                num_tokens += 5  # Rough estimate per message overhead
+
+            logger.info(
+                f"Estimated tokens to be sent to LLM: {num_tokens}",
+                extra={"token_count": num_tokens},
+            )
             if self.verbose:
                 self.console.print(
-                    f"[dim]LLM Response: {response.content[:100]}...[/dim]"
+                    f"[cyan dim] -> Estimated prompt tokens: {num_tokens}[/cyan dim]"
                 )
-                if hasattr(response, "tool_calls") and response.tool_calls:
-                    self.console.print(f"[dim]Tool calls: {response.tool_calls}[/dim]")
+
+        except Exception as tk_err:
+            logger.warning(
+                f"Could not estimate token count before LLM call: {tk_err}",
+                exc_info=self.verbose,
+            )
+        # --- END ADDED ---
+
+        # --- MODIFIED: LLM Invocation with Callback (Tools are now bound) --- #
+        agent_llm = self._get_agent_llm()  # Gets the client with tools bound
+        token_logger = TokenUsageLogger()  # Instantiate the callback
+        config = {
+            "callbacks": [token_logger],
+            "run_name": "SlackResponderAgentNode",  # Optional: Add a run name for tracing
+        }
+
+        if self.verbose:
+            # ... (logging before call) ...
+            pass
+
+        try:
+            # Remove tools=self._tools from invoke, as they are bound via _get_agent_llm
+            response = agent_llm.invoke(messages_for_llm, config=config)
+            if self.verbose:
+                # ... (logging after call) ...
+                pass
             # Clear error message state if LLM runs successfully
             return {"messages": [response], "error_message": None}
         except Exception as e:
@@ -888,6 +943,7 @@ class SlackResponder:
                 "messages": [error_message],
                 "error_message": f"LLM invocation failed: {str(e)}",
             }
+        # --- END MODIFIED --- #
 
     def update_state_node(self, state: SlackResponderState) -> Dict[str, Any]:
         """Updates the state based on the results of the most recent tool call.
@@ -1008,7 +1064,9 @@ class SlackResponder:
                         # --- Store text answer and context ---
                         updates["qa_final_answer"] = parsed_content.get("final_answer")
                         updates["qa_models"] = parsed_content.get("searched_models", [])
-                        updates["qa_feedback"] = parsed_content.get("feedback", {})
+                        updates["qa_feedback"] = parsed_content.get(
+                            "relevant_feedback", {}
+                        )
                         updates["qa_similar_original_messages"] = parsed_content.get(
                             "similar_original_messages", []
                         )
@@ -1049,7 +1107,7 @@ class SlackResponder:
                             "searched_models"
                         )  # Allow None
                         updates["qa_feedback"] = parsed_content.get(
-                            "feedback"
+                            "relevant_feedback"
                         )  # Allow None
                         updates["qa_similar_original_messages"] = parsed_content.get(
                             "similar_original_messages"
@@ -1076,6 +1134,9 @@ class SlackResponder:
                         updates["response_message_ts"] = parsed_content.get(
                             "message_ts"
                         )
+                        updates["response_file_message_ts"] = parsed_content.get(
+                            "file_message_ts"
+                        )  # <<< Store file_message_ts
                         updates["error_message"] = None
                         if self.verbose:
                             self.console.print(
@@ -1087,16 +1148,26 @@ class SlackResponder:
                             "error",
                             "post_final_response_with_snippet failed without specific error.",
                         )
-                        updates["response_sent"] = False
+                        updates["response_sent"] = (
+                            False  # Ensure response_sent is False on error
+                        )
                         if self.verbose:
                             self.console.print(
                                 f"[yellow] -> Setting error state from post_final_response_with_snippet: {updates['error_message']}[/yellow]"
                             )
+                        # Keep message_ts if available, clear file message ts on failure
+                        updates["response_message_ts"] = parsed_content.get(
+                            "message_ts"
+                        )  # Keep message_ts if available
+                        updates["response_file_message_ts"] = (
+                            None  # <<< Clear file message ts on failure
+                        )
                 else:
                     error_msg = f"post_final_response_with_snippet tool returned unexpected content format: {type(parsed_content).__name__}"
                     logger.warning(f"{error_msg}. Content: {parsed_content}")
                     updates["error_message"] = error_msg
                     updates["response_sent"] = False
+            # --- END NEW HANDLER ---
 
             # --- NEW: Handle simple text response tool ---
             elif tool_name == "post_text_response":
@@ -1319,6 +1390,9 @@ class SlackResponder:
             original_question = state.get("original_question")  # Use .get for safety
             original_message_ts = state["thread_ts"]
             response_message_ts = state.get("response_message_ts")
+            response_file_message_ts = state.get(
+                "response_file_message_ts"
+            )  # <<< Get file_message_ts from state
             # Ensure question_text_for_db has a fallback even if original_question is None
             question_text_for_db = original_question or ""
             answer_text = state.get("qa_final_answer")
@@ -1364,6 +1438,9 @@ class SlackResponder:
                     f"[dim]    Original Question TS: {original_message_ts}"
                 )
                 self.console.print(f"[dim]    Response TS: {response_message_ts}")
+                self.console.print(
+                    f"[dim]    Response File ID: {response_file_message_ts}"
+                )  # <<< Log file_message_ts
                 self.console.print(f"[dim]    Original Text: {original_q_safe}...")
                 self.console.print(
                     f"[dim]    Question Text for DB: {q_text_db_safe}..."
@@ -1378,6 +1455,7 @@ class SlackResponder:
                 or "",  # Ensure original_message_text is also string
                 original_message_ts=original_message_ts,
                 response_message_ts=response_message_ts,
+                response_file_message_ts=response_file_message_ts,  # <<< Pass file_message_ts
                 answer_text=answer_text or "",  # Ensure answer_text is also string
                 model_names=model_names,
                 metadata=metadata,
@@ -1434,6 +1512,7 @@ class SlackResponder:
             qa_similar_original_messages=None,  # Init new field
             error_message=None,
             response_message_ts=None,  # Init new field
+            response_file_message_ts=None,  # <<< Init renamed field
             response_sent=None,
         )
         # --- END MODIFIED ---

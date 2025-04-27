@@ -233,6 +233,7 @@ class QuestionTable(Base):
         nullable=True,
         comment="Embedding vector for the original message text using text-embedding-ada-002",
     )
+    response_file_message_ts = Column(String, nullable=True, index=True)
 
     # Define relationships - this would be customized based on your schema
     models_used = relationship(
@@ -266,6 +267,7 @@ class QuestionTable(Base):
             question_embedding=self.question_embedding,
             feedback_embedding=self.feedback_embedding,
             original_message_embedding=self.original_message_embedding,
+            response_file_message_ts=self.response_file_message_ts,
         )
 
 
@@ -715,6 +717,7 @@ class Question:
     question_embedding: Optional[List[float]] = None
     feedback_embedding: Optional[List[float]] = None
     original_message_embedding: Optional[List[float]] = None
+    response_file_message_ts: Optional[str] = None
 
     def to_orm(self) -> "QuestionTable":
         """Convert domain model to ORM model."""
@@ -732,6 +735,7 @@ class Question:
             question_embedding=self.question_embedding,
             feedback_embedding=self.feedback_embedding,
             original_message_embedding=self.original_message_embedding,
+            response_file_message_ts=self.response_file_message_ts,
             # created_at, updated_at are handled by DB defaults/onupdate
             # models_used relationship is handled separately via QuestionModelTable
         )
@@ -751,6 +755,7 @@ class Question:
             "original_message_text": self.original_message_text,
             "original_message_ts": self.original_message_ts,
             "response_message_ts": self.response_message_ts,
+            "response_file_message_ts": self.response_file_message_ts,
             # Embeddings are usually large and not needed for this serialization purpose
             # "question_embedding": self.question_embedding,
             # "feedback_embedding": self.feedback_embedding,

@@ -35,6 +35,7 @@ psycopg-pool = "^3.2.6"
 langgraph-checkpoint-postgres = "^2.0.19"
 aiohttp = "^3.11.16"
 psycopg2-binary = "^2.9.10"
+tiktoken = "^0.9.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^23.11.0"

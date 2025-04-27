@@ -90,6 +90,7 @@ class QuestionStorage:
         original_message_text: Optional[str] = None,
         original_message_ts: Optional[str] = None,
         response_message_ts: Optional[str] = None,
+        response_file_message_ts: Optional[str] = None,
         answer_text: Optional[str] = None,
         model_names: Optional[List[str]] = None,
         was_useful: Optional[bool] = None,
@@ -103,6 +104,7 @@ class QuestionStorage:
             original_message_text: The original verbatim text from the user's message.
             original_message_ts: The timestamp (ID) of the original user message.
             response_message_ts: The timestamp (ID) of the bot's final response message.
+            response_file_message_ts: The timestamp (ID) of the message containing the uploaded file snippet.
             answer_text: The text of the answer generated.
             model_names: Names of models used to answer the question.
             was_useful: Whether the answer was marked useful.
@@ -124,6 +126,7 @@ class QuestionStorage:
                 original_message_text=original_message_text,
                 original_message_ts=original_message_ts,
                 response_message_ts=response_message_ts,
+                response_file_message_ts=response_file_message_ts,
             )
 
             # Convert to ORM model
@@ -186,53 +189,63 @@ class QuestionStorage:
             session.close()
 
     def update_feedback(
-        self, question_id: int, was_useful: bool, feedback: Optional[str] = None
+        self,
+        item_identifier: str,
+        item_type: str,
+        was_useful: Optional[bool],
+        feedback_provider_user_id: str,
     ) -> bool:
-        """Update feedback for a question.
+        """Finds a question by its response message timestamp OR response file message timestamp and updates feedback.
 
         Args:
-            question_id: The ID of the question
-            was_useful: Whether the answer was useful
-            feedback: User feedback on the answer
+            item_identifier: The timestamp ('ts') of the Slack message reacted to.
+            item_type: Must be 'message' (identifies either the text response or the file upload message).
+            was_useful: True for positive feedback, False for negative, None to remove feedback.
+            feedback_provider_user_id: The Slack user ID of the user who provided the feedback.
 
         Returns:
-            Whether the update was successful
+            True if the corresponding question record was found and updated, False otherwise.
         """
         session = self.Session()
         try:
-            # Get question
-            question = (
-                session.query(QuestionTable)
-                .filter(QuestionTable.id == question_id)
-                .first()
-            )
-            if not question:
-                logger.warning(f"Question with ID {question_id} not found")
+            query = session.query(QuestionTable)
+
+            if item_type == "message":
+                # Find if the reaction timestamp matches either the text response OR the file response message timestamp
+                query = query.filter(
+                    sa.or_(
+                        QuestionTable.response_message_ts == item_identifier,
+                        QuestionTable.response_file_message_ts == item_identifier,
+                    )
+                )
+            # REMOVED: elif item_type == "file": block, as reactions now always come as 'message' type
+            else:
+                logger.warning(
+                    f"Invalid item_type '{item_type}' for feedback update. Expected 'message'."
+                )
                 return False
 
-            # Update feedback fields
-            question.was_useful = was_useful
-            if feedback:
-                question.feedback = feedback
-                # Generate and add feedback embedding if feedback text exists
-                feedback_embedding = self._get_embedding(feedback)
-                if feedback_embedding:
-                    question.feedback_embedding = feedback_embedding
-                else:
-                    logger.warning(
-                        f"Could not generate embedding for feedback update: {feedback[:50]}..."
-                    )
-            else:
-                # If feedback is being cleared, clear the embedding too
-                question.feedback_embedding = None
+            question = query.first()
 
-            # Commit changes
+            if not question:
+                logger.warning(
+                    f"No question found associated with message identifier: {item_identifier}"
+                )
+                return False
+
+            question.was_useful = was_useful
+
             session.commit()
-            logger.info(f"Updated feedback for question with ID {question_id}")
+            logger.info(
+                f"Updated feedback (was_useful={was_useful}) for question associated with message {item_identifier}"
+            )
             return True
         except Exception as e:
             session.rollback()
-            logger.error(f"Error updating feedback: {e}")
+            logger.error(
+                f"Error updating feedback by message {item_identifier}: {e}",
+                exc_info=True,
+            )
             return False
         finally:
             session.close()

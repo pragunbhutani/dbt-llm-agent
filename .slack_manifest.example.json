@@ -27,9 +27,11 @@
         "app_mentions:read",
         "chat:write",
         "chat:write.public",
+        "conversations:history",
         "channels:history",
         "files:read",
-        "files:write"
+        "files:write",
+        "reactions:read"
       ]
     }
   },
@@ -43,7 +45,12 @@
     "token_rotation_enabled": false,
     "event_subscriptions": {
       "request_url": "https://your-ragstar-api.com/slack/events",
-      "bot_events": ["app_mention", "message.im"]
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "reaction_added",
+        "reaction_removed"
+      ]
     }
   }
 }

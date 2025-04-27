@@ -24,7 +24,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from ragstar.storage.question_storage import QuestionStorage
 
-from ragstar.core.llm.client import LLMClient
+from ragstar.core.llm.client import LLMClient, TokenUsageLogger
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.core.models import DBTModel, ModelTable
@@ -696,7 +696,7 @@ class QuestionAnswerer:
     def _get_agent_llm(self):
         """Helper to get the LLM with tools bound."""
         chat_client_instance = self.llm.chat_client
-
+        # Restore the use of bind_tools
         if hasattr(chat_client_instance, "bind_tools"):
             return chat_client_instance.bind_tools(self._tools)
         else:
@@ -906,10 +906,16 @@ class QuestionAnswerer:
                         f"[dim]  [{i}] {msg_type}: {content_preview}[/dim]"
                     )
 
-        # Invoke the agent LLM
-        agent_llm = self._get_agent_llm()
+        # --- MODIFIED: LLM Invocation with Callback (Tools are now bound) --- #
+        agent_llm = self._get_agent_llm()  # Gets the client with tools bound
+        token_logger = TokenUsageLogger()  # Instantiate the callback
+        config = {
+            "callbacks": [token_logger],
+            "run_name": "QuestionAnswererAgentNode",  # Optional: Add a run name for tracing
+        }
         try:
-            response = agent_llm.invoke(messages_for_llm)
+            # Remove tools=self._tools from invoke, as they are bound via _get_agent_llm
+            response = agent_llm.invoke(messages_for_llm, config=config)
             if self.verbose:
                 self.console.print(
                     f"[green]Agent Response:[/green] {response.content[:100]}..."
@@ -921,11 +927,9 @@ class QuestionAnswerer:
             return {"messages": [response]}
         except Exception as e:
             logger.error(f"Error invoking agent LLM: {e}", exc_info=self.verbose)
-            # Return an error message to be added to the state
-            error_message = AIMessage(
-                content=f"LLM invocation failed: {str(e)}"
-            )  # Changed to AIMessage
+            error_message = AIMessage(content=f"LLM invocation failed: {str(e)}")
             return {"messages": [error_message]}
+        # --- END MODIFIED --- #
 
     def update_state_node(self, state: QuestionAnsweringState) -> Dict[str, Any]:
         """Updates the state based on the results of the most recent tool calls.
