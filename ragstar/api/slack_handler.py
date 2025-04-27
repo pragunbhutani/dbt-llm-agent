@@ -9,7 +9,7 @@ from ragstar.core.llm.client import LLMClient
 from ragstar.storage.model_storage import ModelStorage
 from ragstar.storage.model_embedding_storage import ModelEmbeddingStorage
 from ragstar.storage.question_storage import QuestionStorage
-from ragstar.core.agents.slack_responder import SlackResponder
+from ragstar.core.agents import SlackResponder
 from ragstar.utils.cli_utils import get_config_value
 from ragstar.utils.logging import setup_logging
 from ragstar.utils.slack import get_async_slack_client
@@ -17,6 +17,7 @@ from ragstar.utils.slack import get_async_slack_client
 # Import Slack Bolt components
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
+from slack_sdk.errors import SlackApiError  # <<< ADD THIS IMPORT
 
 # Setup logging
 setup_logging()
@@ -166,6 +167,216 @@ async def startup_event():
 
         # Attach handler (defined outside) to the globally defined bolt_app
         bolt_app.event("app_mention")(handle_app_mention)
+
+        # --- NEW: Handle reaction_added event for feedback --- #
+        @bolt_app.event("reaction_added")
+        async def handle_reaction_added(event, client, ack):
+            """Handles emoji reactions to capture feedback."""
+            await ack()
+            logger.info(f"Received reaction_added event: {event}")
+
+            reaction = event.get("reaction")
+            user_id = event.get("user")  # User who reacted
+            item_user_id = event.get("item_user")  # User whose message was reacted to
+            item_details = event.get("item", {})
+            item_type = item_details.get("type")
+            # channel_id = item_details.get("channel") # No longer needed for history lookup
+
+            # --- DETERMINE BOT USER ID ---
+            bot_user_id = None
+            try:
+                auth_test_res = await client.auth_test()
+                bot_user_id = auth_test_res.get("user_id")
+            except Exception as e:
+                logger.error(f"Error getting bot user ID for reaction check: {e}")
+                return  # Can't proceed without bot ID
+
+            # --- CHECK IF REACTION IS ON BOT'S ITEM ---
+            if item_user_id != bot_user_id:
+                logger.debug(
+                    f"Ignoring reaction to non-bot item (item_user: {item_user_id}, bot_user: {bot_user_id})"
+                )
+                return
+
+            # --- DETERMINE ITEM IDENTIFIER & TYPE FOR DB (Simplified) ---
+            item_identifier = None
+            item_type_for_db = (
+                None  # The type ('message' or 'file') to use for DB lookup
+            )
+
+            if item_type == "message":
+                item_identifier = item_details.get("ts")
+                if item_identifier:
+                    item_type_for_db = "message"
+                    logger.info(
+                        f"Reaction on message item. Using ts: {item_identifier}"
+                    )
+                else:
+                    logger.warning(
+                        f"Missing 'ts' in item details for message reaction: {event}"
+                    )
+                    return
+            elif item_type == "file":
+                item_identifier = item_details.get("file_id")
+                if item_identifier:
+                    item_type_for_db = "file"
+                    logger.info(
+                        f"Reaction on file item. Using file_id: {item_identifier}"
+                    )
+                else:
+                    logger.warning(
+                        f"Missing 'file_id' in item details for file reaction: {event}"
+                    )
+                    return
+            else:
+                logger.debug(f"Ignoring reaction to unsupported item type: {item_type}")
+                return
+
+            # --- END DETERMINE ITEM IDENTIFIER & TYPE ---
+
+            # Map reaction to feedback
+            was_useful = None
+            if reaction == "+1" or reaction == "thumbsup":  # Common positive reactions
+                was_useful = True
+            elif (
+                reaction == "-1" or reaction == "thumbsdown"
+            ):  # Common negative reactions
+                was_useful = False
+            else:
+                # Ignore other reactions
+                logger.debug(f"Ignoring non-feedback reaction: {reaction}")
+                return
+
+            if not question_storage:
+                logger.error("QuestionStorage not initialized. Cannot record feedback.")
+                return
+
+            # Run the database update in a separate thread
+            try:
+                # Note: update_feedback runs synchronously
+                success = await asyncio.to_thread(
+                    question_storage.update_feedback,
+                    item_identifier=item_identifier,  # Use determined identifier
+                    item_type=item_type_for_db,  # Use determined type ('message' or 'file')
+                    was_useful=was_useful,
+                    feedback_provider_user_id=user_id,
+                )
+                if success:
+                    logger.info(
+                        f"Successfully recorded feedback ({reaction} -> was_useful={was_useful}) for {item_type_for_db} {item_identifier} from user {user_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to record feedback for {item_type_for_db} {item_identifier} (record not found or DB error)"
+                    )
+            except Exception as e:
+                logger.error(f"Error calling update_feedback: {e}", exc_info=True)
+
+        # --- END NEW HANDLER --- #
+
+        # --- NEW: Handle reaction_removed event to unset feedback --- #
+        @bolt_app.event("reaction_removed")
+        async def handle_reaction_removed(event, client, ack):
+            """Handles removal of emoji reactions to unset feedback."""
+            await ack()
+            logger.info(f"Received reaction_removed event: {event}")
+
+            reaction = event.get("reaction")
+            user_id = event.get("user")  # User who removed the reaction
+            item_user_id = event.get("item_user")  # User whose message had the reaction
+            item_details = event.get("item", {})
+            item_type = item_details.get("type")
+            # channel_id = item_details.get("channel") # No longer needed for history lookup
+
+            # --- DETERMINE BOT USER ID ---
+            bot_user_id = None
+            try:
+                auth_test_res = await client.auth_test()
+                bot_user_id = auth_test_res.get("user_id")
+            except Exception as e:
+                logger.error(
+                    f"Error getting bot user ID for reaction removal check: {e}"
+                )
+                return
+
+            # --- CHECK IF REACTION IS ON BOT'S ITEM ---
+            if item_user_id != bot_user_id:
+                logger.debug(
+                    f"Ignoring reaction removal from non-bot item (item_user: {item_user_id}, bot_user: {bot_user_id})"
+                )
+                return
+
+            # --- DETERMINE ITEM IDENTIFIER & TYPE FOR DB (Simplified) ---
+            item_identifier = None
+            item_type_for_db = (
+                None  # The type ('message' or 'file') to use for DB lookup
+            )
+
+            if item_type == "message":
+                item_identifier = item_details.get("ts")
+                if item_identifier:
+                    item_type_for_db = "message"
+                    logger.info(
+                        f"Reaction removal on message item. Using ts: {item_identifier}"
+                    )
+                else:
+                    logger.warning(
+                        f"Missing 'ts' in item details for message reaction removal: {event}"
+                    )
+                    return
+            elif item_type == "file":
+                item_identifier = item_details.get("file_id")
+                if item_identifier:
+                    item_type_for_db = "file"
+                    logger.info(
+                        f"Reaction removal on file item. Using file_id: {item_identifier}"
+                    )
+                else:
+                    logger.warning(
+                        f"Missing 'file_id' in item details for file reaction removal: {event}"
+                    )
+                    return
+            else:
+                logger.debug(
+                    f"Ignoring reaction removal from unsupported item type: {item_type}"
+                )
+                return
+
+            # --- END DETERMINE ITEM IDENTIFIER & TYPE ---
+
+            # Check if the removed reaction was a feedback emoji
+            if reaction not in ["+1", "thumbsup", "-1", "thumbsdown"]:
+                logger.debug(f"Ignoring removal of non-feedback reaction: {reaction}")
+                return
+
+            if not question_storage:
+                logger.error("QuestionStorage not initialized. Cannot remove feedback.")
+                return
+
+            # Run the database update in a separate thread to remove feedback (set was_useful=None)
+            try:
+                success = await asyncio.to_thread(
+                    question_storage.update_feedback,
+                    item_identifier=item_identifier,  # Use determined identifier
+                    item_type=item_type_for_db,  # Use determined type ('message' or 'file')
+                    was_useful=None,  # Set was_useful to None to remove feedback
+                    feedback_provider_user_id=user_id,  # Still log who removed it
+                )
+                if success:
+                    logger.info(
+                        f"Successfully removed feedback (reaction: {reaction}) for {item_type_for_db} {item_identifier} based on removal by user {user_id}"
+                    )
+                else:
+                    logger.warning(
+                        f"Failed to remove feedback for {item_type_for_db} {item_identifier} (record not found or DB error)"
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Error calling update_feedback for removal: {e}", exc_info=True
+                )
+
+        # --- END NEW HANDLER --- #
+
         # Add other handlers here if needed
         # bolt_app.message("keyword")(handle_keyword_message)
 

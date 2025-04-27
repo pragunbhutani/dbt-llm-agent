@@ -308,7 +308,7 @@ class ModelEmbeddingStorage:
             # Get embedding dimension
             embedding_dim = len(query_embedding)
 
-            # Build query with explicit cast
+            # Build base query
             db_query = session.query(
                 ModelEmbeddingTable,
                 sa.func.cosine_distance(
@@ -317,7 +317,9 @@ class ModelEmbeddingStorage:
                         query_embedding, Vector(embedding_dim)
                     ),  # Cast to Vector with dimension
                 ).label("distance"),
-            )
+            ).filter(
+                ModelEmbeddingTable.can_be_used_for_answers == True
+            )  # Filter by answer usability
 
             # Apply metadata filter if provided
             if filter_metadata:
@@ -395,3 +397,58 @@ class ModelEmbeddingStorage:
             self.store_model_embedding(
                 model_name=model_name, model_text=model_text, metadata=metadata
             )
+
+    # --- NEW METHOD ---
+    def get_answerable_model_names(self) -> List[str]:
+        """Get the names of all models marked as usable for answering questions.
+
+        Returns:
+            A list of model names.
+        """
+        session = self.Session()
+        try:
+            results = (
+                session.query(ModelEmbeddingTable.model_name)
+                .filter(ModelEmbeddingTable.can_be_used_for_answers == True)
+                .order_by(ModelEmbeddingTable.model_name)
+                .all()
+            )
+            # Results is a list of tuples, e.g., [('model_a',), ('model_b',)]
+            return [name for (name,) in results]
+        except Exception as e:
+            logger.error(f"Error retrieving answerable model names: {e}", exc_info=True)
+            return []  # Return empty list on error
+        finally:
+            session.close()
+
+    # --- END NEW METHOD ---
+
+    def is_model_usable_for_answers(self, model_name: str) -> bool:
+        """Check if a model is marked as usable for answering questions.
+
+        Args:
+            model_name: The name of the model
+
+        Returns:
+            Whether the model is usable for answering questions
+        """
+        session = self.Session()
+        try:
+            # Check if model exists and is marked as usable for answers
+            usable = (
+                session.query(ModelEmbeddingTable)
+                .filter(
+                    ModelEmbeddingTable.model_name == model_name,
+                    ModelEmbeddingTable.can_be_used_for_answers == True,
+                )
+                .first()
+                is not None
+            )
+            return usable
+        except Exception as e:
+            logger.error(
+                f"Error checking if model {model_name} is usable for answers: {e}"
+            )
+            return False
+        finally:
+            session.close()

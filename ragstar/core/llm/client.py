@@ -2,15 +2,62 @@
 
 import os
 import logging
+import tiktoken  # Added import
 from typing import List, Dict, Any, Optional, Union
 
 from openai import OpenAI
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-from langchain.schema import SystemMessage, HumanMessage
+from langchain.schema import SystemMessage, HumanMessage, LLMResult
+from langchain.callbacks.base import BaseCallbackHandler
 
 from ragstar.utils.config import get_config_value
 
 logger = logging.getLogger(__name__)
+
+
+# Added: Function to estimate tokens (using cl100k_base as a general default)
+# TODO: Consider making encoding model-specific if needed
+def count_tokens(text: str, model_name: str = "gpt-4") -> int:
+    """Returns the number of tokens in a text string using tiktoken."""
+    try:
+        # Using cl100k_base encoding as it's common for GPT-4, GPT-3.5, embeddings
+        encoding = tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        # Fallback or handle error if encoding not found
+        logger.warning(
+            "Tiktoken cl100k_base encoding not found. Falling back to basic split."
+        )
+        return len(text.split())  # Basic fallback
+
+    num_tokens = len(encoding.encode(text))
+    return num_tokens
+
+
+# --- NEW: Callback Handler for Token Logging --- #
+class TokenUsageLogger(BaseCallbackHandler):
+    """Callback Handler that logs token usage from LLM calls."""
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        """Log token usage when an LLM call ends."""
+        # OpenAI specific token usage is usually in llm_output
+        if response.llm_output is not None and "token_usage" in response.llm_output:
+            token_usage = response.llm_output["token_usage"]
+            prompt_tokens = token_usage.get("prompt_tokens", 0)
+            completion_tokens = token_usage.get("completion_tokens", 0)
+            total_tokens = token_usage.get("total_tokens", 0)
+            # Get model name if available (might be nested differently depending on LLM)
+            model_name = response.llm_output.get("model_name", "unknown")
+
+            logger.info(
+                f"LLM Call ({model_name}) Usage: "
+                f"Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}"
+            )
+        else:
+            # Fallback or log that usage info wasn't found
+            logger.info("LLM Call Usage: Token usage data not found in response.")
+
+
+# --- End Callback Handler --- #
 
 
 class LLMClient:
@@ -128,6 +175,32 @@ class LLMClient:
                     max_tokens=max_tokens,
                 )
             response = chat_client_instance.invoke(messages)
+
+            # Added: Log token usage from response metadata
+            prompt_tokens = 0
+            completion_tokens = 0
+            total_tokens = 0
+            if (
+                hasattr(response, "response_metadata")
+                and "token_usage" in response.response_metadata
+            ):
+                token_usage = response.response_metadata["token_usage"]
+                prompt_tokens = token_usage.get("prompt_tokens", 0)
+                completion_tokens = token_usage.get("completion_tokens", 0)
+                total_tokens = token_usage.get("total_tokens", 0)
+                logger.info(
+                    f"LLM Call ({self.model}) Usage: "
+                    f"Prompt={prompt_tokens}, Completion={completion_tokens}, Total={total_tokens}"
+                )
+            else:
+                # Fallback: Estimate prompt tokens if metadata is unavailable
+                full_prompt_text = "\n".join([m.content for m in messages])
+                prompt_token_count = count_tokens(full_prompt_text, self.model)
+                logger.info(
+                    f"LLM Call ({self.model}) Usage: "
+                    f"Prompt Estimate={prompt_token_count} (Response metadata unavailable)"
+                )
+            # End Added
 
             # Response is usually an AIMessage with content attribute
             return response.content

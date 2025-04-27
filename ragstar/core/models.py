@@ -225,33 +225,49 @@ class QuestionTable(Base):
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+    original_message_text = Column(Text, nullable=True)
+    original_message_ts = Column(String, nullable=True)
+    response_message_ts = Column(String, nullable=True)
+    original_message_embedding = Column(
+        Vector(1536),
+        nullable=True,
+        comment="Embedding vector for the original message text using text-embedding-ada-002",
+    )
+    response_file_message_ts = Column(String, nullable=True, index=True)
 
     # Define relationships - this would be customized based on your schema
-    model_assocs = relationship("QuestionModelTable", back_populates="question")
+    models_used = relationship(
+        "QuestionModelTable", back_populates="question", cascade="all, delete-orphan"
+    )
 
-    def to_domain(self):
+    def to_domain(self) -> "Question":
         """Convert ORM model to domain model"""
-        models_data = []
-        if self.model_assocs:
-            models_data = [
-                {
-                    "model_name": assoc.model_name,
-                    "relevance_score": assoc.relevance_score,
-                }
-                for assoc in self.model_assocs
-            ]
+        # Convert QuestionModelTable associations back to list of model names
+        model_names = (
+            [assoc.model_name for assoc in self.models_used] if self.models_used else []
+        )
 
         return Question(
-            id=self.id,
+            # Non-default field first
             question_text=self.question_text,
+            # Default fields follow
+            id=self.id,
             answer_text=self.answer_text,
-            question_embedding=self.question_embedding,
             was_useful=self.was_useful,
             feedback=self.feedback,
-            question_metadata=self.question_metadata or {},
             created_at=self.created_at,
             updated_at=self.updated_at,
-            models=models_data,
+            question_metadata=self.question_metadata or {},
+            model_names=model_names,
+            # Original Slack Message Info
+            original_message_text=self.original_message_text,
+            original_message_ts=self.original_message_ts,
+            response_message_ts=self.response_message_ts,
+            # Embeddings
+            question_embedding=self.question_embedding,
+            feedback_embedding=self.feedback_embedding,
+            original_message_embedding=self.original_message_embedding,
+            response_file_message_ts=self.response_file_message_ts,
         )
 
 
@@ -266,7 +282,7 @@ class QuestionModelTable(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     # Define relationships
-    question = relationship("QuestionTable", back_populates="model_assocs")
+    question = relationship("QuestionTable", back_populates="models_used")
 
 
 class ModelEmbeddingTable(Base):
@@ -281,6 +297,12 @@ class ModelEmbeddingTable(Base):
         Vector(1536), nullable=False, comment="Embedding based on model documentation"
     )
     model_metadata = Column(JSON, nullable=True)
+    can_be_used_for_answers = Column(
+        Boolean,
+        nullable=False,
+        server_default=sa.true(),
+        comment="Whether this embedding can be used for answering questions",
+    )
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -294,6 +316,7 @@ class ModelEmbeddingTable(Base):
             document=self.document,
             embedding=self.embedding,
             model_metadata=self.model_metadata or {},
+            can_be_used_for_answers=self.can_be_used_for_answers,
             created_at=self.created_at,
             updated_at=self.updated_at,
         )
@@ -307,6 +330,7 @@ class ModelEmbeddingTable(Base):
             document=embedding.document,
             embedding=embedding.embedding,
             model_metadata=embedding.model_metadata,
+            can_be_used_for_answers=embedding.can_be_used_for_answers,
         )
 
 
@@ -671,46 +695,72 @@ class DBTProject:
 
 @dataclass
 class Question:
-    """Domain model for a question and its associated data."""
+    """Domain model for a question and its context."""
 
-    question_text: str
+    # --- Fields WITHOUT defaults must come first ---
+    question_text: (
+        str  # This is the potentially compiled/rephrased question by SlackResponder
+    )
+
+    # --- Fields WITH defaults follow ---
+    id: Optional[int] = None
     answer_text: Optional[str] = None
-    question_embedding: Optional[List[float]] = None
     was_useful: Optional[bool] = None
     feedback: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     question_metadata: Dict[str, Any] = field(default_factory=dict)
-    id: Optional[int] = None
-    created_at: Optional[Any] = None
-    updated_at: Optional[Any] = None
-    models: List[Dict[str, Any]] = field(default_factory=list)
+    model_names: List[str] = field(default_factory=list)
+    original_message_text: Optional[str] = None
+    original_message_ts: Optional[str] = None
+    response_message_ts: Optional[str] = None
+    question_embedding: Optional[List[float]] = None
+    feedback_embedding: Optional[List[float]] = None
+    original_message_embedding: Optional[List[float]] = None
+    response_file_message_ts: Optional[str] = None
+
+    def to_orm(self) -> "QuestionTable":
+        """Convert domain model to ORM model."""
+        # Pass fields in the order defined in QuestionTable
+        return QuestionTable(
+            question_text=self.question_text,
+            id=self.id,
+            answer_text=self.answer_text,
+            was_useful=self.was_useful,
+            feedback=self.feedback,
+            question_metadata=self.question_metadata,
+            original_message_text=self.original_message_text,
+            original_message_ts=self.original_message_ts,
+            response_message_ts=self.response_message_ts,
+            question_embedding=self.question_embedding,
+            feedback_embedding=self.feedback_embedding,
+            original_message_embedding=self.original_message_embedding,
+            response_file_message_ts=self.response_file_message_ts,
+            # created_at, updated_at are handled by DB defaults/onupdate
+            # models_used relationship is handled separately via QuestionModelTable
+        )
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to a dictionary for API responses"""
+        """Convert the domain model instance to a dictionary."""
         return {
             "id": self.id,
             "question_text": self.question_text,
             "answer_text": self.answer_text,
             "was_useful": self.was_useful,
             "feedback": self.feedback,
-            "metadata": self.question_metadata,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "models": self.models,
+            "question_metadata": self.question_metadata,
+            "model_names": self.model_names,
+            "original_message_text": self.original_message_text,
+            "original_message_ts": self.original_message_ts,
+            "response_message_ts": self.response_message_ts,
+            "response_file_message_ts": self.response_file_message_ts,
+            # Embeddings are usually large and not needed for this serialization purpose
+            # "question_embedding": self.question_embedding,
+            # "feedback_embedding": self.feedback_embedding,
+            # "original_message_embedding": self.original_message_embedding,
         }
-
-    def to_orm(self) -> QuestionTable:
-        """Convert domain model to ORM model"""
-        return QuestionTable(
-            id=self.id,
-            question_text=self.question_text,
-            answer_text=self.answer_text,
-            question_embedding=self.question_embedding,
-            was_useful=self.was_useful,
-            feedback=self.feedback,
-            question_metadata=self.question_metadata,
-            created_at=self.created_at,
-            updated_at=self.updated_at,
-        )
 
 
 @dataclass
@@ -722,6 +772,7 @@ class ModelEmbedding:
     embedding: Any  # Vector is a custom type
     id: Optional[int] = None
     model_metadata: Dict[str, Any] = field(default_factory=dict)
+    can_be_used_for_answers: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -733,6 +784,7 @@ class ModelEmbedding:
             "document": self.document,
             # Embedding is omitted for API responses as it's usually large
             "model_metadata": self.model_metadata,
+            "can_be_used_for_answers": self.can_be_used_for_answers,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -752,6 +804,9 @@ class ModelEmbedding:
             document=embedding.document,
             embedding=embedding.embedding,
             model_metadata=embedding.model_metadata,
+            can_be_used_for_answers=getattr(
+                embedding, "can_be_used_for_answers", True
+            ),  # Default to True if missing
             created_at=embedding.created_at,
             updated_at=embedding.updated_at,
         )
