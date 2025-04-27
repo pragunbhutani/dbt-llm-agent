@@ -1007,7 +1007,7 @@ class SlackResponder:
                     if not qa_error:  # Success if error is None or empty string
                         # --- Store text answer and context ---
                         updates["qa_final_answer"] = parsed_content.get("final_answer")
-                        updates["qa_models"] = parsed_content.get("models", [])
+                        updates["qa_models"] = parsed_content.get("searched_models", [])
                         updates["qa_feedback"] = parsed_content.get("feedback", {})
                         updates["qa_similar_original_messages"] = parsed_content.get(
                             "similar_original_messages", []
@@ -1046,7 +1046,7 @@ class SlackResponder:
                         # Store partial results if available from the error response
                         updates["qa_final_answer"] = parsed_content.get("final_answer")
                         updates["qa_models"] = parsed_content.get(
-                            "models"
+                            "searched_models"
                         )  # Allow None
                         updates["qa_feedback"] = parsed_content.get(
                             "feedback"
