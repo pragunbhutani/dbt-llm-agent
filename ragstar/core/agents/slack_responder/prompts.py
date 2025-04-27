@@ -2,10 +2,15 @@
 
 from typing import Dict, List, Any, Optional
 
+# --- NEW IMPORT ---
+from ragstar.core.agents.rules import load_ragstar_rules
+
+# --- END NEW IMPORT ---
+
 
 def create_initial_system_prompt() -> str:
     """Generates the initial system prompt for the SlackResponder agent node."""
-    return """You are an AI assistant integrated with Slack. Your primary role is to manage the workflow for answering user questions asked in Slack threads.
+    base_prompt = """You are an AI assistant integrated with Slack. Your primary role is to manage the workflow for answering user questions asked in Slack threads.
 
 **Overall Workflow:**
 1.  A user asks a question in a Slack thread.
@@ -24,6 +29,16 @@ def create_initial_system_prompt() -> str:
 
 **Responsibility:** Manage this sequence. Call tools appropriately. When processing the QA result, ensure the verification step occurs before posting.
 """
+    # --- NEW: Load and append custom rules ---
+    all_rules = load_ragstar_rules()
+    custom_rules = all_rules.get("slack_responder", "")
+
+    if custom_rules:
+        final_prompt = base_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
+        return final_prompt
+    else:
+        return base_prompt
+    # --- END NEW ---
 
 
 def create_verification_system_prompt(

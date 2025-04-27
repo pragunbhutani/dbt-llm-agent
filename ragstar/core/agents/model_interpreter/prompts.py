@@ -1,9 +1,14 @@
 """Prompts for the ModelInterpreter Agent."""
 
+# --- NEW IMPORT ---
+from ragstar.core.agents.rules import load_ragstar_rules
+
+# --- END NEW IMPORT ---
+
 
 def create_system_prompt(model_name: str) -> str:
     """Creates the system prompt for the interpretation workflow."""
-    return f"""You are an expert dbt model interpreter. Your task is to analyze the SQL code for a target dbt model, recursively explore its upstream dependencies by fetching their raw SQL, and generate CONCISE documentation (as a structured object) suitable for dbt YAML files for the original target model.
+    base_prompt = f"""You are an expert dbt model interpreter. Your task is to analyze the SQL code for a target dbt model, recursively explore its upstream dependencies by fetching their raw SQL, and generate CONCISE documentation (as a structured object) suitable for dbt YAML files for the original target model.
 
 Process:
 1. **Analyze SQL:** Carefully analyze the provided SQL (from the initial Human message or subsequent Tool results for `get_models_raw_sql`) to understand its logic and identify ALL models referenced via `ref()`.
@@ -23,6 +28,17 @@ Process:
 - Do not re-request SQL for models already provided in previous `ToolMessage` results.
 - Only call `finish_interpretation` when you are certain you have analyzed the SQL for the target model and *all* its upstream dependencies referenced directly or indirectly via `ref()`.
 - Ensure the final output to `finish_interpretation` is a structured object with 'name', 'description', and 'columns' (each column having 'name' and 'description')."""
+
+    # --- NEW: Load and append custom rules ---
+    all_rules = load_ragstar_rules()
+    custom_rules = all_rules.get("model_interpreter", "")
+
+    if custom_rules:
+        final_prompt = base_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
+        return final_prompt
+    else:
+        return base_prompt
+    # --- END NEW ---
 
 
 def create_initial_human_message(model_name: str, raw_sql: str) -> str:

@@ -2,6 +2,11 @@
 
 from typing import List, Dict, Any, Optional, Set
 
+# --- NEW IMPORT ---
+from ragstar.core.agents.rules import load_ragstar_rules
+
+# --- END NEW IMPORT ---
+
 
 def create_system_prompt(
     all_models_summary: List[Dict[str, str]],
@@ -184,7 +189,18 @@ left join
 ```"""
     # --- END MODIFIED --- #
 
-    return system_prompt
+    # --- NEW: Load and append custom rules ---
+    all_rules = load_ragstar_rules()
+    custom_rules = all_rules.get("question_answerer", "")
+
+    if custom_rules:
+        final_prompt = (
+            system_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
+        )
+        return final_prompt
+    else:
+        return system_prompt
+    # --- END NEW ---
 
 
 def create_guidance_message(
