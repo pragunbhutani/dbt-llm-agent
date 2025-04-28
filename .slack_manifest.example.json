@@ -27,7 +27,7 @@
         "app_mentions:read",
         "chat:write",
         "chat:write.public",
-        "conversations:history",
+        "groups:history",
         "channels:history",
         "files:read",
         "files:write",
