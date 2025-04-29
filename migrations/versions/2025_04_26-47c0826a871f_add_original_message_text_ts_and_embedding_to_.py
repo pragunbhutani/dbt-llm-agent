@@ -60,7 +60,7 @@ def downgrade() -> None:
     )
 
     op.drop_column("questions", "original_message_embedding")
-    op.drop_column("questions", "response_message_ts")
+    op.drop_column("questions", "original_message_ts")
     op.drop_column("questions", "original_message_text")
 
     logger.info(

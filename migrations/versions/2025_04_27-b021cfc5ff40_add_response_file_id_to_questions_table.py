@@ -44,9 +44,6 @@ def downgrade() -> None:
     """Downgrade schema."""
     logger.info(f"Starting downgrade for {revision}")
 
-    op.drop_constraint(
-        "questions_response_file_id_fkey", "questions", type_="foreignkey"
-    )
     op.drop_column("questions", "response_file_id")
 
     logger.info(f"Completed downgrade for {revision}")
