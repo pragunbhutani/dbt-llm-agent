@@ -1097,8 +1097,13 @@ class QuestionAnswerer:
                 elif tool_name == "search_past_feedback":
                     # Result should be a list of feedback items (or empty)
                     if isinstance(parsed_content, list) and parsed_content:
+                        # Convert Question objects to dictionaries
+                        parsed_content_dicts = [
+                            item.to_dict() if hasattr(item, "to_dict") else item
+                            for item in parsed_content
+                        ]
                         relevant_feedback["by_question"] = (
-                            parsed_content  # Replace or add?
+                            parsed_content_dicts  # Replace or add? Let's replace
                         )
                         if self.verbose:
                             self.console.print(
@@ -1115,7 +1120,12 @@ class QuestionAnswerer:
                     if isinstance(parsed_content, list) and parsed_content:
                         # Append results - might get duplicates if called multiple times?
                         # Or replace? Let's replace for now, assuming one content search is enough.
-                        relevant_feedback["by_content"] = parsed_content
+                        # Convert Question objects to dictionaries
+                        parsed_content_dicts = [
+                            item.to_dict() if hasattr(item, "to_dict") else item
+                            for item in parsed_content
+                        ]
+                        relevant_feedback["by_content"] = parsed_content_dicts
                         if self.verbose:
                             self.console.print(
                                 f"[dim] -> Updated state with {len(parsed_content)} feedback items found via content search.[/dim]"
@@ -1258,6 +1268,11 @@ class QuestionAnswerer:
                         )
                         or []
                     )  # Ensure list
+                    # Convert Question domain objects to dictionaries for state storage
+                    initial_feedback_by_question = [
+                        q.to_dict() if hasattr(q, "to_dict") else q
+                        for q in initial_feedback_by_question
+                    ]
                     if self.verbose:
                         self.console.print(
                             f"[dim] -> Found {len(initial_feedback_by_question)} potentially relevant past feedback items (by question).[/dim]"
@@ -1276,6 +1291,11 @@ class QuestionAnswerer:
                     )
                     or []
                 )  # Ensure list
+                # Convert Question domain objects to dictionaries for state storage
+                initial_feedback_by_content = [
+                    q.to_dict() if hasattr(q, "to_dict") else q
+                    for q in initial_feedback_by_content
+                ]
                 if self.verbose:
                     self.console.print(
                         f"[dim] -> Found {len(initial_feedback_by_content)} potentially relevant past feedback items (by content).[/dim]"
