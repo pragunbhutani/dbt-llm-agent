@@ -218,7 +218,7 @@ def interpret(
             logger.info(f"Using {mode} workflow for {model_name}")
             # Get interpretations based on mode
             if workflow:
-                result = interpreter.interpret_model_workflow(model_name)
+                result = interpreter.run_interpretation_workflow(model_name)
             else:
                 result = interpreter.run_interpretation_workflow(model_name)
 
