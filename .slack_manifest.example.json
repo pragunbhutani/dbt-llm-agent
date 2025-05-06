@@ -38,13 +38,13 @@
   "settings": {
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://your-ragstar-api.com/slack/events"
+      "request_url": "https://your-ragstar-api.com/integrations/slack/events"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
     "token_rotation_enabled": false,
     "event_subscriptions": {
-      "request_url": "https://your-ragstar-api.com/slack/events",
+      "request_url": "https://your-ragstar-api.com/integrations/slack/events",
       "bot_events": [
         "app_mention",
         "message.im",
