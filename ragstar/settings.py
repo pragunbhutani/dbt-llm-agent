@@ -32,7 +32,11 @@ SECRET_KEY = "django-insecure-i7l&cnk2eemm1e!13kew37c=ctkpa2!0ufw)v&9vlwzqolq(y=
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["midge-helping-socially.ngrok-free.app", "127.0.0.1"]
+ALLOWED_HOSTS = [
+    "*.ngrok-free.app",
+    "127.0.0.1",
+    "localhost",
+]
 
 
 # Application definition

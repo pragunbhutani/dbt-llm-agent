@@ -616,15 +616,6 @@ wheels = [
 ]
 
 [[package]]
-name = "django-rest-framework"
-version = "0.1.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "djangorestframework" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/ed/d2/61159bc6efd1bf16adc4a2a48f7ace2080d1f7aef054f606d1857cab490c/django-rest-framework-0.1.0.tar.gz", hash = "sha256:47a8f496fa69e3b6bd79f68dd7a1527d907d6b77f009e9db7cf9bb21cc565e4a", size = 969, upload_time = "2017-07-20T17:14:33.345Z" }
-
-[[package]]
 name = "djangorestframework"
 version = "3.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2270,7 +2261,7 @@ dependencies = [
     { name = "coloredlogs" },
     { name = "dbt-core" },
     { name = "django" },
-    { name = "django-rest-framework" },
+    { name = "djangorestframework" },
     { name = "fastapi" },
     { name = "langchain" },
     { name = "langchain-openai" },
@@ -2314,7 +2305,7 @@ requires-dist = [
     { name = "coloredlogs", specifier = ">=15.0.1" },
     { name = "dbt-core", specifier = ">=1.6.0,<2" },
     { name = "django", specifier = ">=5.2" },
-    { name = "django-rest-framework", specifier = ">=0.1.0" },
+    { name = "djangorestframework", specifier = ">=3.16.0" },
     { name = "fastapi", specifier = ">=0.115.0,<0.116" },
     { name = "langchain", specifier = ">=0.3.2,<0.4" },
     { name = "langchain-openai", specifier = ">=0.3.8,<0.4" },

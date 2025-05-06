@@ -34,10 +34,10 @@ dependencies = [
     "aiohttp>=3.11.16,<4",
     "tiktoken>=0.9.0,<0.10",
     "django>=5.2",
-    "django-rest-framework>=0.1.0",
     "coloredlogs>=15.0.1",
     "psycopg2-binary>=2.9.10",
     "whitenoise>=6.9.0",
+    "djangorestframework>=3.16.0",
 ]
 
 [project.scripts]
