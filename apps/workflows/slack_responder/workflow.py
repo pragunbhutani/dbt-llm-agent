@@ -96,14 +96,20 @@ class SlackResponderAgent:
         self,
         slack_client: AsyncWebClient,  # Pass the client from Bolt
         memory: Optional[BaseCheckpointSaver] = None,
-        verbose: bool = False,
     ):
         self.slack_client = slack_client
-        self.verbose = verbose
+        # Set verbosity based on Django settings
+        self.verbose = settings.RAGSTAR_LOG_LEVEL == "DEBUG"
+        if self.verbose:
+            logger.info(
+                f"SlackResponderAgent initialized with verbose=True (LogLevel: {settings.RAGSTAR_LOG_LEVEL})"
+            )
+
         # Instantiate the QuestionAnswerer agent internally
         # Note: QA agent now uses Django ORM/services, no direct DB deps needed here
         self.question_answerer = QuestionAnswererAgent(
-            verbose=verbose, memory=memory
+            # verbose=self.verbose, # QA agent will also use settings
+            memory=memory
         )  # Pass memory if QA should use same checkpoint
         self.llm = (
             self.question_answerer.llm
@@ -287,7 +293,7 @@ class SlackResponderAgent:
                 # 2. Post Optional Notes (if any) - as separate message for clarity
                 notes_message_ts = None
                 if optional_notes:
-                    notes_text = f"*Footnotes:*\n{optional_notes}\n\n_💡 React with 👍 or 👎 to the SQL snippet message above to provide feedback._"
+                    notes_text = f"*Notes:*\n{optional_notes}\n\n_💡 React with 👍 or 👎 to the SQL snippet message above to provide feedback._"
                     notes_result = await self.slack_client.chat_postMessage(
                         channel=self.current_channel_id,
                         thread_ts=self.current_thread_ts,
@@ -424,8 +430,8 @@ class SlackResponderAgent:
             logger.info("\n>>> Entering SlackResponder agent_node")
 
         # Prepare context for the LLM
-        messages = state["messages"]
-        system_prompt = create_slack_responder_system_prompt(
+        current_history = state["messages"]
+        system_prompt_content = create_slack_responder_system_prompt(
             original_question=state["original_question"],
             thread_history=state.get("thread_history"),
             qa_final_answer=state.get("qa_final_answer"),
@@ -433,22 +439,77 @@ class SlackResponderAgent:
             acknowledgement_sent=state.get("acknowledgement_sent"),
             error_message=state.get("error_message"),
         )
+        if self.verbose:
+            logger.info(
+                f"--- SlackResponder System Prompt Content ---\n{system_prompt_content}\n--- End System Prompt ---"
+            )
 
-        messages_for_llm = [SystemMessage(content=system_prompt)] + messages
+        messages_to_send_to_llm: List[BaseMessage]
+        # Store the human message if it's the first turn, to add to state later
+        first_turn_human_message: Optional[HumanMessage] = None
+
+        if not current_history:  # This is the first turn for the agent
+            human_message = HumanMessage(content=state["original_question"])
+            first_turn_human_message = human_message  # Capture for adding to state
+            messages_to_send_to_llm = [
+                SystemMessage(content=system_prompt_content),
+                human_message,
+            ]
+        else:  # Subsequent turns, messages list already contains the history
+            messages_to_send_to_llm = [
+                SystemMessage(content=system_prompt_content)
+            ] + current_history
 
         if self.verbose:
             logger.info(
-                f"Calling SlackResponder LLM with {len(messages_for_llm)} messages."
+                f"Calling SlackResponder LLM with {len(messages_to_send_to_llm)} messages."
+            )
+            # Detailed log of messages being sent
+            log_messages = []
+            for msg in messages_to_send_to_llm:
+                if isinstance(msg, SystemMessage):
+                    log_messages.append(f"System: {msg.content[:200]}...")
+                elif isinstance(msg, HumanMessage):
+                    log_messages.append(f"Human: {msg.content[:200]}...")
+                elif isinstance(msg, AIMessage):
+                    if msg.tool_calls:
+                        tool_calls_summary = ", ".join(
+                            [
+                                f"{tc['name']}(args={str(tc['args'])[:50]}...)"
+                                for tc in msg.tool_calls
+                            ]
+                        )
+                        log_messages.append(
+                            f"AI: ToolCalls({tool_calls_summary}) Content: {msg.content[:100]}..."
+                        )
+                    else:
+                        log_messages.append(f"AI: {msg.content[:200]}...")
+                elif isinstance(msg, ToolMessage):
+                    log_messages.append(
+                        f"Tool (id={msg.tool_call_id}): {msg.content[:200]}..."
+                    )
+                else:
+                    log_messages.append(f"UnknownMessage: {str(msg)[:200]}...")
+            logger.info(
+                f"Messages for LLM (SlackResponder):\n" + "\n".join(log_messages)
             )
 
         if not self.llm:
-            return {"messages": [AIMessage(content="Error: LLM client not available.")]}
+            error_ai_message = AIMessage(content="Error: LLM client not available.")
+            if first_turn_human_message:
+                return {"messages": [first_turn_human_message, error_ai_message]}
+            return {"messages": [error_ai_message]}
 
         # Bind tools and invoke
         agent_llm_with_tools = self.llm.bind_tools(self._tools)
         config = {"run_name": "SlackResponderAgentNode"}
+
+        newly_added_messages_to_state: List[BaseMessage]
+
         try:
-            response = agent_llm_with_tools.invoke(messages_for_llm, config=config)
+            response = agent_llm_with_tools.invoke(
+                messages_to_send_to_llm, config=config
+            )
 
             # --- Add thread_context to ask_question_answerer tool call args if present ---
             if response.tool_calls:
@@ -462,12 +523,24 @@ class SlackResponderAgent:
 
             if self.verbose:
                 logger.info(f"SlackResponder Agent response: {response}")
-            return {"messages": [response]}  # Add response to message list
+
+            if first_turn_human_message:
+                newly_added_messages_to_state = [first_turn_human_message, response]
+            else:
+                newly_added_messages_to_state = [response]
+            return {"messages": newly_added_messages_to_state}
+
         except Exception as e:
             logger.exception(f"Error invoking SlackResponder LLM: {e}")
-            # Store error message in state? Or just end?
-            # For now, let graph handle potential END if no tool call
-            return {"messages": [AIMessage(content=f"LLM Error: {e}")]}
+            error_ai_message = AIMessage(content=f"LLM Error: {e}")
+            if first_turn_human_message:
+                newly_added_messages_to_state = [
+                    first_turn_human_message,
+                    error_ai_message,
+                ]
+            else:
+                newly_added_messages_to_state = [error_ai_message]
+            return {"messages": newly_added_messages_to_state}
 
     # --- State Update Node ---
     def update_state_node(self, state: SlackResponderState) -> Dict[str, Any]:

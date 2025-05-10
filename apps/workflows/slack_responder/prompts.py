@@ -25,16 +25,31 @@ All your actions (fetching history, acknowledging, asking QA, posting responses)
     # --- Current State Summary ---
     prompt += "\n\n**Current Situation:**\n"
     prompt += f"- User's Initial Question: {original_question}\n"
-    if thread_history:
-        prompt += "- You have fetched the Slack thread history for the current conversation.\n"
+    if thread_history is not None:  # Check if it's populated, even if empty
+        prompt += f"- Slack thread history HAS been fetched (contains {len(thread_history)} messages).\n"
     else:
         prompt += "- You have NOT yet fetched the Slack thread history for the current conversation.\n"
-    if acknowledgement_sent:
-        prompt += "- You have already sent an acknowledgement message for the current conversation.\n"
-    else:
-        prompt += "- You have NOT yet sent an acknowledgement message for the current conversation.\n"
-    if qa_final_answer:
-        prompt += "- You have received an answer from the QA Agent.\n"
+
+    if acknowledgement_sent is True:  # Explicitly check for True
+        prompt += (
+            "- You HAVE sent an acknowledgement message for the current conversation.\n"
+        )
+    elif (
+        acknowledgement_sent is False
+    ):  # Explicitly check for False, distinguishing from None
+        prompt += "- You have NOT yet sent an acknowledgement message for the current conversation, and the attempt may have failed or not been made.\n"
+    else:  # acknowledgement_sent is None
+        prompt += "- You have NOT yet attempted to send an acknowledgement message for the current conversation.\n"
+
+    if qa_final_answer is not None:  # Check if it's populated
+        prompt += f"- An answer HAS been received from the QA Agent: '{str(qa_final_answer)[:100]}...'\n"
+        if qa_models:
+            model_names = [
+                m.get("name", "Unknown model") for m in qa_models if isinstance(m, dict)
+            ]
+            prompt += (
+                f"- QA Agent used the following models: {', '.join(model_names)}\n"
+            )
     else:
         prompt += "- You have NOT yet received an answer from the QA Agent.\n"
     if error_message:
@@ -56,9 +71,7 @@ All your actions (fetching history, acknowledging, asking QA, posting responses)
     if qa_final_answer:
         prompt += "\n**Answer Received from QA Agent:**\n"
         # Format the answer clearly
-        formatted_qa_answer = qa_final_answer.replace(
-            "```", "\`\`\`"
-        )  # Escape backticks for markdown
+        formatted_qa_answer = qa_final_answer  # Use directly
         prompt += f"```sql\n{formatted_qa_answer}\n```\n"
         if qa_models:
             model_names = [m.get("name", "?") for m in qa_models if m]

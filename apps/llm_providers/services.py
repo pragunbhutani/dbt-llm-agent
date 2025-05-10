@@ -4,6 +4,8 @@ from typing import List, Optional, Dict, Any
 
 # Import necessary Langchain clients directly
 from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGenerativeAI
+from langchain_anthropic import ChatAnthropic
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 
@@ -21,45 +23,56 @@ from django.conf import settings
 logger = logging.getLogger(__name__)
 
 
-# Helper function to get API key
-def get_openai_api_key() -> Optional[str]:
-    """Retrieves the OpenAI API key from settings or environment variables."""
-    api_key = getattr(settings, "OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
-    if not api_key:
-        logger.warning(
-            "OPENAI_API_KEY not found in Django settings or environment variables."
-        )
-    return api_key
-
-
 class EmbeddingService:
     """Service for generating text embeddings using configured provider."""
 
     def __init__(self):
         """
-        Initializes the embedding service and its client.
+        Initializes the embedding service. Provider is determined by
+        settings.LLM_EMBEDDINGS_PROVIDER_NAME, and the API key is fetched from
+        settings.LLM_<PROVIDER>_API_KEY (e.g., settings.LLM_OPENAI_API_KEY).
         """
         self.client: Optional[Embeddings] = None
-        api_key = get_openai_api_key()
-        # TODO: Generalize for different providers
-        model_name = getattr(
-            settings, "LLM_EMBEDDING_MODEL", "text-embedding-3-small"  # Updated default
-        )
+        provider_name = settings.LLM_EMBEDDINGS_PROVIDER_NAME
+        model_name = settings.LLM_EMBEDDINGS_MODEL
+        api_key: Optional[str] = None
 
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not found. Embedding generation disabled.")
-        else:
-            try:
-                # TODO: Add logic here to support other providers based on settings.LLM_PROVIDER
+        if provider_name == "openai":
+            api_key = settings.LLM_OPENAI_API_KEY
+        elif provider_name == "google":
+            api_key = settings.LLM_GOOGLE_API_KEY
+        # Anthropic not currently supported for embeddings in this basic setup
+
+        if not api_key and provider_name in ["openai", "google"]:
+            logger.warning(
+                f"API key for embedding provider '{provider_name}' (settings.LLM_{provider_name.upper()}_API_KEY) not found. Embedding generation disabled."
+            )
+            return
+        elif provider_name not in ["openai", "google"]:
+            logger.warning(
+                f"Unsupported or misconfigured LLM_EMBEDDINGS_PROVIDER_NAME: {provider_name}. Embedding generation disabled."
+            )
+            return
+
+        try:
+            if provider_name == "openai":
                 self.client = OpenAIEmbeddings(openai_api_key=api_key, model=model_name)
                 logger.info(
                     f"EmbeddingService initialized OpenAIEmbeddings client with model: {model_name}"
                 )
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize OpenAIEmbeddings client (model: {model_name}): {e}",
-                    exc_info=True,
+            elif provider_name == "google":
+                self.client = GoogleGenerativeAIEmbeddings(
+                    google_api_key=api_key, model=model_name
                 )
+                logger.info(
+                    f"EmbeddingService initialized GoogleGenerativeAIEmbeddings client with model: {model_name}"
+                )
+            # No else needed due to earlier return for unsupported providers
+        except Exception as e:
+            logger.error(
+                f"Failed to initialize {provider_name} embedding client (model: {model_name}): {e}",
+                exc_info=True,
+            )
 
     def get_embedding(self, text: str) -> Optional[List[float]]:
         """Generates an embedding for the given text."""
@@ -96,27 +109,69 @@ class ChatService:
 
     def __init__(self):
         """
-        Initializes the chat service and its client.
+        Initializes the chat service. Provider is determined by settings.LLM_CHAT_PROVIDER_NAME,
+        and the API key is fetched from settings.LLM_<PROVIDER>_API_KEY (e.g., settings.LLM_OPENAI_API_KEY).
+        Optional configs like temperature are read from settings.LLM_CHAT_CONFIG_TEMPERATURE.
         """
         self.llm: Optional[BaseChatModel] = None
-        api_key = get_openai_api_key()
-        # TODO: Generalize for different providers
-        model_name = getattr(settings, "LLM_CHAT_MODEL", "gpt-4o-mini")
+        provider_name = settings.LLM_CHAT_PROVIDER_NAME
+        model_name = settings.LLM_CHAT_MODEL
+        api_key: Optional[str] = None
 
-        if not api_key:
-            logger.warning("OPENAI_API_KEY not found. Chat functionality disabled.")
-        else:
-            try:
-                # TODO: Add logic here to support other providers based on settings.LLM_PROVIDER
-                self.llm = ChatOpenAI(openai_api_key=api_key, model=model_name)
+        if provider_name == "openai":
+            api_key = settings.LLM_OPENAI_API_KEY
+        elif provider_name == "google":
+            api_key = settings.LLM_GOOGLE_API_KEY
+        elif provider_name == "anthropic":
+            api_key = settings.LLM_ANTHROPIC_API_KEY
+
+        temperature = (
+            settings.LLM_CHAT_CONFIG_TEMPERATURE
+        )  # This is already a float or None
+
+        init_kwargs: Dict[str, Any] = {}
+        if temperature is not None:
+            init_kwargs["temperature"] = temperature
+
+        if not api_key and provider_name in ["openai", "google", "anthropic"]:
+            logger.warning(
+                f"API key for chat provider '{provider_name}' (settings.LLM_{provider_name.upper()}_API_KEY) not found. Chat functionality disabled."
+            )
+            return
+        elif provider_name not in ["openai", "google", "anthropic"]:
+            logger.warning(
+                f"Unsupported or misconfigured LLM_CHAT_PROVIDER_NAME: {provider_name}. Chat functionality disabled."
+            )
+            return
+
+        try:
+            if provider_name == "openai":
+                self.llm = ChatOpenAI(
+                    openai_api_key=api_key, model=model_name, **init_kwargs
+                )
                 logger.info(
-                    f"ChatService initialized ChatOpenAI client with model: {model_name}"
+                    f"ChatService initialized ChatOpenAI client with model: {model_name} and config: {init_kwargs}"
                 )
-            except Exception as e:
-                logger.error(
-                    f"Failed to initialize ChatOpenAI client (model: {model_name}): {e}",
-                    exc_info=True,
+            elif provider_name == "google":
+                self.llm = ChatGoogleGenerativeAI(
+                    google_api_key=api_key, model=model_name, **init_kwargs
                 )
+                logger.info(
+                    f"ChatService initialized ChatGoogleGenerativeAI client with model: {model_name} and config: {init_kwargs}"
+                )
+            elif provider_name == "anthropic":
+                self.llm = ChatAnthropic(
+                    anthropic_api_key=api_key, model=model_name, **init_kwargs
+                )
+                logger.info(
+                    f"ChatService initialized ChatAnthropic client with model: {model_name} and config: {init_kwargs}"
+                )
+            # No else needed due to earlier return for unsupported providers
+        except Exception as e:
+            logger.error(
+                f"Failed to initialize {provider_name} chat client (model: {model_name}, config: {init_kwargs}): {e}",
+                exc_info=True,
+            )
 
     def get_client(self) -> Optional[BaseChatModel]:
         """Returns the initialized chat LLM client."""

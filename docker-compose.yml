@@ -33,12 +33,11 @@ services:
       # Be mindful of potential performance issues on non-Linux hosts
       - .:/app
       # You might need to mount other volumes if your app writes data outside /app
+    env_file:
+      - .env
     environment:
       # Use external DB URL if provided, otherwise use the 'db' service
       DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
-      # Pass other necessary environment variables from host or .env file
-      # Example: SLACK_BOT_TOKEN, SLACK_APP_TOKEN, etc.
-      # Ensure these match your application's requirements
       APP_PORT: ${APP_PORT:-8000}
     depends_on:
       db:

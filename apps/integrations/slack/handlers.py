@@ -103,13 +103,9 @@ async def handle_app_mention(event, say, ack, body, client: AsyncWebClient):
         )
 
         # 4. Instantiate Agent (passing the client provided by Bolt)
-        # Use Django settings for verbosity
-        verbose = getattr(settings, "AGENT_DEFAULT_VERBOSITY", 0) > 1
+        # Verbosity is now handled internally by the agent based on Django settings
         responder_agent = SlackResponderAgent(
             slack_client=client,  # Use the client from the handler args
-            verbose=verbose,
-            # If memory/checkpointer is needed, it must be instantiated here or passed
-            # memory=...
         )
 
         # 5. Launch workflow as a background task

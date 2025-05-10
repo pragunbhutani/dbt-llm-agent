@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 from pathlib import Path
 import os  # Import os for environment variables
 import sys  # Add this line
+import dj_database_url  # Add this import
+from typing import Optional
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,7 +35,7 @@ SECRET_KEY = "django-insecure-i7l&cnk2eemm1e!13kew37c=ctkpa2!0ufw)v&9vlwzqolq(y=
 DEBUG = True
 
 ALLOWED_HOSTS = [
-    "*.ngrok-free.app",
+    ".ngrok-free.app",
     "127.0.0.1",
     "localhost",
 ]
@@ -94,16 +96,29 @@ WSGI_APPLICATION = "ragstar.wsgi.application"
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ.get("DB_NAME", "ragstar_django"),
-        "USER": os.environ.get("DB_USER", "postgres"),
-        "PASSWORD": os.environ.get("DB_PASSWORD", "password"),
-        "HOST": os.environ.get("DB_HOST", "localhost"),
-        "PORT": os.environ.get("DB_PORT", "5432"),
+DATABASE_URL_FROM_ENV = os.environ.get("DATABASE_URL")
+
+if DATABASE_URL_FROM_ENV:
+    DATABASES = {
+        "default": dj_database_url.config(
+            default=DATABASE_URL_FROM_ENV,
+            conn_max_age=600,
+            ssl_require=os.environ.get("DB_SSL_REQUIRE", "false").lower() == "true",
+        )
     }
-}
+else:
+    # Fallback for local development if DATABASE_URL is not set
+    # (e.g., when running manage.py directly without Docker Compose)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_local_dev"),
+            "USER": os.environ.get("DB_USER_FALLBACK", "postgres"),
+            "PASSWORD": os.environ.get("DB_PASSWORD_FALLBACK", "password"),
+            "HOST": os.environ.get("DB_HOST_FALLBACK", "localhost"),
+            "PORT": os.environ.get("DB_PORT_FALLBACK", "5432"),
+        }
+    }
 
 
 # Password validation
@@ -157,16 +172,52 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # --- Ragstar / LLM Settings ---
 
-# API Key - loaded from environment variable primarily
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
+# --- LLM Provider Configuration ---
+# These settings are primarily controlled by environment variables.
+# Example environment variable names are suggested in comments.
 
-# Default model names (can be overridden by environment variables if needed)
-LLM_CHAT_MODEL = os.environ.get("LLM_CHAT_MODEL", "gpt-4o-mini")
-LLM_EMBEDDING_MODEL = os.environ.get("LLM_EMBEDDING_MODEL", "text-embedding-3-small")
+# API Keys (from corresponding ENV variables like LLM_OPENAI_API_KEY_ENV)
+LLM_OPENAI_API_KEY = os.environ.get("LLM_OPENAI_API_KEY")
+LLM_GOOGLE_API_KEY = os.environ.get("LLM_GOOGLE_API_KEY")
+LLM_ANTHROPIC_API_KEY = os.environ.get("LLM_ANTHROPIC_API_KEY")
 
-# Optional: Add other LLM provider keys here
-# ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-# LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "openai") # To switch between providers
+# Chat Provider and Model
+LLM_CHAT_PROVIDER_NAME = os.environ.get("LLM_CHAT_PROVIDER_NAME", "openai").lower()
+LLM_CHAT_MODEL = os.environ.get("LLM_CHAT_MODEL", "o4-mini")  # Default to OpenAI model
+
+# Embeddings Provider and Model
+LLM_EMBEDDINGS_PROVIDER_NAME = os.environ.get(
+    "LLM_EMBEDDINGS_PROVIDER_NAME", "openai"
+).lower()
+LLM_EMBEDDINGS_MODEL = os.environ.get(
+    "LLM_EMBEDDINGS_MODEL", "text-embedding-3-small"
+)  # Default to OpenAI model
+
+# Optional Chat Configuration
+LLM_CHAT_CONFIG_TEMPERATURE_STR = os.environ.get("LLM_CHAT_CONFIG_TEMPERATURE")
+LLM_CHAT_CONFIG_TEMPERATURE: Optional[float] = None
+if LLM_CHAT_CONFIG_TEMPERATURE_STR:
+    try:
+        LLM_CHAT_CONFIG_TEMPERATURE = float(LLM_CHAT_CONFIG_TEMPERATURE_STR)
+    except ValueError:
+        # Using logger here might be problematic if logging isn't fully configured yet.
+        # print is safer at this stage of settings.py
+        print(
+            f"WARNING: Invalid LLM_CHAT_CONFIG_TEMPERATURE value: '{LLM_CHAT_CONFIG_TEMPERATURE_STR}'. Using default temperature."
+        )
+
+
+# --- Centralized Verbosity Control ---
+# Define the log level for RAGstar application components.
+# Controlled by the SETTINGS_LOG_LEVEL environment variable.
+# Valid values: "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+SETTINGS_LOG_LEVEL_ENV = os.environ.get("SETTINGS_LOG_LEVEL", "INFO").upper()
+# Ensure the level is one of the valid logging levels, default to INFO if invalid.
+VALID_LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+RAGSTAR_LOG_LEVEL = (
+    SETTINGS_LOG_LEVEL_ENV if SETTINGS_LOG_LEVEL_ENV in VALID_LOG_LEVELS else "INFO"
+)
+
 
 # --- Logging Configuration ---
 # Add this towards the end of your settings.py file
@@ -213,9 +264,8 @@ LOGGING = {
     "loggers": {
         "": {  # Root logger - controls default level via runserver -v
             "handlers": ["console"],
-            # Level is typically set by Django based on DEBUG and -v flags.
-            # Setting INFO here provides a sensible default if not overridden.
-            # -v 0 -> WARNING, -v 1 -> INFO, -v 2/3 -> DEBUG
+            # We will now control application loggers more directly with RAGSTAR_LOG_LEVEL
+            "level": "INFO",  # Keep root logger at INFO unless Django overrides via -v
         },
         "django": {  # Control Django framework logs
             "handlers": ["console"],
@@ -229,22 +279,23 @@ LOGGING = {
         },
         "django.db.backends": {  # Control SQL query logging
             "handlers": ["console"],
-            # Set to INFO to suppress SQL logs by default.
-            # Django might set this to DEBUG automatically with runserver -v 3
             "level": "INFO",
             "propagate": False,
         },
         "core": {  # Logger for your 'core' application
             "handlers": ["console"],
-            # IMPORTANT: Set level to DEBUG so core's debug messages are
-            # always passed to the handler, regardless of root logger level.
-            "level": "DEBUG",
-            "propagate": False,  # Don't pass core messages to root logger
+            "level": RAGSTAR_LOG_LEVEL,  # Use centralized log level
+            "propagate": False,
         },
         "apps.workflows": {  # Logger for the workflows app
             "handlers": ["console"],
-            "level": "DEBUG",  # Capture DEBUG level messages from workflows
-            "propagate": False,  # Don't pass to root logger
+            "level": RAGSTAR_LOG_LEVEL,  # Use centralized log level
+            "propagate": False,
+        },
+        "apps.llm_providers": {  # Logger for llm_providers
+            "handlers": ["console"],
+            "level": RAGSTAR_LOG_LEVEL,
+            "propagate": False,
         },
     },
 }
@@ -253,4 +304,4 @@ LOGGING = {
 
 # Verbosity level for Agents triggered via Admin actions
 # 0 = WARNING/ERROR, 1 = INFO, 3 = DEBUG
-AGENT_DEFAULT_VERBOSITY = 3
+# AGENT_DEFAULT_VERBOSITY = 3 # Removed, will be derived from RAGSTAR_LOG_LEVEL

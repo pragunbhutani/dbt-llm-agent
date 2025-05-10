@@ -38,6 +38,10 @@ dependencies = [
     "psycopg2-binary>=2.9.10",
     "whitenoise>=6.9.0",
     "djangorestframework>=3.16.0",
+    "langchain-google-genai>=2.1.4",
+    "langchain-anthropic>=0.3.13",
+    "dj-database-url>=2.3.0",
+    "starlette>=0.46.1",
 ]
 
 [project.scripts]

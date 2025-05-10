@@ -110,14 +110,19 @@ class QuestionAnswererAgent:
     def __init__(
         self,
         temperature: float = 0.0,
-        verbose: bool = False,
         memory: Optional[AsyncPostgresSaver] = None,
     ):
         self.embedding_service = default_embedding_service
         self.chat_service = default_chat_service
         self.llm = self.chat_service.get_client()
         self.temperature = temperature
-        self.verbose = verbose
+        # Set verbosity based on Django settings
+        self.verbose = settings.RAGSTAR_LOG_LEVEL == "DEBUG"
+        if self.verbose:
+            logger.info(
+                f"QuestionAnswererAgent initialized with verbose=True (LogLevel: {settings.RAGSTAR_LOG_LEVEL})"
+            )
+
         self.max_iterations = 10
         self.max_vector_searches = 5
 
@@ -452,6 +457,10 @@ class QuestionAnswererAgent:
         if self.verbose:
             # Add separators
             logger.info("\n--- Entering QuestionAnswerer Agent Node ---")
+            # Log the actual accumulated_models from the input state more visibly
+            logger.info(
+                f"Agent Node: Received state with accumulated_models: {json.dumps(state.get("accumulated_models"))}"
+            )
 
         # --- Lazily load model summary ---
         current_model_summary = await self._get_or_load_model_summary()
@@ -486,6 +495,12 @@ class QuestionAnswererAgent:
             max_vector_searches=self.max_vector_searches,
         )
 
+        # Log the accumulated_models before creating guidance message
+        if self.verbose:
+            logger.info(
+                f"Agent Node: accumulated_models variable before guidance: {json.dumps(accumulated_models)}"
+            )
+
         # Guidance Logic
         guidance = create_guidance_message(
             search_model_calls=search_model_calls,
@@ -510,6 +525,56 @@ class QuestionAnswererAgent:
         if self.verbose:
             # Add separators
             logger.info("\n--- Calling QuestionAnswerer LLM ---")
+            # Log the system prompt and guidance message parts
+            logger.info(f"QA System Prompt: {system_prompt[:500]}...")  # Log a preview
+            if thread_context:
+                context_str_log = "\n".join(
+                    [
+                        f"{m.get('user')}: {m.get('text')[:100]}..."
+                        for m in thread_context[-3:]
+                    ]
+                )  # Preview last 3
+                logger.info(f"QA Slack Thread Context (last 3):\n{context_str_log}")
+            logger.info(f"QA Guidance Message: {guidance[:500]}...")
+
+            # Detailed log of messages being sent to QA LLM
+            log_messages_qa = []
+            for msg_idx, msg in enumerate(messages_for_llm):
+                if isinstance(msg, SystemMessage):
+                    log_messages_qa.append(
+                        f"  {msg_idx}. System: {msg.content[:200]}..."
+                    )
+                elif isinstance(msg, HumanMessage):
+                    log_messages_qa.append(
+                        f"  {msg_idx}. Human: {msg.content[:200]}..."
+                    )
+                elif isinstance(msg, AIMessage):
+                    if msg.tool_calls:
+                        tool_calls_summary = ", ".join(
+                            [
+                                f"{tc['name']}(args={str(tc['args'])[:50]}...)"
+                                for tc in msg.tool_calls
+                            ]
+                        )
+                        log_messages_qa.append(
+                            f"  {msg_idx}. AI: ToolCalls({tool_calls_summary}) Content: {msg.content[:100]}..."
+                        )
+                    else:
+                        log_messages_qa.append(
+                            f"  {msg_idx}. AI: {msg.content[:200]}..."
+                        )
+                elif isinstance(msg, ToolMessage):
+                    log_messages_qa.append(
+                        f"  {msg_idx}. Tool (id={msg.tool_call_id}): {msg.content[:200]}..."
+                    )
+                else:
+                    log_messages_qa.append(
+                        f"  {msg_idx}. UnknownMessage: {str(msg)[:200]}..."
+                    )
+            logger.info(
+                f"Messages for LLM (QuestionAnswerer) - Total {len(messages_for_llm)}:\n"
+                + "\n".join(log_messages_qa)
+            )
 
         agent_llm_with_tools = self.llm.bind_tools(self._tools)
         config = {"run_name": "QuestionAnswererAgentNode"}
@@ -536,6 +601,9 @@ class QuestionAnswererAgent:
         if self.verbose:
             # Add separators
             logger.info("\n--- Updating QuestionAnswerer State ---")
+            logger.info(
+                f"Update State Node: Received state with accumulated_models: {json.dumps(state.get("accumulated_models"))}"
+            )
         # Ensure this node is async if called by ainvoke
         updates: Dict[str, Any] = {}
         messages = state["messages"]
@@ -545,8 +613,10 @@ class QuestionAnswererAgent:
             return updates
 
         tool_content = last_message.content
-        # Safely parse JSON if needed
-        if isinstance(tool_content, str) and tool_content.startswith("{"):
+        # Safely parse JSON if needed (handle JSON objects and arrays)
+        if isinstance(tool_content, str) and tool_content.strip().startswith(
+            ("{", "[")
+        ):
             try:
                 tool_content = json.loads(tool_content)
             except json.JSONDecodeError:
@@ -583,9 +653,31 @@ class QuestionAnswererAgent:
                     if self.verbose:
                         logger.info(f"Added {new_models_added} model details to state.")
         elif tool_name == "model_similarity_search":
-            # ... (existing logic, assuming tool returns list of dicts) ...
             updates["vector_search_calls"] = state.get("vector_search_calls", 0) + 1
-            # ... add models similar to fetch_model_details ...
+            if isinstance(tool_content, list):
+                # Ensure we make copies from the state to avoid modifying it directly before update
+                current_accumulated_models = list(state.get("accumulated_models", []))
+                current_model_names = set(state.get("accumulated_model_names", set()))
+                newly_added_count = 0
+                for model_data in tool_content:
+                    if (
+                        isinstance(model_data, dict)
+                        and model_data.get("name") not in current_model_names
+                    ):
+                        current_accumulated_models.append(model_data)
+                        current_model_names.add(model_data["name"])
+                        newly_added_count += 1
+                if newly_added_count > 0:
+                    updates["accumulated_models"] = current_accumulated_models
+                    updates["accumulated_model_names"] = current_model_names
+                    if self.verbose:
+                        logger.info(
+                            f"Added {newly_added_count} models from similarity search to state."
+                        )
+            elif self.verbose:
+                logger.warning(
+                    f"Tool 'model_similarity_search' did not return a list: {type(tool_content)}"
+                )
         elif tool_name == "search_past_feedback":
             if isinstance(tool_content, list):
                 relevant_feedback = state.get("relevant_feedback", {}).copy()
@@ -631,8 +723,17 @@ class QuestionAnswererAgent:
             # Add separators
             updates_str = json.dumps(list(updates.keys()), indent=2)
             logger.info(
-                f"\n--- QuestionAnswerer State Updates ---\n{updates_str}\n--------------------------------------"
+                f"\n--- QuestionAnswerer State Updates (keys) ---\n{updates_str}\n--------------------------------------"
             )
+            # Log the actual content of updates for accumulated_models
+            if "accumulated_models" in updates:
+                logger.info(
+                    f"Update State Node: Returning updates with accumulated_models: {json.dumps(updates["accumulated_models"])}"
+                )
+            else:
+                logger.info(
+                    "Update State Node: Returning updates WITHOUT accumulated_models."
+                )
 
         return updates
 
@@ -647,33 +748,126 @@ class QuestionAnswererAgent:
         updates = {}
         # Check if final_answer is already set (e.g., by a prior forced finish, though unlikely on this path)
         if state.get("final_answer"):
+            if self.verbose:
+                logger.info(
+                    "finalize_direct_answer_node: Final answer already exists in state."
+                )
             return updates  # Already finalized
 
         last_message = state["messages"][-1] if state.get("messages") else None
 
+        if self.verbose:
+            logger.info(
+                f"finalize_direct_answer_node: last_message type: {type(last_message)}"
+            )
+            if isinstance(last_message, AIMessage):
+                logger.info(
+                    f"finalize_direct_answer_node: last_message.content: {last_message.content}"
+                )
+                logger.info(
+                    f"finalize_direct_answer_node: last_message.tool_calls: {last_message.tool_calls}"
+                )
+                logger.info(
+                    f"finalize_direct_answer_node: hasattr response_metadata: {hasattr(last_message, 'response_metadata')}"
+                )
+                if hasattr(last_message, "response_metadata"):
+                    logger.info(
+                        f"finalize_direct_answer_node: isinstance response_metadata dict: {isinstance(last_message.response_metadata, dict)}"
+                    )
+                    if isinstance(last_message.response_metadata, dict):
+                        logger.info(
+                            f"finalize_direct_answer_node: response_metadata.get('finish_reason'): {last_message.response_metadata.get('finish_reason')}"
+                        )
+
         if isinstance(last_message, AIMessage) and last_message.content:
             # Condition for being routed here from 'agent' via 'tools_condition' is that 'tool_calls' is empty.
             # We double-check content and that finish_reason is 'stop'.
-            is_direct_stop_answer = (
-                not last_message.tool_calls
-                and hasattr(last_message, "response_metadata")
-                and isinstance(last_message.response_metadata, dict)
-                and last_message.response_metadata.get("finish_reason") == "stop"
+            has_response_metadata = hasattr(last_message, "response_metadata")
+            is_response_metadata_dict = (
+                isinstance(last_message.response_metadata, dict)
+                if has_response_metadata
+                else False
+            )
+            actual_finish_reason = (
+                last_message.response_metadata.get("finish_reason")
+                if is_response_metadata_dict
+                else None
             )
 
+            is_direct_stop_answer = (
+                not last_message.tool_calls  # Expect: True (empty list)
+                and has_response_metadata  # Expect: True
+                and is_response_metadata_dict  # Expect: True
+                and isinstance(actual_finish_reason, str)
+                and actual_finish_reason.lower() == "stop"
+            )
+
+            if self.verbose:
+                logger.info(
+                    f"finalize_direct_answer_node: Calculated is_direct_stop_answer: {is_direct_stop_answer}"
+                )
+                logger.info(
+                    f"  - not last_message.tool_calls: {not last_message.tool_calls}"
+                )
+                logger.info(f"  - has_response_metadata: {has_response_metadata}")
+                logger.info(
+                    f"  - is_response_metadata_dict: {is_response_metadata_dict}"
+                )
+                logger.info(
+                    f"  - actual_finish_reason == 'stop': {actual_finish_reason == 'stop'} (actual: {actual_finish_reason})"
+                )
+
             if is_direct_stop_answer:
-                updates["final_answer"] = last_message.content
+                answer_content = last_message.content
+                if isinstance(answer_content, list):
+                    # Ensure all elements are strings before joining
+                    processed_content = []
+                    for item in answer_content:
+                        if isinstance(item, str):
+                            processed_content.append(item)
+                        elif (
+                            isinstance(item, dict) and "text" in item
+                        ):  # Handle potential dict content like Anthropic
+                            processed_content.append(item["text"])
+                        else:
+                            processed_content.append(
+                                str(item)
+                            )  # Fallback to string conversion
+                    updates["final_answer"] = "\\n".join(processed_content)
+                    if self.verbose:
+                        logger.info(
+                            f"finalize_direct_answer_node: Joined list content for final_answer. Preview: {updates['final_answer'][:200]}..."
+                        )
+                else:
+                    updates["final_answer"] = str(
+                        answer_content
+                    )  # Ensure it's a string
+                    if self.verbose:
+                        logger.info(
+                            f"finalize_direct_answer_node: Set string content for final_answer. Preview: {updates['final_answer'][:200]}..."
+                        )
+
+                # Also capture the models used for this direct answer
+                updates["models_snapshot_for_final_answer"] = list(
+                    state.get("accumulated_models", [])
+                )
                 if self.verbose:
                     logger.info(
-                        "QuestionAnswerer graph: Finalizing direct answer from LLM (finish_reason='stop')."
+                        "QuestionAnswerer graph: Finalizing direct answer from LLM (finish_reason='stop'). Models captured."
                     )
             elif not last_message.tool_calls and self.verbose:
                 # This case means 'tools_condition' sent us here, but it wasn't a clean 'stop' with content.
                 # For example, LLM might have just stopped without content, or finish_reason was length etc.
                 logger.warning(
                     "QuestionAnswerer graph: Agent stopped without tool calls, "
-                    "but last message was not a clear direct answer (content or finish_reason mismatch)."
+                    "but last message was not a clear direct answer (content or finish_reason mismatch). "
+                    f"Content present: {bool(last_message.content)}. Tool calls: {last_message.tool_calls}. Finish reason: {actual_finish_reason}"
                 )
+        elif self.verbose:
+            logger.info(
+                "finalize_direct_answer_node: last_message was not an AIMessage with content."
+            )
+
         return updates
 
     # --- Routing Logic ---
