@@ -109,7 +109,8 @@ class SlackResponderAgent:
         # Note: QA agent now uses Django ORM/services, no direct DB deps needed here
         self.question_answerer = QuestionAnswererAgent(
             # verbose=self.verbose, # QA agent will also use settings
-            memory=memory
+            memory=memory,
+            data_warehouse_type=getattr(settings, "DATA_WAREHOUSE_TYPE", None),
         )  # Pass memory if QA should use same checkpoint
         self.llm = (
             self.question_answerer.llm

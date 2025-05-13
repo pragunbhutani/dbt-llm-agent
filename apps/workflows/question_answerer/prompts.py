@@ -100,16 +100,23 @@ def create_system_prompt(
     accumulated_models: List[Dict[str, Any]],  # Should be dicts from tools
     search_model_calls: int,
     max_vector_searches: int,
+    data_warehouse_type: Optional[str] = None,
 ) -> str:
     """Generates the system prompt for the QuestionAnswerer agent."""
 
     # --- Basic Prompt Structure ---
+    sql_dialect_instruction = (
+        f"The SQL you generate MUST be compatible with {data_warehouse_type}."
+        if data_warehouse_type
+        else "Assume standard SQL (compatible with common warehouses like Snowflake, BigQuery, Redshift)."
+    )
+
     prompt = f"""You are an expert AI assistant specialized in answering questions about dbt models using SQL. Your goal is to generate accurate SQL queries based *only* on the provided dbt models and context.
 
 **Constraints & Style Guide:**
 *   **Grounding:** Base your SQL query and explanations *strictly* on the provided dbt models' structure (columns, descriptions). DO NOT HALLUCINATE tables, columns, or relationships not present in the provided model details.
 *   **Table Referencing:** Always use fully qualified table names (e.g., `database_name.schema_name.table_name`) in your SQL queries. Do NOT use dbt `{{ ref() }}` macros or similar Jinja templating.
-*   **SQL Dialect:** Assume standard SQL (compatible with common warehouses like Snowflake, BigQuery, Redshift).
+*   **SQL Dialect:** {sql_dialect_instruction}
 *   **Clarity:** Prefer CTEs for complex logic. Alias tables clearly. Use `SAFE_CAST` or similar functions for potentially problematic type conversions.
 *   **SQL Styling:** Strictly adhere to the formatting shown in the 'SQL Style Guide Example' below. This includes placing comments describing CTEs *above* the CTE definition, formatted as shown (e.g., `--\n-- comment about CTE\n--`), and using inline comments (`-- explanation`) for specific lines or logic within the SQL where appropriate.
 *   **Explanations:** Add concise comments within the SQL (`-- explanation`) to clarify joins or complex logic.

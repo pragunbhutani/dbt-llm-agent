@@ -111,11 +111,13 @@ class QuestionAnswererAgent:
         self,
         temperature: float = 0.0,
         memory: Optional[AsyncPostgresSaver] = None,
+        data_warehouse_type: Optional[str] = None,
     ):
         self.embedding_service = default_embedding_service
         self.chat_service = default_chat_service
         self.llm = self.chat_service.get_client()
         self.temperature = temperature
+        self.data_warehouse_type = data_warehouse_type
         # Set verbosity based on Django settings
         self.verbose = settings.RAGSTAR_LOG_LEVEL == "DEBUG"
         if self.verbose:
@@ -496,6 +498,7 @@ class QuestionAnswererAgent:
             accumulated_models=accumulated_models,
             search_model_calls=search_model_calls,
             max_vector_searches=self.max_vector_searches,
+            data_warehouse_type=self.data_warehouse_type,
         )
 
         # Log the accumulated_models before creating guidance message
