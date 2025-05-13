@@ -15,6 +15,7 @@ from starlette.applications import Starlette
 from starlette.routing import Lifespan, Mount
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware  # If you need CORS
+from typing import Optional
 
 # Load environment variables from .env file
 load_dotenv()
@@ -28,22 +29,29 @@ django.setup()
 # This path is based on your logs. Adjust if necessary.
 try:
     from apps.workflows.question_answerer.workflow import QuestionAnswererAgent
+    from psycopg_pool import AsyncConnectionPool  # Import for type checking
 except ImportError:
     QuestionAnswererAgent = None
+    AsyncConnectionPool = None  # Define if import failed
     print(
-        "WARNING: Could not import QuestionAnswererAgent for checkpointer setup in asgi.py"
+        "WARNING: Could not import QuestionAnswererAgent or AsyncConnectionPool for checkpointer setup in asgi.py"
     )
 
 
 django_asgi_app = get_asgi_application()
 
+# Store the pool globally or in a way that shutdown_event can access it
+_global_checkpointer_pool: Optional[AsyncConnectionPool] = None
+
 
 async def run_checkpointer_setup():
     """Initializes the LangGraph AsyncPostgresSaver checkpointer."""
-    if QuestionAnswererAgent:
+    global _global_checkpointer_pool
+    if QuestionAnswererAgent and AsyncConnectionPool:
         print(
             "INFO: Attempting to setup LangGraph checkpointer via QuestionAnswererAgent..."
         )
+        agent = None
         try:
             # Instantiate the agent. If it's a singleton or needs specific config,
             # this might need to be handled differently (e.g., accessing a global instance).
@@ -52,6 +60,22 @@ async def run_checkpointer_setup():
             checkpointer = getattr(agent, "memory", None)
 
             if checkpointer:
+                pool_to_manage = getattr(checkpointer, "conn", None)
+
+                if isinstance(pool_to_manage, AsyncConnectionPool):
+                    print(
+                        f"INFO: Found AsyncConnectionPool: {pool_to_manage.name}. Attempting to open..."
+                    )
+                    await pool_to_manage.open()
+                    print(
+                        f"INFO: AsyncConnectionPool {pool_to_manage.name} opened successfully."
+                    )
+                    _global_checkpointer_pool = pool_to_manage  # Store for shutdown
+                else:
+                    print(
+                        "INFO: Checkpointer does not have an AsyncConnectionPool instance at .conn, or AsyncConnectionPool not imported."
+                    )
+
                 if hasattr(checkpointer, "setup") and callable(checkpointer.setup):
                     await checkpointer.setup()
                     print("INFO: LangGraph checkpointer.setup() complete.")
@@ -61,9 +85,6 @@ async def run_checkpointer_setup():
                 elif hasattr(checkpointer, "acreate_tables") and callable(
                     checkpointer.acreate_tables
                 ):
-                    # This might require the connection pool or connection to be passed if it's a static/class method.
-                    # If it's an instance method that uses an internally configured pool, this direct call is fine.
-                    # Assuming instance method for now.
                     await checkpointer.acreate_tables()
                     print("INFO: LangGraph checkpointer.acreate_tables() complete.")
                 else:
@@ -79,8 +100,18 @@ async def run_checkpointer_setup():
             import traceback
 
             traceback.print_exc()
+            # If setup failed after pool was opened, try to close it
+            if _global_checkpointer_pool and not _global_checkpointer_pool.closed:
+                print(
+                    f"INFO: Closing pool {_global_checkpointer_pool.name} due to setup error."
+                )
+                await _global_checkpointer_pool.close()
+                _global_checkpointer_pool = None
+
     else:
-        print("INFO: QuestionAnswererAgent not available, skipping checkpointer setup.")
+        print(
+            "INFO: QuestionAnswererAgent or AsyncConnectionPool not available, skipping checkpointer setup."
+        )
 
 
 async def startup_event():
@@ -91,6 +122,26 @@ async def startup_event():
 
 async def shutdown_event():
     print("INFO: ASGI application shutdown...")
+    global _global_checkpointer_pool
+    if _global_checkpointer_pool and not _global_checkpointer_pool.closed:
+        print(
+            f"INFO: Closing checkpointer pool {_global_checkpointer_pool.name} on application shutdown."
+        )
+        try:
+            await _global_checkpointer_pool.close()
+            print(f"INFO: Pool {_global_checkpointer_pool.name} closed successfully.")
+        except Exception as e:
+            print(f"ERROR: Failed to close pool {_global_checkpointer_pool.name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+    elif _global_checkpointer_pool and _global_checkpointer_pool.closed:
+        print(
+            f"INFO: Checkpointer pool {_global_checkpointer_pool.name} was already closed."
+        )
+    else:
+        print("INFO: No global checkpointer pool to close or pool not initialized.")
+
     # Add any cleanup tasks here if needed
     print("INFO: ASGI shutdown tasks complete.")
 

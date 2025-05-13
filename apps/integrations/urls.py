@@ -1,11 +1,13 @@
-from django.urls import path
+from django.urls import path, include
 
 # Import the new async view
 from .views import slack_events_handler
 
 # Define URL patterns for this app
 urlpatterns = [
-    # Point the path to the async view function
+    # Path for Slack events
     path("slack/events", slack_events_handler, name="slack_events"),
-    # Add other integration URLs here if needed
+    # Include URLs for Slack-specific integrations (like commands)
+    path("slack/", include("apps.integrations.slack.urls")),
+    # Add other general integration URLs here if needed
 ]

@@ -17,9 +17,50 @@ except ImportError:
     console = None
     RichConsole = None
 
+# Attempt to import AsyncWebClient at the module level for type hinting
+try:
+    from slack_sdk.web.async_client import AsyncWebClient
+except ImportError:
+    AsyncWebClient = None  # Define as None if not available, for type hints
+
 logger = logging.getLogger(__name__)
 
+# --- Slack Client Service ---
+_slack_client_instance: Optional[AsyncWebClient] = None
+# _slack_sdk_available_check is implicitly handled by whether AsyncWebClient is None or not after import attempt
+# We can remove _slack_sdk_available_check global variable as its role is covered by AsyncWebClient itself.
 
+
+def get_slack_web_client() -> Optional[AsyncWebClient]:
+    """
+    Provides a singleton instance of the Slack AsyncWebClient.
+    Initializes the client on first call using SLACK_BOT_TOKEN from Django settings.
+    Returns None if slack_sdk is not installed or token is not configured.
+    """
+    global _slack_client_instance
+
+    if AsyncWebClient is None:  # SDK was not imported successfully at module level
+        logger.warning(
+            "slack_sdk is not installed or AsyncWebClient could not be imported. Slack functionalities will be unavailable."
+        )
+        return None
+
+    if _slack_client_instance is None:
+        slack_bot_token = getattr(settings, "SLACK_BOT_TOKEN", None)
+        if not slack_bot_token:
+            logger.error(
+                "SLACK_BOT_TOKEN is not configured in Django settings. Slack client cannot be initialized."
+            )
+            return None
+
+        # AsyncWebClient is already imported at module level if available
+        _slack_client_instance = AsyncWebClient(token=slack_bot_token)
+        logger.info("Slack AsyncWebClient initialized singleton.")
+
+    return _slack_client_instance
+
+
+# --- Model Interpretation Service ---
 def trigger_model_interpretation(model: Model, verbosity: int = 0) -> bool:
     """Triggers the ModelInterpreterAgent workflow for a single model.
 

@@ -150,24 +150,27 @@ class QuestionAnswererAgent:
                     # NOTE: AsyncPostgresSaver typically needs an async connection pool
                     # Using a sync ConnectionPool here might cause issues later
                     # A better approach might be to pass an async pool/connection during agent init
-                    conn_pool = AsyncConnectionPool(
+                    self.conn_pool = AsyncConnectionPool(
                         conninfo=pg_conn_string,
                         kwargs=connection_kwargs,
                         max_size=20,
                         min_size=5,
+                        open=False,
                     )
                     # Use AsyncPostgresSaver, but it needs an async connection
                     # This initialization might need refactoring if issues persist
-                    self.memory = AsyncPostgresSaver(conn=conn_pool)
+                    self.memory = AsyncPostgresSaver(conn=self.conn_pool)
                     if self.verbose:
                         logger.info(
                             "Initialized AsyncPostgresSaver checkpointer (using async pool)."
                         )
                 else:
+                    self.conn_pool = None
                     logger.warning(
                         "DB Connection Pool not available (DATABASE_URL missing?). Agent state will not be persisted."
                     )
             except Exception as e:
+                self.conn_pool = None
                 logger.error(
                     f"Failed to initialize AsyncPostgresSaver: {e}",
                     exc_info=self.verbose,
@@ -1030,6 +1033,32 @@ class QuestionAnswererAgent:
         final_state = None
         try:
             initial_state["messages"] = [HumanMessage(content=question)]
+
+            # --- Ensure connection pool is open before invoking graph ---
+            if self.conn_pool and self.conn_pool.closed:
+                if self.verbose:
+                    logger.info(
+                        f"Connection pool '{self.conn_pool.name}' is closed. Attempting to open."
+                    )
+                try:
+                    await self.conn_pool.open(wait=True)
+                    if self.verbose:
+                        logger.info(
+                            f"Connection pool '{self.conn_pool.name}' opened successfully."
+                        )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to open connection pool '{self.conn_pool.name}': {e}",
+                        exc_info=True,
+                    )
+                    # Depending on desired behavior, might re-raise or return error
+                    return {
+                        "error": f"Failed to open DB connection pool: {e}",
+                        "answer": None,
+                        "models_used": [],
+                    }
+            # --- End pool opening ---
+
             # Use ainvoke for the async graph execution
             final_state = await self.graph_app.ainvoke(initial_state, config=config)
 

@@ -305,3 +305,6 @@ LOGGING = {
 # Verbosity level for Agents triggered via Admin actions
 # 0 = WARNING/ERROR, 1 = INFO, 3 = DEBUG
 # AGENT_DEFAULT_VERBOSITY = 3 # Removed, will be derived from RAGSTAR_LOG_LEVEL
+
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
