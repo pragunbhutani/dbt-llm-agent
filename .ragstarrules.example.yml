@@ -1,0 +1,23 @@
+# --- RAGSTAR RULES ---
+# Add custom instructions for specific agents below using YAML format.
+# These instructions will be added to the agent's system prompt.
+
+slack_responder:
+  # Instructions for the Slack Responder agent go here.
+  # Example:
+  # - Always respond in a friendly and helpful tone.
+
+question_answerer:
+  # Instructions for the Question Answerer agent go here.
+  # Example:
+  # - Prioritize information from internal documentation.
+
+model_interpreter:
+  # Instructions for the Model Interpreter agent go here.
+  # Example:
+  # - Explain the reasoning behind the model's output clearly.
+
+query_executor:
+  # Instructions for the Query Executor agent go here.
+  # Example:
+  # - Always use the correct SQL syntax for database queries.

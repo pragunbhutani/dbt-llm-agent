@@ -1,4 +1,5 @@
 output/
+.ragstarrules.yml
 
 # Environment variables
 .env
@@ -27,6 +28,7 @@ wheels/
 *.egg
 
 # Virtual environments
+.venv/
 venv/
 env/
 ENV/

@@ -1,14 +1,12 @@
 # Use an official Python runtime as a parent image
-ARG PYTHON_VERSION=3.10
+# ARG PYTHON_VERSION=3.10
+ARG PYTHON_VERSION=3.12
 FROM python:${PYTHON_VERSION}-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
 ENV PYTHONUNBUFFERED 1
-ENV POETRY_NO_INTERACTION=1 \
-    POETRY_VIRTUALENVS_CREATE=false \
-    POETRY_CACHE_DIR='/var/cache/pypoetry' \
-    PIP_NO_CACHE_DIR=off \
+ENV PIP_NO_CACHE_DIR=off \
     PIP_DISABLE_PIP_VERSION_CHECK=on \
     PIP_DEFAULT_TIMEOUT=100
 
@@ -20,27 +18,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Poetry
-RUN pip install poetry
+# Install uv
+RUN pip install uv
 
-# Copy only dependency files to leverage Docker layer caching
-COPY pyproject.toml poetry.lock ./
+# Copy project definition and lock file (if using)
+COPY pyproject.toml ./
+# If you have a uv.lock file and want to use it, uncomment the next line
+# COPY uv.lock ./
 
-# Install project dependencies
-RUN poetry install --no-root
-
-# Copy the rest of the application code
+# Copy the rest of the application code BEFORE installing dependencies
+# This ensures README.md and other project files are available for the build
 COPY . .
-COPY ragstar/entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
-# Install the project itself
-RUN poetry install
+# Install project dependencies using uv from pyproject.toml
+# This installs the current project defined in pyproject.toml
+RUN uv pip install --system --no-cache .
+# If you prefer to use uv.lock, comment the line above and uncomment the line below
+# RUN uv sync --system --no-cache uv.lock
 
-# Expose the port the app runs on (replace 8000 if your app uses a different port)
+# Expose the port the app runs on
 EXPOSE 8000
 
-# Specify the command to run on container start (replace with your actual run command)
-# Example: CMD ["poetry", "run", "uvicorn", "ragstar.api.server:app", "--host", "0.0.0.0", "--port", "8000"]
-# You might need to adjust this based on how your API server is started.
-ENTRYPOINT ["/entrypoint.sh"]
+# Specify the command to run on container start using Uvicorn
+CMD ["uvicorn", "ragstar.asgi:application", "--host", "0.0.0.0", "--port", "8000"]

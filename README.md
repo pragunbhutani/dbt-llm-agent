@@ -82,72 +82,54 @@ Setting up Ragstar involves configuring environment variables and initializing t
     cd ragstar
     ```
 
-2.  **Configure Environment Variables:**
-    Copy the example environment file:
+2.  **Set up environment variables:**
+    Rename `.env.example` to `.env` and populate it with your specific configurations, such as your OpenAI API key and the `APP_HOST` (e.g., `localhost` or your server's IP address).
 
     ```bash
     cp .env.example .env
+    # Open .env and fill in your values
     ```
 
-    Edit the `.env` file:
+3.  **Configure Ragstar rules:**
+    Rename `.ragstarrules.example.yml` to `.ragstarrules.yml`. This file allows you to define custom instructions and behaviors for your RAG application.
 
-    - **Required:** Set your `OPENAI_API_KEY`.
-    - **dbt Connection:** Choose **one** method:
-      - **dbt Cloud:** Fill in `DBT_CLOUD_URL`, `DBT_CLOUD_ACCOUNT_ID`, `DBT_CLOUD_API_KEY`.
-      - **Local dbt:** Fill in `DBT_PROJECT_PATH` (absolute path to your local dbt project).
-    - **Slack (Optional):** If using the Slackbot, set `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET`.
-    - **Database (Optional):** By default, Docker Compose sets up an internal PostgreSQL database. If you want to use an **external** PostgreSQL database (must have `pgvector` enabled), uncomment and set `EXTERNAL_POSTGRES_URL`. This will override the internal database settings.
-    - **Other:** Review other variables like `APP_PORT`, `RAGSTAR_LOG_LEVEL`, etc., and adjust if needed.
+    ```bash
+    cp .ragstarrules.example.yml .ragstarrules.yml
+    # Open .ragstarrules.yml and customize if needed
+    ```
 
-3.  **Build and Run with Docker Compose:**
-    From the `ragstar` directory, run:
+4.  **Build and run with Docker Compose:**
+    This command will build the Docker images and start the application in detached mode.
 
     ```bash
     docker compose up --build -d
     ```
 
-    This command builds the Docker image (if it doesn't exist), starts the application container (`ragstar_app`) and the database container (`ragstar_db`), and runs them in the background (`-d`). The database will be automatically initialized.
-
-4.  **Initialize with dbt Project Data:**
-    Once the containers are running, you need to load your dbt project's metadata. Run the `init` command **inside the running `app` container**:
+5.  **Run initial Django commands:**
+    Execute these commands in the `app` container to set up the database and create an admin user.
 
     ```bash
-    # If using dbt Cloud configuration (credentials in .env):
-    docker compose exec app ragstar init cloud
-
-    # If using local dbt project path (DBT_PROJECT_PATH in .env):
-    docker compose exec app ragstar init local
-
-    # If using local dbt source code (DBT_PROJECT_PATH in .env):
-    docker compose exec app ragstar init source
+    docker compose exec app uv run python manage.py migrate
+    docker compose exec app uv run python manage.py createsuperuser # Follow prompts to create your admin user
     ```
 
-    - Use `cloud`, `local`, or `source` depending on the dbt configuration you set in `.env`.
-    - The `local` and `source` modes require `DBT_PROJECT_PATH` to point to your dbt project _as mounted within the container_. See `docker-compose.yml` volumes.
-
-5.  **Build the Knowledge Base (Interpret & Embed):**
-    After initializing, you need to process your models so the agent can answer questions about them.
-
-    - **Interpret (Optional but Recommended):** Generate descriptions for models lacking them.
-    - **Embed (Required for Q&A):** Create vector embeddings for semantic search.
+6.  **Initialize your project:**
+    This command sets up the necessary project configurations. You can choose between `cloud`, `core`, or `local` methods.
 
     ```bash
-    # Example: Interpret models tagged 'knowledge', save, and then embed ALL models
-    docker compose exec app ragstar interpret --select "tag:knowledge" --save
-    docker compose exec app ragstar embed --select "*"
-
-    # Example: Embed all models directly (if documentation exists)
-    docker compose exec ragstar_app ragstar embed --select "*"
+    docker compose exec app uv run python manage.py init_project --method cloud
+    # Or --method core, or --method local
     ```
 
-    Choose the appropriate `--select` argument based on which models you want to process. See `Core Commands` below for more details.
+7.  **Access the Django Admin:**
+    Open your web browser and navigate to `http://<your_APP_HOST_value>/admin` (e.g., `http://localhost/admin` if `APP_HOST=localhost`).
+    Log in with the superuser credentials you created.
 
-6.  **Verify:**
-    Check the logs to ensure everything started correctly:
-    ```bash
-    docker compose logs -f ragstar_app
-    ```
-    You should see logs indicating successful initialization and the API server starting.
+8.  **Embed Models:**
+    In the Django admin interface, you can:
+    - Navigate to "Models".
+    - Click on "Interpret".
+    - Select and embed the models you want to use for answering questions.
 
 ### Option 2: Local Python Environment (Advanced)
 
@@ -156,7 +138,7 @@ If you prefer not to use Docker, you can set up a local Python environment.
 1.  **Prerequisites:**
 
     - Python 3.10 or higher.
-    - [Poetry](https://python-poetry.org/) for dependency management.
+    - `uv` (Python package installer and virtual environment manager). You can install it from [https://github.com/astral-sh/uv](https://github.com/astral-sh/uv).
     - A running PostgreSQL server (version 11+) with the `pgvector` extension enabled.
 
 2.  **Check Python Version:**
@@ -172,17 +154,26 @@ If you prefer not to use Docker, you can set up a local Python environment.
     cd ragstar
     ```
 
-4.  **Install Dependencies:**
+4.  **Create a virtual environment and install dependencies:**
 
     ```bash
-    # Install Poetry if needed: curl -sSL https://install.python-poetry.org | python3 -
-    poetry install
+    # Create a virtual environment (e.g., named .venv)
+    python -m venv .venv
+    # Or using uv: uv venv
+
+    # Activate the virtual environment
+    source .venv/bin/activate # On Windows: .venv\Scripts\activate
+
+    # Install dependencies using uv
+    uv pip install -r requirements.txt
+    # Or if you have a pyproject.toml configured for uv:
+    # uv pip install -e .
     ```
 
 5.  **Set up PostgreSQL:**
 
     - Install PostgreSQL and `pgvector`.
-    - Create a database (e.g., `ragstar`).
+    - Create a database (e.g., `ragstar_local_dev`).
     - Enable the `pgvector` extension in the database:
       ```sql
       -- Run in psql connected to your database
@@ -198,49 +189,46 @@ If you prefer not to use Docker, you can set up a local Python environment.
 
     Edit `.env`:
 
-    - **Required:** Set `OPENAI_API_KEY`.
-    - **Required:** Set `EXTERNAL_POSTGRES_URL` to your database connection string (e.g., `postgresql://user:password@host:port/dbname`). The Docker Compose variables (`POSTGRES_DB`, `POSTGRES_USER`, etc.) are ignored in this setup.
-    - **dbt Connection:** Choose **one** method and configure the relevant variables (`DBT_CLOUD_...` or `DBT_PROJECT_PATH`).
-    - **Slack (Optional):** Configure Slack variables if needed.
-    - **Other:** Adjust `RAGSTAR_LOG_LEVEL`, etc.
+    - **Required:** Set your `OPENAI_API_KEY`.
+    - **Required:** Set `DATABASE_URL` to your local PostgreSQL connection string (e.g., `postgresql://user:password@host:port/dbname`). Ensure this matches the database you created. (The `.env.example` might have fallback variables like `DB_NAME_FALLBACK`, etc., which are used if `DATABASE_URL` is not set; for local setup, explicitly setting `DATABASE_URL` is clearer).
+    - **Required:** Set `APP_HOST` (e.g., `localhost` or `127.0.0.1`).
+    - **Ragstar Rules:** Rename `.ragstarrules.example.yml` to `.ragstarrules.yml` and customize if needed.
+    - **Slack (Optional):** Configure `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` if you plan to use the Slack integration.
+    - **Other:** Review other variables like `RAGSTAR_LOG_LEVEL`, etc., and adjust if needed.
 
-7.  **Initialize the Database Schema:**
-    Run the database initialization command:
-
-    ```bash
-    poetry run ragstar init-db
-    ```
-
-8.  **Initialize with dbt Project Data:**
-    Load your dbt project metadata using the appropriate `init` mode:
+7.  **Run Database Migrations:**
+    Apply database schema changes:
 
     ```bash
-    # Example using dbt Cloud (ensure DBT_CLOUD_* vars are set)
-    poetry run ragstar init cloud
-
-    # Example using local dbt project (ensure DBT_PROJECT_PATH is set or use --project-path)
-    poetry run ragstar init local --project-path /path/to/your/dbt/project
-
-    # Example using source code
-    poetry run ragstar init source /path/to/your/dbt/project
+    uv run python manage.py migrate
     ```
 
-9.  **Build the Knowledge Base (Interpret & Embed):**
-    After initializing, process your models so the agent can answer questions.
-
-    - **Interpret (Optional but Recommended):** Generate descriptions for models lacking them.
-    - **Embed (Required for Q&A):** Create vector embeddings for semantic search.
+8.  **Create a Superuser:**
+    Create an admin account to access the Django admin interface:
 
     ```bash
-    # Example: Interpret models tagged 'staging', save, and then embed ALL models
-    poetry run ragstar interpret --select "tag:staging" --save
-    poetry run ragstar embed --select "*"
-
-    # Example: Embed all models directly (if documentation exists)
-    poetry run ragstar embed --select "*"
+    uv run python manage.py createsuperuser
+    # Follow the prompts
     ```
 
-    Choose the appropriate `--select` argument. See `Core Commands` below.
+9.  **Initialize your project:**
+    This command sets up the necessary project configurations.
+
+    ```bash
+    uv run python manage.py init_project --method cloud
+    # Or --method core, or --method local, depending on your dbt project setup.
+    ```
+
+10. **Run the Development Server:**
+
+    ```bash
+    uv run python manage.py runserver
+    ```
+
+    The application will typically be available at `http://<your_APP_HOST_value>:8000` (e.g., `http://localhost:8000`).
+
+11. **Access the Django Admin & Embed Models:**
+    Follow the same steps as in the Docker setup (steps 7 and 8) to access the admin interface (`http://<your_APP_HOST_value>:8000/admin`) and embed your models.
 
 ## Usage
 
@@ -248,57 +236,57 @@ After setup and initialization, you can interact with Ragstar.
 
 ### Using Docker Compose:
 
-Most commands should be run **inside the `app` container** using `docker compose exec`:
+Most Django `manage.py` commands should be run **inside the `app` container** using `docker compose exec`:
 
 ```bash
-# Example: Ask a question
-docker compose exec app ragstar ask "Explain the fct_orders model"
+# Example: Run database migrations (if not already done by entrypoint)
+docker compose exec app uv run python manage.py migrate
 
-# Example: Interpret and embed a model
-docker compose exec app ragstar interpret --select "fct_orders" --save --embed
+# Example: Create a superuser (if not done during initial setup)
+docker compose exec app uv run python manage.py createsuperuser
 
-# Example: Run the Slackbot (will run in the foreground of the exec command)
-# Note: The API server runs automatically via the Dockerfile's CMD.
-# To run the Slackbot *instead* of the API server, you would need to
-# modify the command in docker-compose.yml or the Dockerfile CMD.
-# For typical use, run the Slackbot as a separate process if needed,
-# perhaps in a different container or locally if developing.
-# If you *only* want the Slackbot, change the docker-compose command:
-# command: poetry run ragstar serve
+# Example: Initialize project
+docker compose exec app uv run python manage.py init_project --method cloud
 ```
 
-The API server (for potential future UI or direct API calls) is started automatically by the `docker compose up` command.
+The application server is started automatically by `docker compose up`. Access it via `http://<your_APP_HOST_value>/admin`.
 
 ### Using Local Python Environment:
 
-Run commands directly using `poetry run`:
+Run Django `manage.py` commands directly using `uv run` from your activated virtual environment:
 
 ```bash
-# Example: Ask a question
-poetry run ragstar ask "Explain the fct_orders model"
+# Example: Run the development server
+uv run python manage.py runserver
 
-# Example: Interpret and embed a model
-poetry run ragstar interpret --select "fct_orders" --save --embed
+# Example: Create a superuser
+uv run python manage.py createsuperuser
 
-# Example: Run the API server
-poetry run uvicorn ragstar.api.server:app --host 0.0.0.0 --port 8000 --reload
-
-# Example: Run the Slackbot
-poetry run ragstar serve
+# Example: Initialize project
+uv run python manage.py init_project --method cloud
 ```
 
-### Core Commands
+Access the application at `http://<your_APP_HOST_value>:8000` and the admin interface at `http://<your_APP_HOST_value>:8000/admin`.
 
-- **`ragstar init <cloud|local|source> [options]`**: Loads dbt project metadata into Ragstar. Run this first.
-- **`ragstar interpret --select <selector> [--save] [--embed]`**: (Optional) Uses LLM to analyze and generate documentation for selected models. `--save` writes to DB, `--embed` runs embedding after.
-- **`ragstar embed --select <selector>`**: (Required for Q&A) Creates vector embeddings for selected models with documentation, enabling semantic search.
-- **`ragstar ask "<question>"`**: Ask a natural language question about your dbt project.
-- **`ragstar questions`**: List previous questions asked.
-- **`ragstar feedback <question_id> [--useful | --not-useful] [--text "<feedback>"]`**: Provide feedback on an answer to improve the agent.
-- **`ragstar serve`**: Starts the Slackbot (requires Slack env vars).
-- **`ragstar list`**: List models found in the database.
-- **`ragstar model-details <model_name>`**: Show detailed information about a specific model.
-- **`ragstar init-db`**: (Local Setup Only) Initializes the database schema.
+### Core Django Management Commands
+
+The primary way to manage and interact with the application (outside of the web interface) is through Django's `manage.py` script. Here are some key commands:
+
+- **`uv run python manage.py migrate`**: Applies database migrations.
+- **`uv run python manage.py createsuperuser`**: Creates an administrator account.
+- **`uv run python manage.py init_project --method <cloud|core|local>`**: Initializes Ragstar with your project data (e.g., from dbt). This is crucial for setting up the knowledge base.
+- **`uv run python manage.py runserver [host:port]`**: Starts the Django development web server.
+
+Other functionalities, such as interpreting and embedding models, are primarily handled through the Django admin interface after logging in.
+
+## Slack Integration (Optional)
+
+Ragstar provides a Slack manifest to easily integrate its functionalities into your Slack workspace.
+
+1.  Ensure `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN` are set in your `.env` file.
+2.  Use the `.slack_manifest.example.json` file as a template to create a new Slack app.
+3.  Follow Slack's documentation for creating an app from a manifest.
+4.  This will enable features like asking questions and receiving answers directly within Slack (assuming the Slack integration is running as part of the Django application).
 
 ## Contributing
 

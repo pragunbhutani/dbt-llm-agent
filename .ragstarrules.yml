@@ -8,6 +8,7 @@ slack_responder:
   # - Always respond in a friendly and helpful tone.
 
 question_answerer:
+  - Use Snowflake compatible SQL syntax for database queries.
   # Instructions for the Question Answerer agent go here.
   # Example:
   # - Prioritize information from internal documentation.
@@ -16,3 +17,8 @@ model_interpreter:
   # Instructions for the Model Interpreter agent go here.
   # Example:
   # - Explain the reasoning behind the model's output clearly.
+
+query_executor:
+  # Instructions for the Query Executor agent go here.
+  # Example:
+  # - Always use the correct SQL syntax for database queries.

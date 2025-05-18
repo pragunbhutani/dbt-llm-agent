@@ -1,0 +1,99 @@
+import logging
+from django.conf import settings
+from django.contrib import admin, messages
+from django.db import transaction
+from django.utils import timezone
+
+# Local model import
+from .models import Model
+
+# Imports for Admin Actions
+# Remove direct service/agent imports used only by actions
+# Import the new service functions
+from apps.embeddings.services import embed_knowledge_model
+from apps.workflows.services import trigger_model_interpretation
+
+logger = logging.getLogger(__name__)
+
+
+@admin.register(Model)
+class ModelAdmin(admin.ModelAdmin):
+    list_display = (
+        "name",
+        "unique_id",
+        "schema_name",
+        "materialization",
+        "created_at",
+        "updated_at",
+    )
+    search_fields = ("name", "unique_id", "yml_description", "path")
+    list_filter = ("materialization", "schema_name", "database")
+    readonly_fields = (
+        "created_at",
+        "updated_at",
+    )
+    actions = ["embed_models", "interpret_models"]
+
+    # --- embed_models action ---
+    def embed_models(self, request, queryset):
+        """Triggers embedding for selected models using the embedding service."""
+        success_count = 0
+        error_count = 0
+        for model in queryset:
+            try:
+                # Call the service function
+                if embed_knowledge_model(model=model, include_docs=True):
+                    success_count += 1
+                else:
+                    error_count += 1
+            except Exception as e:
+                # Catch unexpected errors during service call
+                logger.error(
+                    f"Unexpected error embedding model {model.name}: {e}", exc_info=True
+                )
+                messages.error(request, f"Unexpected error embedding {model.name}: {e}")
+                error_count += 1
+
+        msg = f"Successfully triggered embedding for {success_count} model(s)."
+        if error_count > 0:
+            msg += f" Failed to trigger/complete embedding for {error_count} model(s). Check logs."
+            messages.warning(request, msg)
+        else:
+            messages.success(request, msg)
+
+    embed_models.short_description = "Embed selected models (using Service)"
+
+    # --- interpret_models action ---
+    def interpret_models(self, request, queryset):
+        """Triggers interpretation for selected models using the workflow service."""
+        success_count = 0
+        error_count = 0
+        # Get verbosity level once
+        admin_verbosity = getattr(settings, "AGENT_DEFAULT_VERBOSITY", 0)
+
+        for model in queryset:
+            try:
+                # Call the service function
+                if trigger_model_interpretation(model=model, verbosity=admin_verbosity):
+                    success_count += 1
+                else:
+                    error_count += 1
+            except Exception as e:
+                # Catch unexpected errors during service call
+                logger.error(
+                    f"Unexpected error interpreting model {model.name}: {e}",
+                    exc_info=True,
+                )
+                messages.error(
+                    request, f"Unexpected error interpreting {model.name}: {e}"
+                )
+                error_count += 1
+
+        msg = f"Successfully triggered interpretation for {success_count} model(s)."
+        if error_count > 0:
+            msg += f" Failed to trigger/complete interpretation for {error_count} model(s). Check logs."
+            messages.warning(request, msg)
+        else:
+            messages.success(request, msg)
+
+    interpret_models.short_description = "Interpret selected models (using Service)"

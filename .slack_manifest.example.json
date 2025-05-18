@@ -1,7 +1,7 @@
 {
   "display_information": {
-    "name": "Ragstar Integration",
-    "description": "Connect Slack with your Ragstar application.",
+    "name": "Ragstar - AI Data Assistant",
+    "description": "Ragstar is an AI data assistant that allows you to ask questions about your data and get answers back.",
     "background_color": "#2F6EAF"
   },
   "features": {
@@ -9,15 +9,15 @@
       "display_name": "ragstar",
       "always_online": true
     },
-    "slash_commands": [
+    "shortcuts": [
       {
-        "command": "/ragstar",
-        "url": "https://your-ragstar-api.com/slack/commands",
-        "description": "Interact with Ragstar.",
-        "usage_hint": "[your query or command]",
-        "should_escape": false
+        "name": "Execute Query",
+        "type": "message",
+        "callback_id": "execute_query",
+        "description": "Executes the query and returns the result as CSV to the same thread"
       }
-    ]
+    ],
+    "slash_commands": []
   },
   "oauth_config": {
     "scopes": {
@@ -38,13 +38,13 @@
   "settings": {
     "interactivity": {
       "is_enabled": true,
-      "request_url": "https://your-ragstar-api.com/slack/events"
+      "request_url": "https://your-ragstar-api.com/integrations/slack/shortcuts/"
     },
     "org_deploy_enabled": false,
     "socket_mode_enabled": false,
     "token_rotation_enabled": false,
     "event_subscriptions": {
-      "request_url": "https://your-ragstar-api.com/slack/events",
+      "request_url": "https://your-ragstar-api.com/integrations/slack/events",
       "bot_events": [
         "app_mention",
         "message.im",
