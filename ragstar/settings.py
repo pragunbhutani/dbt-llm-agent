@@ -40,6 +40,11 @@ ALLOWED_HOSTS = [
     "localhost",
 ]
 
+# Add APP_HOST from environment variables
+APP_HOST = os.environ.get("APP_HOST")
+if APP_HOST:
+    ALLOWED_HOSTS.append(APP_HOST)
+
 
 # Application definition
 
