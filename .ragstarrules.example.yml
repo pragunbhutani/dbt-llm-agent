@@ -8,7 +8,6 @@ slack_responder:
   # - Always respond in a friendly and helpful tone.
 
 question_answerer:
-  - Use Snowflake compatible SQL syntax for database queries.
   # Instructions for the Question Answerer agent go here.
   # Example:
   # - Prioritize information from internal documentation.

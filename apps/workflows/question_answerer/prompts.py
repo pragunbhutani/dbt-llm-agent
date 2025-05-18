@@ -4,11 +4,14 @@ from typing import Dict, List, Any, Optional, Set, Union
 
 # Import Django model types for type hinting (optional but helpful)
 try:
-    from core.models import Model, Question
+    from apps.knowledge_base.models import Model
+    from apps.workflows.models import Question
 except ImportError:
     # Handle case where models might not be available during standalone testing
     Model = Any
-    Question = Any
+    Question = Any  # type: ignore
+
+from apps.workflows.rules_loader import get_agent_rules  # Updated import
 
 logger = logging.getLogger(__name__)
 
@@ -249,6 +252,13 @@ You have access to the following models. Use `fetch_model_details` to get column
         prompt += "You MUST limit your SQL query to use ONLY the tables and columns detailed in this section. Do not use any other tables, even if mentioned in the initial summary or elsewhere, unless their full details are retrieved and listed here.\n"
         for model_data in accumulated_models:
             prompt += _format_model_for_prompt(model_data)
+
+    # Append custom rules
+    custom_rules = get_agent_rules("question_answerer")
+    if custom_rules:
+        prompt += (
+            f"\n\n**Additional Instructions (from .ragstarrules.yml):**\n{custom_rules}"
+        )
 
     prompt += "\nBased on the user's question and the available information/tools, decide the next step. If ready, call `finish_workflow` with the final SQL query and explanations."
     return prompt

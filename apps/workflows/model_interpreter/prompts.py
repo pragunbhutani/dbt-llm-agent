@@ -1,8 +1,7 @@
 """Prompts for the ModelInterpreter Agent."""
 
 # --- NEW IMPORT ---
-# TODO: Re-evaluate if rules are needed/how to load them in Django context
-# from ragstar.core.agents.rules import load_ragstar_rules
+from apps.workflows.rules_loader import get_agent_rules
 
 # --- END NEW IMPORT ---
 
@@ -31,16 +30,13 @@ Process:
 - Ensure the final output to `finish_interpretation` is a structured object with 'name', 'description', and 'columns' (each column having 'name' and 'description')."""
 
     # --- NEW: Load and append custom rules ---
-    # TODO: Re-evaluate rules loading in Django
-    # all_rules = load_ragstar_rules()
-    # custom_rules = all_rules.get("model_interpreter", "")
+    custom_rules = get_agent_rules("model_interpreter")
 
-    # if custom_rules:
-    #     final_prompt = base_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
-    #     return final_prompt
-    # else:
-    #     return base_prompt
-    return base_prompt  # Temporarily return base prompt without rules
+    if custom_rules:
+        final_prompt = base_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
+        return final_prompt
+    else:
+        return base_prompt
     # --- END NEW --
 
 

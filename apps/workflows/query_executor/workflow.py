@@ -38,6 +38,7 @@ from . import (
     settings as query_executor_app_settings,
 )  # Our app-specific settings (for Snowflake)
 from .prompts import SQL_DEBUG_PROMPT_TEMPLATE
+from apps.workflows.rules_loader import get_agent_rules  # Updated import
 
 # Import the new centralized Slack client getter
 from apps.workflows.services import get_slack_web_client
@@ -85,7 +86,7 @@ class ListColumnValuesInput(BaseModel):
     column_name: str = Field(
         description="The name of the column to list distinct values for."
     )
-    limit: int = Field(
+    limit: Optional[int] = Field(
         default=20, description="Max number of distinct values to return."
     )
 
@@ -506,6 +507,53 @@ class QueryExecutorWorkflow:
             post_csv_to_thread  # Assign for direct calls if needed
         )
 
+        @tool
+        async def post_text_file_to_thread(
+            text_content: str,
+            initial_comment: str,
+            filename: str,
+            state: QueryExecutorState,
+        ) -> Dict[str, Any]:
+            """Posts a text file to the current Slack thread in context."""
+            _slack_client = self.slack_client
+            if not _slack_client:
+                return {"success": False, "error": "Slack client not available."}
+
+            current_channel_id = state.get("channel_id")
+            current_thread_ts = state.get("thread_ts")
+
+            if not current_channel_id or not current_thread_ts:
+                logger.error(
+                    "post_text_file_to_thread: channel_id or thread_ts missing."
+                )
+                return {"success": False, "error": "Channel/thread info missing."}
+
+            try:
+                result = await _slack_client.files_upload_v2(
+                    channel=current_channel_id,
+                    thread_ts=current_thread_ts,
+                    content=text_content.encode("utf-8"),
+                    filename=filename,
+                    initial_comment=initial_comment,
+                )
+                if result["ok"]:
+                    file_obj = result.get("file")
+                    return {
+                        "success": True,
+                        "file_id": file_obj.get("id") if file_obj else None,
+                    }
+                return {
+                    "success": False,
+                    "error": result.get("error", "Slack API error"),
+                }
+            except Exception as e:
+                logger.error(
+                    f"Error in post_text_file_to_thread: {e}", exc_info=self.verbose
+                )
+                return {"success": False, "error": str(e)}
+
+        self.post_text_file_tool_func = post_text_file_to_thread
+
         # Tools for LLM-assisted debugging (using self._execute_sql_query)
         @tool(args_schema=DescribeTableInput)
         async def describe_table_tool(table_name: str) -> Dict[str, Any]:
@@ -570,7 +618,7 @@ class QueryExecutorWorkflow:
 
         @tool(args_schema=ListColumnValuesInput)
         async def list_column_values_tool(
-            table_name: str, column_name: str, limit: int
+            table_name: str, column_name: str, limit: Optional[int] = None
         ) -> Dict[str, Any]:
             """Lists distinct values for a given column in a table (for LLM use).
             (Logic moved from tools.py and uses internal _execute_sql_query)
@@ -581,10 +629,12 @@ class QueryExecutorWorkflow:
             ):  # Column name more restrictive
                 return {"error": "Invalid table or column name format."}
 
-            if not isinstance(limit, int) or limit <= 0:
+            if (
+                not limit or not isinstance(limit, int) or limit <= 0
+            ):  # Updated condition
                 limit = 20  # Default to a safe limit (as per original schema)
                 logger.warning(
-                    f"Invalid limit specified for list_column_values, defaulting to {limit}"
+                    f"Invalid or missing limit specified for list_column_values, defaulting to {limit}"
                 )
 
             # Snowflake is case-insensitive by default for unquoted identifiers,
@@ -686,7 +736,7 @@ class QueryExecutorWorkflow:
             "invoke_debug_llm",
             tools_condition,
             {
-                "debug_tools": "debug_tools",
+                "tools": "debug_tools",
                 END: "update_query_from_llm_suggestion",
             },
         )
@@ -914,7 +964,7 @@ class QueryExecutorWorkflow:
                 logger.info(
                     f"Successfully posted CSV to Slack. File ID (if any): {tool_result.get('file_id')}"
                 )
-                return {
+                updates_for_state = {
                     "is_success": True,
                     "final_status_message": "Query results successfully posted to Slack.",
                     "posted_file_ts": tool_result.get(
@@ -922,6 +972,39 @@ class QueryExecutorWorkflow:
                     ),  # Store file ID or similar identifier
                     "execution_error": None,  # Clear error on success
                 }
+
+                # Check if the query was modified and post the corrected SQL
+                fetched_sql = state.get("fetched_sql_query")
+                current_sql = state.get("current_sql_query")
+                if current_sql and fetched_sql != current_sql:
+                    logger.info(
+                        "Original query was modified. Posting corrected SQL to Slack."
+                    )
+                    corrected_sql_filename = f"corrected_query_for_{state.get('original_trigger_message_ts', 'unknown_ts')}.sql"
+                    corrected_sql_comment = "Here is the corrected SQL query that was successfully executed:"
+                    try:
+                        sql_post_result = await self.post_text_file_tool_func.ainvoke(
+                            {
+                                "text_content": current_sql,
+                                "initial_comment": corrected_sql_comment,
+                                "filename": corrected_sql_filename,
+                                "state": state,
+                            }
+                        )
+                        if sql_post_result.get("success"):
+                            logger.info(
+                                f"Successfully posted corrected SQL file: {corrected_sql_filename}"
+                            )
+                        else:
+                            logger.warning(
+                                f"Failed to post corrected SQL file: {sql_post_result.get('error')}"
+                            )
+                    except Exception as e:
+                        logger.error(
+                            f"Exception calling post_text_file_tool_func for corrected SQL: {e}",
+                            exc_info=self.verbose,
+                        )
+                return updates_for_state
             else:
                 error_from_tool = tool_result.get(
                     "error", "Failed to post CSV to Slack."
@@ -995,11 +1078,16 @@ class QueryExecutorWorkflow:
             ),
         )
 
+        # Append custom rules for query_executor
+        custom_rules = get_agent_rules("query_executor")
+        if custom_rules:
+            prompt_content += f"\n\n**Additional Instructions (from .ragstarrules.yml):**\n{custom_rules}"
+
         # Debug LLM messages should be isolated for each debug attempt if possible,
         # or carefully managed if accumulated.
         # For simplicity, using state["messages"] which accumulates.
         # A more advanced setup might use a sub-graph for debugging with its own message history.
-        messages_for_llm: List[BaseMessage] = [SystemMessage(content=prompt_content)]
+        messages_for_llm: List[BaseMessage] = [HumanMessage(content=prompt_content)]
 
         # Add relevant past messages from this debug interaction if any.
         # `state.get("messages", [])` currently holds ALL messages.
@@ -1014,7 +1102,7 @@ class QueryExecutorWorkflow:
                 f"SQL Debug System Prompt (first 500 chars): {prompt_content[:500]}..."
             )
             # Log messages for LLM
-            log_llm_messages_content = [f"  0. System: {prompt_content[:150]}..."]
+            log_llm_messages_content = [f"  0. Human: {prompt_content[:150]}..."]
             # If passing more messages:
             # for i, msg in enumerate(state.get("messages", [])): # Example if passing history
             #     log_llm_messages_content.append(f"  {i+1}. Type: {type(msg).__name__}, Content: {str(msg.content)[:100]}...")
@@ -1189,9 +1277,9 @@ class QueryExecutorWorkflow:
 
         # Attempt to parse SQL from a markdown block ```sql ... ```
         sql_block_match = re.search(
-            r"```(?:sql)?\\n(.*?)(?:\\n```|```$)",
+            r"```(?:sql)?\n(.*?)(?:\n```|```$)",
             llm_content,
-            re.DOTALL | re.IGNORECASE,  # Made sql optional in tag
+            re.DOTALL | re.IGNORECASE,
         )
         corrected_sql = None
         if sql_block_match:
@@ -1422,11 +1510,12 @@ class QueryExecutorWorkflow:
                         f"Failed to post Snowflake credential error to Slack: {post_err}"
                     )
 
-            return {  # Return a structured error response
-                "error": str(e),
+            # Variable e is not defined here, should be err_msg
+            return {
+                "error": err_msg,  # Changed e to err_msg
                 "is_success": False,
-                "final_status_message": final_status_message,
-                "conversation_id": conversation_id,
+                "final_status_message": err_msg,  # Changed final_status_message to err_msg
+                "conversation_id": f"query-executor-{channel_id}-{thread_ts}-{trigger_message_ts}",  # Added conversation_id
             }
 
         conversation_id = (

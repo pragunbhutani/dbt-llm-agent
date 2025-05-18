@@ -3,6 +3,8 @@ import logging
 import json  # Import json for formatting
 from typing import Dict, List, Any, Optional
 
+from apps.workflows.rules_loader import get_agent_rules  # Updated import
+
 logger = logging.getLogger(__name__)
 
 
@@ -91,6 +93,13 @@ All your actions (fetching history, acknowledging, asking QA, posting responses)
     prompt += "        *   **If SQL was extracted AND verification passes (SQL is grounded):** Compose a brief, friendly introductory `message_text` for the Slack post. Then, call the `post_final_response_with_snippet` tool. Provide this `message_text`, the verified (grounded) `sql_query` you extracted, and combine the extracted QA footnotes with any limitations you identified during your 'LOGICAL COMPLETENESS CHECK' into `optional_notes`.\n"
     prompt += '        *   **If verification fails (SQL is ungrounded or contains errors) OR no SQL was extracted from the QA answer OR if `error_message` is present from a previous step:** Call the `post_text_response` tool. Your `message_text` should explain the issue (e.g., "I received a response, but the SQL query references tables/columns not found in our models, so I cannot share it.", "The QuestionAnswerer could not generate a valid SQL query based on the available data models to answer your request.", or explain the `error_message` if present). **Do NOT include problematic SQL in this message.**\n'
     prompt += f"5.  **If clarification is needed at any point (and not covered by a verification failure):** Call `post_text_response` to ask the user a clarifying question.\n"
+
+    # Append custom rules
+    custom_rules = get_agent_rules("slack_responder")
+    if custom_rules:
+        prompt += (
+            f"\n\n**Additional Instructions (from .ragstarrules.yml):**\n{custom_rules}"
+        )
 
     prompt += "\n**Choose the MOST appropriate next tool call based on the state described above. You do NOT need to provide channel_id or thread_ts for any tool call.**"
 
