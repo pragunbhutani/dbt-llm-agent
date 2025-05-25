@@ -19,7 +19,6 @@ from langchain_core.messages import (
     SystemMessage,
 )
 from langchain_core.tools import tool
-from pydantic import BaseModel, Field  # For tool input schemas
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver  # For potential checkpointing
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -43,6 +42,15 @@ from apps.workflows.rules_loader import get_agent_rules  # Updated import
 # Import the new centralized Slack client getter
 from apps.workflows.services import get_slack_web_client
 
+# NEW: Import SQLDebugResult and other schemas
+from .schemas import (
+    SQLDebugResult,
+    PostMessageInput,
+    PostCsvInput,
+    DescribeTableInput,
+    ListColumnValuesInput,
+)
+
 try:
     from slack_sdk.web.async_client import AsyncWebClient
     from slack_sdk.errors import SlackApiError
@@ -62,33 +70,8 @@ logger = logging.getLogger(__name__)
 
 
 # --- Tool Input Schemas (for tools the LLM might call, or for clarity) ---
-class PostMessageInput(BaseModel):
-    message_text: str = Field(
-        description="The text message to post to the Slack thread."
-    )
-
-
-class PostCsvInput(BaseModel):
-    csv_data: str = Field(description="The CSV data as a string.")
-    initial_comment: str = Field(description="A comment to accompany the CSV file.")
-    filename: str = Field(
-        default="query_results.csv", description="The filename for the CSV."
-    )
-
-
-# Potentially for LLM-assisted debugging, if it needs to call schema tools:
-class DescribeTableInput(BaseModel):
-    table_name: str = Field(description="The name of the table to describe.")
-
-
-class ListColumnValuesInput(BaseModel):
-    table_name: str = Field(description="The name of the table.")
-    column_name: str = Field(
-        description="The name of the column to list distinct values for."
-    )
-    limit: Optional[int] = Field(
-        default=20, description="Max number of distinct values to return."
-    )
+# REMOVED PostMessageInput, PostCsvInput, DescribeTableInput, ListColumnValuesInput, SQLDebugResult definitions
+# All Pydantic models are now in schemas.py
 
 
 # --- LangGraph State Definition ---
@@ -120,6 +103,9 @@ class QueryExecutorState(TypedDict):
     listed_column_values: Dict[
         str, List[Any]
     ]  # Store column values from list_column_values tool calls
+
+    # NEW: Log for debugging and execution steps
+    debugging_log: List[str]
 
     # General message history for LLM interactions (primarily for debugging LLM)
     messages: Annotated[List[BaseMessage], add_messages]
@@ -758,11 +744,14 @@ class QueryExecutorWorkflow:
         self, state: QueryExecutorState
     ) -> Dict[str, Any]:
         logger.info("Node: fetch_sql_from_slack_node")
+        state["debugging_log"].append(
+            "Attempting to fetch SQL query from Slack thread..."
+        )
         if not self.slack_client:  # Use self.slack_client here
             logger.error("Slack client not available in fetch_sql_from_slack_node.")
-            return {
-                "execution_error": "Slack client not configured, cannot fetch query."
-            }
+            error_msg = "Slack client not configured, cannot fetch query."
+            state["debugging_log"].append(f"Error: {error_msg}")
+            return {"execution_error": error_msg}
 
         channel_id = state["channel_id"]
         thread_ts_for_replies = state["original_trigger_message_ts"]
@@ -779,6 +768,9 @@ class QueryExecutorWorkflow:
                 logger.info(
                     f"Successfully fetched SQL from Slack: {sql_query[:100]}..."
                 )
+                state["debugging_log"].append(
+                    "Successfully fetched SQL from Slack thread."
+                )
                 return {
                     "fetched_sql_query": sql_query,
                     "current_sql_query": sql_query,
@@ -789,6 +781,7 @@ class QueryExecutorWorkflow:
                     f"Could not find a SQL query in thread {channel_id}/{thread_ts_for_replies}"
                 )
                 no_query_message = "I couldn't find a .sql file in the specified message or its thread. Please make sure a .sql file was attached."
+                state["debugging_log"].append("No SQL query file found in the thread.")
 
                 # Use the tool directly for posting messages.
                 # self.post_message_tool_func is the @tool decorated object.
@@ -821,15 +814,20 @@ class QueryExecutorWorkflow:
             logger.error(
                 f"Error in fetch_sql_from_slack_node: {e}", exc_info=self.verbose
             )
-            return {"execution_error": f"Failed to fetch SQL from Slack: {e}"}
+            error_msg = f"Failed to fetch SQL from Slack: {e}"
+            state["debugging_log"].append(f"Exception during SQL fetch: {error_msg}")
+            return {"execution_error": error_msg}
 
     async def execute_sql_node(self, state: QueryExecutorState) -> Dict[str, Any]:
-        logger.info(
-            f"Node: execute_sql_node (Attempt: {state.get('debug_attempts', 0) + 1})"
+        current_attempt_number = state.get("debug_attempts", 0) + 1
+        logger.info(f"Node: execute_sql_node (Attempt: {current_attempt_number})")
+        state["debugging_log"].append(
+            f"Executing SQL (Attempt {current_attempt_number})."
         )
         if not self.snowflake_creds:
             logger.error("Snowflake credentials not available in execute_sql_node.")
             error_message_to_user = "Critical error: Snowflake connection details are not configured. Cannot execute query."
+            state["debugging_log"].append(f"Error: {error_message_to_user}")
             if self.slack_client:
                 # Call the tool, ensuring `state` is passed.
                 await self.post_message_tool_func.ainvoke(
@@ -844,8 +842,11 @@ class QueryExecutorWorkflow:
         current_query = state.get("current_sql_query")
         if not current_query:
             logger.error("No SQL query found in state for execution.")
-            # This is an internal error, user message might not be needed or could be generic.
             internal_error_msg = "Internal error: No query to execute."
+            state["debugging_log"].append(
+                f"Error (Attempt {current_attempt_number}): {internal_error_msg} - Current query is missing in state."
+            )
+            # This is an internal error, user message might not be needed or could be generic.
             await self.post_message_tool_func.ainvoke(
                 {"message_text": internal_error_msg, "state": state}
             )
@@ -864,10 +865,17 @@ class QueryExecutorWorkflow:
 
         if error:
             logger.warning(f"SQL execution failed: {error}")
+            state["debugging_log"].append(
+                f"SQL execution failed (Attempt {current_attempt_number}). Error: {error}"
+            )
             return {"execution_result_rows": None, "execution_error": error}
         else:
+            num_rows = len(results) - 1 if results and len(results) > 0 else 0
             logger.info(
-                f"SQL execution successful. Rows returned: {len(results) -1 if results and len(results) > 0 else 0} (excluding header)"
+                f"SQL execution successful. Rows returned: {num_rows} (excluding header)"
+            )
+            state["debugging_log"].append(
+                f"SQL execution successful (Attempt {current_attempt_number}). Rows returned: {num_rows} (excluding header)."
             )
             return {"execution_result_rows": results, "execution_error": None}
 
@@ -918,6 +926,13 @@ class QueryExecutorWorkflow:
 
         csv_data = state.get("csv_content")
         user_id = state.get("user_id", "user")  # Get user_id for mention
+        debugging_log_entries = state.get("debugging_log", [])
+        formatted_debug_log = ""
+        if debugging_log_entries:
+            # Keep the header concise for the separate message
+            formatted_debug_log = "--- Debugging & Execution Log ---\n" + "\n".join(
+                f"- {entry}" for entry in debugging_log_entries
+            )
 
         if not self.slack_client:
             error_msg = "Slack client is not available. Cannot post results."
@@ -946,6 +961,9 @@ class QueryExecutorWorkflow:
             }
 
         comment = f"Successfully executed your query, <@{user_id}>! Results attached."
+        # MODIFICATION: Use the concise comment for the CSV upload
+        initial_comment_for_csv = comment
+
         # Ensure a unique filename to prevent Slack caching issues or overwrites if names were identical.
         filename = f"query_results_{state.get('original_trigger_message_ts', 'unknown_ts')}_{uuid.uuid4().hex[:8]}.csv"
 
@@ -954,7 +972,7 @@ class QueryExecutorWorkflow:
             tool_result = await self.post_csv_tool_func.ainvoke(
                 {
                     "csv_data": csv_data,
-                    "initial_comment": comment,
+                    "initial_comment": initial_comment_for_csv,  # MODIFIED: Use concise comment
                     "filename": filename,
                     "state": state,  # Pass the state object
                 }
@@ -973,6 +991,29 @@ class QueryExecutorWorkflow:
                     "execution_error": None,  # Clear error on success
                 }
 
+                # MODIFICATION: Post the debug log as a separate message if it exists
+                if formatted_debug_log:
+                    try:
+                        log_post_result = await self.post_message_tool_func.ainvoke(
+                            {
+                                "message_text": formatted_debug_log,
+                                "state": state,  # Use the same state for channel/thread context
+                            }
+                        )
+                        if log_post_result.get("success"):
+                            logger.info("Successfully posted debugging log to Slack.")
+                        else:
+                            logger.warning(
+                                f"Failed to post debugging log to Slack: {log_post_result.get('error')}"
+                            )
+                            # Optionally, update final_status_message or log this minor failure
+                            # For now, just logging the warning.
+                    except Exception as e_log_post:
+                        logger.error(
+                            f"Exception posting debugging log: {e_log_post}",
+                            exc_info=self.verbose,
+                        )
+
                 # Check if the query was modified and post the corrected SQL
                 fetched_sql = state.get("fetched_sql_query")
                 current_sql = state.get("current_sql_query")
@@ -982,6 +1023,15 @@ class QueryExecutorWorkflow:
                     )
                     corrected_sql_filename = f"corrected_query_for_{state.get('original_trigger_message_ts', 'unknown_ts')}.sql"
                     corrected_sql_comment = "Here is the corrected SQL query that was successfully executed:"
+                    # Also append debug log to the corrected SQL message if it's not already part of the main success message
+                    # For now, the main success message (initial_comment_for_csv) already contains it.
+                    # If we wanted a separate post for the SQL with its own context, we could add it here.
+                    # For simplicity, we assume the main message's log is sufficient.
+                    # If we decide to post the log with the corrected SQL as well, it would be:
+                    # corrected_sql_comment_with_log = corrected_sql_comment + formatted_debug_log
+                    # However, this might be redundant if the CSV post already has the log.
+                    # Let's keep it to the initial comment for now to avoid double posting the log.
+
                     try:
                         sql_post_result = await self.post_text_file_tool_func.ainvoke(
                             {
@@ -1043,22 +1093,42 @@ class QueryExecutorWorkflow:
     ) -> Dict[str, Any]:
         logger.info("Node: attempt_debug_or_fail_node")
         current_attempts = state.get("debug_attempts", 0)
+        state["debugging_log"].append(
+            f"Checking debug attempt {current_attempts + 1} of {state.get('max_debug_attempts', self.max_debug_loops)}."
+        )
         updates = {"debug_attempts": current_attempts + 1}
         # The decision to proceed to debug or fail is handled by the conditional edge
         # `should_invoke_debug_llm_or_post_failure` based on `debug_attempts`.
         return updates
 
     async def invoke_debug_llm_node(self, state: QueryExecutorState) -> Dict[str, Any]:
-        logger.info("Node: invoke_debug_llm_node")
+        current_attempt_number = state.get(
+            "debug_attempts", 0
+        )  # attempt_debug_or_fail_node increments it for the *next* cycle
+        logger.info(
+            f"Node: invoke_debug_llm_node (for attempt {current_attempt_number})"
+        )
+        error_message_from_db = state.get("execution_error", "Unknown execution error.")
+
+        state["debugging_log"].append(
+            f"Invoking LLM for SQL debugging (Attempt {current_attempt_number}). Error: {error_message_from_db}"
+        )
 
         if not self.llm:
             error_msg = "LLM client not available for SQL debugging. Cannot attempt to fix query."
             logger.error(error_msg)
-            # This AIMessage will be added to state['messages'] and handled by update_query_from_llm_suggestion_node
-            return {"messages": [AIMessage(content=f"CriticalError: {error_msg}")]}
+            state["debugging_log"].append(
+                f"Error (Attempt {current_attempt_number}): {error_msg}"
+            )
+            # Create a structured error response
+            error_response = SQLDebugResult(
+                corrected_sql=None,
+                explanation=f"CriticalError: {error_msg}",
+                summary_of_changes=[f"LLM client not available."],
+            )
+            return {"messages": [AIMessage(content=error_response.model_dump_json())]}
 
         current_query = state.get("current_sql_query", "")
-        error_message_from_db = state.get("execution_error", "Unknown execution error.")
 
         table_schemas_str = json.dumps(state.get("described_tables_info", {}), indent=2)
         column_values_str = json.dumps(state.get("listed_column_values", {}), indent=2)
@@ -1068,71 +1138,155 @@ class QueryExecutorWorkflow:
             sql_query=current_query,
             table_schemas=(
                 table_schemas_str
-                if table_schemas_str not in ["{}", "null"]  # Check for empty or null
+                if table_schemas_str not in ["{}", "null"]
                 else "No schema information available for this attempt."
             ),
             column_values=(
                 column_values_str
-                if column_values_str not in ["{}", "null"]  # Check for empty or null
+                if column_values_str not in ["{}", "null"]
                 else "No column values available for this attempt."
             ),
         )
 
-        # Append custom rules for query_executor
         custom_rules = get_agent_rules("query_executor")
         if custom_rules:
-            prompt_content += f"\n\n**Additional Instructions (from .ragstarrules.yml):**\n{custom_rules}"
+            prompt_content += f"\\n\\n**Additional Instructions (from .ragstarrules.yml):**\\n{custom_rules}"
 
-        # Debug LLM messages should be isolated for each debug attempt if possible,
-        # or carefully managed if accumulated.
-        # For simplicity, using state["messages"] which accumulates.
-        # A more advanced setup might use a sub-graph for debugging with its own message history.
         messages_for_llm: List[BaseMessage] = [HumanMessage(content=prompt_content)]
-
-        # Add relevant past messages from this debug interaction if any.
-        # `state.get("messages", [])` currently holds ALL messages.
-        # We might only want messages since the last `execute_sql_node` failure for this specific debug.
-        # For now, we'll keep it simple and pass the system prompt. If more context is needed,
-        # the `messages` field in the state would need more careful management for the debug loop.
-        # Let's just pass the system prompt and let the LLM decide if it needs tools.
-        # The `tools_condition` will route to `debug_tools` if the LLM calls any.
 
         if self.verbose:
             logger.info(
                 f"SQL Debug System Prompt (first 500 chars): {prompt_content[:500]}..."
             )
-            # Log messages for LLM
             log_llm_messages_content = [f"  0. Human: {prompt_content[:150]}..."]
-            # If passing more messages:
-            # for i, msg in enumerate(state.get("messages", [])): # Example if passing history
-            #     log_llm_messages_content.append(f"  {i+1}. Type: {type(msg).__name__}, Content: {str(msg.content)[:100]}...")
             logger.info(
-                "Messages for Debug LLM (invoke_debug_llm_node):\n"
-                + "\n".join(log_llm_messages_content)
+                "Messages for Debug LLM (invoke_debug_llm_node):\\n"
+                + "\\n".join(log_llm_messages_content)
             )
 
-        # Bind the debug-specific tools
+        # Assuming self.llm is a Langchain ChatModel that supports .with_structured_output
+        # or a similar mechanism for JSON mode. For Gemini, this is often handled by instructing
+        # it to produce JSON and then parsing.
+        # We will attempt to get JSON output and parse it.
         llm_with_tools = self.llm.bind_tools(self.debug_llm_tools)
-        config = {"run_name": "DebugSQLLLMNode"}
+        config = {
+            "run_name": "DebugSQLLLMNode",
+            # For Gemini/Vertex, you might add a `response_mime_type="application/json"`
+            # or ensure the prompt clearly requests only JSON.
+            # For OpenAI, you can use response_format={"type": "json_object"}
+        }
 
         try:
-            # Invoke the LLM. Messages are added to state by add_messages mechanism.
-            response_ai_message = await llm_with_tools.ainvoke(
+            # Invoke the LLM.
+            response_ai_message_raw = await llm_with_tools.ainvoke(
                 messages_for_llm,
-                config=config,  # Pass only the fresh system prompt for this attempt
+                config=config,
             )
+
+            llm_response_content = response_ai_message_raw.content
             if self.verbose:
-                logger.info(f"Debug LLM Response: {response_ai_message}")
-            # The graph will add this response to state['messages'] via add_messages.
-            # This node's output should be structured to be merged into the state.
-            return {"messages": [response_ai_message]}
+                logger.info(f"Raw Debug LLM Response content: {llm_response_content}")
+
+            parsed_result: Optional[SQLDebugResult] = None
+            final_content_for_aimessage: str = ""
+
+            if isinstance(llm_response_content, str) and llm_response_content.strip():
+                try:
+                    # The LLM should directly output JSON string as per the new prompt.
+                    # Clean potential markdown ```json ... ```
+                    cleaned_json_str = llm_response_content.strip()
+                    if cleaned_json_str.startswith("```json"):
+                        cleaned_json_str = cleaned_json_str[len("```json") :]
+                    if cleaned_json_str.endswith("```"):
+                        cleaned_json_str = cleaned_json_str[: -len("```")]
+                    cleaned_json_str = cleaned_json_str.strip()
+
+                    data = json.loads(cleaned_json_str)
+                    parsed_result = SQLDebugResult(**data)
+                    final_content_for_aimessage = parsed_result.model_dump_json()
+                    state["debugging_log"].append(
+                        f"LLM response received and parsed (Attempt {current_attempt_number}). Explanation: {parsed_result.explanation}"
+                    )
+                    if parsed_result.summary_of_changes:
+                        for change_summary in parsed_result.summary_of_changes:
+                            state["debugging_log"].append(
+                                f"- LLM fix: {change_summary}"
+                            )
+
+                except (json.JSONDecodeError, TypeError, AttributeError) as e:
+                    logger.error(
+                        f"Failed to parse LLM JSON response: {e}. Raw content: {llm_response_content}",
+                        exc_info=True,
+                    )
+                    error_explanation = f"LLM response was not valid JSON or did not match expected structure: {e}. Falling back to raw content."
+                    parsed_result = SQLDebugResult(
+                        corrected_sql=None,
+                        explanation=error_explanation,
+                        summary_of_changes=[error_explanation],
+                    )
+                    final_content_for_aimessage = (
+                        parsed_result.model_dump_json()
+                    )  # Store the error structure
+                    state["debugging_log"].append(
+                        f"LLM response parsing failed (Attempt {current_attempt_number}): {error_explanation}"
+                    )
+            elif response_ai_message_raw.tool_calls:  # LLM called a tool
+                logger.info(
+                    f"Debug LLM initiated tool call(s): {response_ai_message_raw.tool_calls}"
+                )
+                # Let the graph handle tool calls. The AIMessage will contain tool_calls.
+                # The content for AIMessage will be the raw content (which might be empty if only tool calls)
+                final_content_for_aimessage = (
+                    llm_response_content
+                    if isinstance(llm_response_content, str)
+                    else ""
+                )
+                # We need to ensure the AIMessage object includes the tool_calls attribute
+                # The 'messages' update below will handle this by returning the full response_ai_message_raw
+                return {"messages": [response_ai_message_raw]}
+
+            else:  # Empty or non-string response without tool calls
+                logger.warning(
+                    f"Debug LLM produced an empty or non-string response without tool calls. Content: {llm_response_content}"
+                )
+                error_explanation = "LLM produced an empty or non-string response."
+                parsed_result = SQLDebugResult(
+                    corrected_sql=None,
+                    explanation=error_explanation,
+                    summary_of_changes=[error_explanation],
+                )
+                final_content_for_aimessage = parsed_result.model_dump_json()
+                state["debugging_log"].append(
+                    f"LLM produced empty/invalid response (Attempt {current_attempt_number})."
+                )
+
+            # Create a new AIMessage with the (potentially parsed) content
+            # If there were tool calls, response_ai_message_raw already has them.
+            # If not, we're creating a new AIMessage with our processed JSON string.
+            # This logic ensures that 'tool_calls' are preserved if present.
+            if response_ai_message_raw.tool_calls:
+                response_to_add = (
+                    response_ai_message_raw  # it already contains tool_calls
+                )
+                # If its content was also supposed to be JSON but wasn't, we've logged an error.
+                # For now, we let the original AIMessage pass through if it had tool calls.
+            else:
+                response_to_add = AIMessage(content=final_content_for_aimessage)
+
+            return {"messages": [response_to_add]}
+
         except Exception as e:
             logger.error(f"Error invoking SQL Debug LLM: {e}", exc_info=self.verbose)
-            return {
-                "messages": [
-                    AIMessage(content=f"Error during LLM call for SQL debug: {e}")
-                ]
-            }
+            error_msg = f"Error during LLM call for SQL debug: {e}"
+            state["debugging_log"].append(
+                f"LLM invocation failed (Attempt {current_attempt_number}): {error_msg}"
+            )
+            error_response = SQLDebugResult(
+                corrected_sql=None,
+                explanation=f"LLM Invocation Error: {error_msg}",
+                summary_of_changes=[f"LLM call failed: {e}"],
+            )
+            return {"messages": [AIMessage(content=error_response.model_dump_json())]}
 
     async def update_state_after_debug_tool_node(
         self, state: QueryExecutorState
@@ -1243,106 +1397,108 @@ class QueryExecutorWorkflow:
     ) -> Dict[str, Any]:
         logger.info("Node: update_query_from_llm_suggestion_node")
         updates: Dict[str, Any] = {}
-        # The LLM's response (AIMessage) should be the last message if tools_condition routed here.
         last_message = state["messages"][-1] if state.get("messages") else None
 
         if not isinstance(last_message, AIMessage):
             logger.warning(
                 "update_query_from_llm_suggestion_node: Last message is not an AIMessage. Cannot extract SQL suggestion."
             )
-            # This implies LLM failed or tools_condition had an unexpected path.
-            # Keep existing error and query. Debug loop might retry or fail.
-            return updates  # No changes if no valid AIMessage
-
-        llm_content = last_message.content  # AIMessage.content
-
-        # Handle cases where content might be list (e.g. from some models)
-        if isinstance(llm_content, list):
-            llm_content = "\\n".join(
-                str(c) for c in llm_content
-            )  # Join if it's a list of content blocks
-
-        if not isinstance(llm_content, str):
-            logger.warning(
-                f"update_query_from_llm_suggestion_node: AIMessage content is not a string or list of strings (type: {type(llm_content)}). Cannot parse SQL."
+            state["debugging_log"].append(
+                "Internal error: Expected LLM response (AIMessage) not found."
             )
-            return updates  # No changes if content is not parseable
-
-        # Check for explicit error messages from the LLM itself (e.g., "CriticalError: LLM not available")
-        if "CriticalError:" in llm_content or "Error during LLM call" in llm_content:
-            logger.error(f"LLM reported an internal error: {llm_content}")
-            # updates["execution_error"] = llm_content # Propagate LLM's critical error
-            # Don't change the query. Let the debug loop handle max attempts.
             return updates
 
-        # Attempt to parse SQL from a markdown block ```sql ... ```
-        sql_block_match = re.search(
-            r"```(?:sql)?\n(.*?)(?:\n```|```$)",
-            llm_content,
-            re.DOTALL | re.IGNORECASE,
-        )
-        corrected_sql = None
-        if sql_block_match:
-            corrected_sql = sql_block_match.group(1).strip()
-            if corrected_sql:
-                logger.info(
-                    f"LLM suggested corrected SQL query (from markdown block): {corrected_sql[:300]}..."
-                )
-            else:
-                logger.warning("LLM provided an empty SQL block.")
-                corrected_sql = None  # Explicitly mark as None if block is empty
-        else:
-            # If no markdown, consider if the whole content is SQL.
-            # Avoid taking instructions or refusals as SQL.
-            potential_sql = llm_content.strip()
-            is_likely_sql = any(
-                potential_sql.lower().startswith(kw)
-                for kw in [
-                    "select",
-                    "with",
-                    "insert",
-                    "update",
-                    "delete",
-                    "create",
-                    "--",
-                ]
-            )
-            is_refusal = any(
-                ref_text in potential_sql.lower()
-                for ref_text in ["unable to", "cannot fix", "i cannot", "sorry"]
-            )
-
-            if (
-                is_likely_sql and not is_refusal and len(potential_sql) > 10
-            ):  # Arbitrary length check
-                logger.info(
-                    f"LLM provided content directly as SQL query (no markdown): {potential_sql[:300]}..."
-                )
-                corrected_sql = potential_sql
-            else:
-                logger.warning(
-                    "LLM response did not contain a parsable SQL block or direct SQL query. Original query may be retried or workflow may fail."
-                )
-
-        if corrected_sql:
-            updates["current_sql_query"] = corrected_sql
-            updates["execution_error"] = (
-                None  # Clear previous error before retrying new query
-            )
-            # Clear debug context for the new attempt with corrected query
-            updates["described_tables_info"] = {}
-            updates["listed_column_values"] = {}
-            # Optionally, clear messages related to the previous failed attempt's debug cycle.
-            # For now, `add_messages` accumulates. A new SystemPrompt will be generated on next `invoke_debug_llm`.
+        # Check for tool calls first. If the AIMessage has tool_calls, it means the LLM wants to use a tool.
+        # This node is executed *after* the LLM's response. If that response was a tool call,
+        # the graph should have routed to 'debug_tools' via 'tools_condition'.
+        # If we reach here and last_message.tool_calls is not empty, it implies something might be off in graph logic
+        # or the LLM responded with both content AND tool_calls, and tools_condition didn't catch it or decided to proceed.
+        # For now, we assume if we're here, we're processing a direct textual/JSON response, not a tool call.
+        if last_message.tool_calls:
             logger.info(
-                "SQL query updated from LLM suggestion. Ready for re-execution."
+                "update_query_from_llm_suggestion_node: AIMessage has tool_calls. Assuming graph handles this, no update here."
             )
-        else:
+            # state["debugging_log"].append("LLM initiated further tool use.") # This might be too verbose if tools_condition handles it
+            return updates
+
+        llm_content_str = last_message.content
+        if not isinstance(llm_content_str, str) or not llm_content_str.strip():
             logger.warning(
-                "No valid SQL correction found in LLM response. No query update."
+                f"update_query_from_llm_suggestion_node: AIMessage content is empty or not a string (type: {type(llm_content_str)}). Cannot parse."
             )
-            # If no correction, the existing query and error will persist.
-            # The debug loop will either retry (if attempts left) or fail.
+            state["debugging_log"].append(
+                f"LLM content was empty or invalid (type: {type(llm_content_str)}). Cannot parse SQL suggestion."
+            )
+            # Add to execution_error to prevent retrying with nothing.
+            updates["execution_error"] = (
+                state.get("execution_error", "")
+                + " | LLM provided no parsable content for correction."
+            )
+            return updates
+
+        try:
+            # Attempt to parse the content as SQLDebugResult JSON
+            data = json.loads(llm_content_str)
+            llm_response = SQLDebugResult(**data)
+
+            current_sql_query = state.get("current_sql_query", "")
+
+            # Log the LLM's explanation (concise)
+            # This was previously added in invoke_debug_llm_node, remove duplicate logging if any.
+            # state["debugging_log"].append(f"LLM Explanation: {llm_response.explanation}") # Already logged
+
+            if llm_response.corrected_sql:
+                new_sql_query = llm_response.corrected_sql.strip()
+                if new_sql_query.lower() != current_sql_query.lower():
+                    updates["current_sql_query"] = new_sql_query
+                    updates["execution_error"] = None  # Clear previous error
+                    updates["execution_result_rows"] = None  # Clear previous results
+                    logger.info(
+                        f"Applied corrected SQL query from LLM. New query: {new_sql_query[:200]}..."
+                    )
+                    state["debugging_log"].append(
+                        "Applying LLM's corrected SQL and retrying."
+                    )
+                    # summary_of_changes already logged in invoke_debug_llm_node
+                else:
+                    logger.info("LLM suggested the same SQL query. No update made.")
+                    state["debugging_log"].append(
+                        "LLM analyzed the query but suggested no changes to the SQL itself."
+                    )
+                    # Keep existing execution_error if no changes, or append explanation.
+                    updates["execution_error"] = (
+                        state.get("execution_error", "")
+                        + f" | LLM analysis: {llm_response.explanation}"
+                    )
+            else:
+                logger.warning("LLM did not provide a corrected SQL query.")
+                state["debugging_log"].append("LLM did not provide a new SQL query.")
+                # If no SQL, the explanation is important. Error persists.
+                updates["execution_error"] = (
+                    state.get("execution_error", "")
+                    + f" | LLM explanation (no fix): {llm_response.explanation}"
+                )
+
+        except (json.JSONDecodeError, TypeError) as e:
+            # This case handles if the content wasn't the expected JSON (e.g. fallback from invoke_debug_llm_node or LLM didn't follow instructions)
+            # or if SQLDebugResult parsing failed.
+            logger.error(
+                f"Failed to parse LLM's structured response in update_query_from_llm_suggestion_node: {e}. Content: {llm_content_str[:500]}",
+                exc_info=True,
+            )
+            state["debugging_log"].append(
+                f"Error processing LLM response: Could not parse structured data. LLM Explanation (raw attempt): {llm_content_str[:200]}..."
+            )
+            # Fallback to old regex logic if parsing fails? Or just fail the attempt?
+            # For now, let's consider this a failed attempt to get a structured fix.
+            # The debug log already reflects the parsing failure.
+            # We add the raw content to the execution error to signal why it might proceed to fail.
+            updates["execution_error"] = (
+                state.get("execution_error", "")
+                + f" | Failed to parse LLM's structured suggestion. Raw: {llm_content_str[:100]}..."
+            )
+            # The old regex logic has been removed to enforce structured responses.
+            # If parsing fails, we don't update the query.
 
         return updates
 
@@ -1359,43 +1515,40 @@ class QueryExecutorWorkflow:
             "debug_attempts", 0
         )  # This includes the current failed attempt
 
-        final_message_to_user = f"Sorry, <@{user_id}>, I encountered an issue trying to execute the SQL query. "
-        if (
-            attempts > 0
-        ):  # If debug_attempts > 0, it means at least one attempt was made.
-            final_message_to_user += (
+        # Construct the main failure message first
+        base_final_message = f"Sorry, <@{user_id}>, I encountered an issue trying to execute the SQL query. "
+        if attempts > 0:
+            base_final_message += (
                 f"After {attempts} attempt(s) to fix it, the problem remains. "
             )
-        final_message_to_user += (
-            f"The last error was: `{error_from_state}`"  # Use backticks for error
-        )
+        base_final_message += f"The last error was: `{error_from_state}`"
 
         posted_ts = None
+        # Post the main failure message
         if self.slack_client:
             try:
-                # Call the post_message_tool_func
-                tool_result = await self.post_message_tool_func.ainvoke(
+                main_message_result = await self.post_message_tool_func.ainvoke(
                     {
-                        "message_text": final_message_to_user,
+                        "message_text": base_final_message,
                         "state": state,
                     }
                 )
-
-                if tool_result.get("success"):
-                    posted_ts = tool_result.get("ts")
+                if main_message_result.get("success"):
+                    posted_ts = main_message_result.get("ts")
                     logger.info(
-                        f"Successfully posted failure message to Slack. TS: {posted_ts}"
+                        f"Successfully posted main failure message to Slack. TS: {posted_ts}"
                     )
                 else:
-                    tool_error = tool_result.get(
-                        "error", "Unknown error from post_message_to_thread"
+                    tool_error = main_message_result.get(
+                        "error", "Unknown error posting main failure message"
                     )
                     logger.error(
-                        f"Failed to post failure message to Slack: {tool_error}"
+                        f"Failed to post main failure message to Slack: {tool_error}"
                     )
-            except Exception as e:  # Catch error from ainvoke itself
+                    # Even if main message fails, we might still want to log the error for the return state
+            except Exception as e_main_msg:
                 logger.error(
-                    f"Exception calling post_message_tool_func in post_failure_to_slack_node: {e}",
+                    f"Exception posting main failure message: {e_main_msg}",
                     exc_info=self.verbose,
                 )
         else:
@@ -1403,12 +1556,76 @@ class QueryExecutorWorkflow:
                 "Slack client not available. Cannot post failure message to user."
             )
 
-        # The workflow is considered a failure regarding the SQL query.
+        # Now, handle the debugging log as a follow-up
+        debugging_log_entries = state.get("debugging_log", [])
+        if debugging_log_entries:
+            full_log_text = "--- Debugging & Execution Log ---\n" + "\n".join(
+                f"- {entry}" for entry in debugging_log_entries
+            )
+
+            # Check length and decide to post as file or message
+            if len(full_log_text) > 3000 and hasattr(self, "post_text_file_tool_func"):
+                try:
+                    log_filename = f"debug_log_{state.get('original_trigger_message_ts', 'unknown_ts')}_{uuid.uuid4().hex[:8]}.txt"
+                    log_file_comment = "Detailed debugging and execution log:"
+                    file_post_result = await self.post_text_file_tool_func.ainvoke(
+                        {
+                            "text_content": full_log_text,
+                            "initial_comment": log_file_comment,
+                            "filename": log_filename,
+                            "state": state,  # Ensures it goes to the same thread
+                        }
+                    )
+                    if file_post_result.get("success"):
+                        logger.info(
+                            f"Successfully posted lengthy debug log as file: {log_filename}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to post lengthy debug log as file: {file_post_result.get('error')}. Attempting to post truncated log as message."
+                        )
+                        # Fallback: try to post a truncated version as a message
+                        truncated_log = full_log_text[:2800] + "... (log truncated)"
+                        await self.post_message_tool_func.ainvoke(
+                            {"message_text": truncated_log, "state": state}
+                        )
+                except Exception as e_log_file:
+                    logger.error(
+                        f"Exception posting debug log as file: {e_log_file}",
+                        exc_info=self.verbose,
+                    )
+                    # Fallback: try to post a truncated version as a message
+                    truncated_log = (
+                        full_log_text[:2800]
+                        + "... (log truncated due to error posting as file)"
+                    )
+                    await self.post_message_tool_func.ainvoke(
+                        {"message_text": truncated_log, "state": state}
+                    )
+            else:  # Log is not too long, post as a direct message
+                try:
+                    log_message_result = await self.post_message_tool_func.ainvoke(
+                        {"message_text": full_log_text, "state": state}
+                    )
+                    if log_message_result.get("success"):
+                        logger.info(
+                            "Successfully posted debug log as follow-up message."
+                        )
+                    else:
+                        logger.warning(
+                            f"Failed to post debug log as follow-up message: {log_message_result.get('error')}"
+                        )
+                except Exception as e_log_msg:
+                    logger.error(
+                        f"Exception posting debug log as follow-up message: {e_log_msg}",
+                        exc_info=self.verbose,
+                    )
+
+        # The final_status_message in the state should reflect the main error, not the log content.
         return {
             "is_success": False,
-            "final_status_message": final_message_to_user,
-            "posted_response_ts": posted_ts,
-            # execution_error (original SQL error) is already in state and should persist.
+            "final_status_message": base_final_message,  # The message sent to user about the failure
+            "posted_response_ts": posted_ts,  # TS of the main failure message
         }
 
     async def finalize_workflow_node(self, state: QueryExecutorState) -> Dict[str, Any]:
@@ -1466,6 +1683,7 @@ class QueryExecutorWorkflow:
         user_id: str,
         trigger_message_ts: str,
     ) -> Dict[str, Any]:
+        """Runs the query executor workflow with the given Slack event context."""
         if not self.slack_client:
             # This case should ideally be caught by the calling view/service first.
             err_msg = "QueryExecutorWorkflow: Slack client not initialized. Cannot run workflow."
@@ -1498,7 +1716,8 @@ class QueryExecutorWorkflow:
                 is_success=False,
                 posted_response_ts=None,
                 posted_file_ts=None,
-                conversation_id="",
+                conversation_id="",  # Minimal, won't be used for checkpointing in this error path
+                debugging_log=[f"CRITICAL ERROR: {err_msg}"],  # Log the critical error
             )
             if self.slack_client and hasattr(self, "post_message_tool_func"):
                 try:
@@ -1510,48 +1729,62 @@ class QueryExecutorWorkflow:
                         f"Failed to post Snowflake credential error to Slack: {post_err}"
                     )
 
-            # Variable e is not defined here, should be err_msg
             return {
-                "error": err_msg,  # Changed e to err_msg
+                "error": err_msg,
                 "is_success": False,
-                "final_status_message": err_msg,  # Changed final_status_message to err_msg
-                "conversation_id": f"query-executor-{channel_id}-{thread_ts}-{trigger_message_ts}",  # Added conversation_id
+                "final_status_message": err_msg,
+                "conversation_id": f"query-executor-error-{str(uuid.uuid4())}",
             }
 
-        conversation_id = (
-            f"query-executor-{channel_id}-{thread_ts}-{trigger_message_ts}"
-        )
-        config = {"configurable": {"thread_id": conversation_id}}
+        # Use a unique conversation ID for each run if not provided or for better tracking
+        # This helps in separating logs and potentially checkpointing if ever enabled.
+        conversation_id = f"query-executor-{channel_id}-{thread_ts}-{trigger_message_ts}-{str(uuid.uuid4())[:8]}"
+        config = {
+            "configurable": {"thread_id": conversation_id}
+        }  # For LangGraph checkpointing
 
-        initial_state = QueryExecutorState(
-            channel_id=channel_id,
-            thread_ts=thread_ts,  # This is the parent thread for replies
-            user_id=user_id,
-            original_trigger_message_ts=trigger_message_ts,  # This is the specific message with the .sql or link
-            fetched_sql_query=None,
-            current_sql_query=None,
-            execution_result_rows=None,
-            execution_error=None,
-            csv_content=None,
-            debug_attempts=0,
-            max_debug_attempts=self.max_debug_loops,
-            described_tables_info={},
-            listed_column_values={},
-            messages=[],  # For the debug LLM mainly
-            final_status_message=None,
-            is_success=None,
-            posted_response_ts=None,
-            posted_file_ts=None,
-            conversation_id=conversation_id,
-        )
+        initial_state: QueryExecutorState = {
+            "channel_id": channel_id,
+            "thread_ts": thread_ts,  # Parent thread for replies
+            "user_id": user_id,
+            "original_trigger_message_ts": trigger_message_ts,  # Specific message with .sql or link
+            "fetched_sql_query": None,
+            "current_sql_query": None,
+            "execution_result_rows": None,
+            "execution_error": None,
+            "csv_content": None,
+            "debug_attempts": 0,
+            "max_debug_attempts": self.max_debug_loops,
+            "described_tables_info": {},
+            "listed_column_values": {},
+            "messages": [],
+            "final_status_message": None,
+            "is_success": None,
+            "posted_response_ts": None,
+            "posted_file_ts": None,
+            "conversation_id": conversation_id,
+            "debugging_log": [],  # Initialize the debugging log
+        }
+
+        graph = self._build_graph()
+        if not self.graph_app:  # Should have been built in __init__
+            logger.error(
+                "QueryExecutorWorkflow: graph_app not initialized. Cannot run workflow."
+            )
+            return {
+                "error": "Internal error: workflow graph not initialized",
+                "is_success": False,
+            }
 
         final_graph_output_map = {}  # To store the output of the graph execution
         try:
-            logger.info(f"Invoking QueryExecutorWorkflow graph for {conversation_id}")
+            logger.info(
+                f"Invoking QueryExecutorWorkflow graph for {channel_id}/{thread_ts}"
+            )
             # Use astream to get events and the final state.
             # The final result of astream is the full state object if the graph ends.
             async for event in self.graph_app.astream(
-                initial_state, config=config, stream_mode="values"
+                initial_state, stream_mode="values"
             ):
                 # stream_mode="values" should yield the full state object at each step.
                 # The last one will be the final state.
@@ -1567,12 +1800,12 @@ class QueryExecutorWorkflow:
                 final_graph_output_map = event  # Keep the latest state
 
             logger.info(
-                f"QueryExecutorWorkflow graph finished for {conversation_id}. Final state collected."
+                f"QueryExecutorWorkflow graph finished for {channel_id}/{thread_ts}. Final state collected."
             )
 
         except Exception as e:
             logger.error(
-                f"Critical error running QueryExecutorWorkflow graph for {conversation_id}: {e}",
+                f"Critical error running QueryExecutorWorkflow graph for {channel_id}/{thread_ts}: {e}",
                 exc_info=True,  # Log full traceback
             )
             final_status_message = (
@@ -1599,7 +1832,8 @@ class QueryExecutorWorkflow:
                 is_success=False,
                 posted_response_ts=None,
                 posted_file_ts=None,
-                conversation_id=conversation_id,
+                conversation_id=str(uuid.uuid4()),
+                debugging_log=[],
             )
             if self.slack_client and hasattr(self, "post_message_tool_func"):
                 try:
@@ -1618,7 +1852,7 @@ class QueryExecutorWorkflow:
                 "error": str(e),
                 "is_success": False,
                 "final_status_message": final_status_message,
-                "conversation_id": conversation_id,
+                "conversation_id": str(uuid.uuid4()),
             }
 
         # Extract results from the final graph state
@@ -1627,7 +1861,7 @@ class QueryExecutorWorkflow:
             "final_status_message": final_graph_output_map.get("final_status_message"),
             "posted_response_ts": final_graph_output_map.get("posted_response_ts"),
             "posted_file_ts": final_graph_output_map.get("posted_file_ts"),
-            "conversation_id": conversation_id,
+            "conversation_id": str(uuid.uuid4()),
             "error": (
                 final_graph_output_map.get("execution_error")
                 if not final_graph_output_map.get("is_success")
