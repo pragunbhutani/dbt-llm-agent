@@ -193,7 +193,7 @@ If you prefer not to use Docker, you can set up a local Python environment.
     - **Required:** Set `DATABASE_URL` to your local PostgreSQL connection string (e.g., `postgresql://user:password@host:port/dbname`). Ensure this matches the database you created. (The `.env.example` might have fallback variables like `DB_NAME_FALLBACK`, etc., which are used if `DATABASE_URL` is not set; for local setup, explicitly setting `DATABASE_URL` is clearer).
     - **Required:** Set `APP_HOST` (e.g., `localhost` or `127.0.0.1`).
     - **Ragstar Rules:** Rename `.ragstarrules.example.yml` to `.ragstarrules.yml` and customize if needed.
-    - **Slack (Optional):** Configure `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` if you plan to use the Slack integration.
+    - **Slack (Optional):** Configure `INTEGRATIONS_SLACK_BOT_TOKEN` and `INTEGRATIONS_SLACK_SIGNING_SECRET` if you plan to use the Slack integration.
     - **Other:** Review other variables like `RAGSTAR_LOG_LEVEL`, etc., and adjust if needed.
 
 7.  **Run Database Migrations:**
@@ -283,7 +283,7 @@ Other functionalities, such as interpreting and embedding models, are primarily 
 
 Ragstar provides a Slack manifest to easily integrate its functionalities into your Slack workspace.
 
-1.  Ensure `SLACK_SIGNING_SECRET` and `SLACK_BOT_TOKEN` are set in your `.env` file.
+1.  Ensure `INTEGRATIONS_SLACK_SIGNING_SECRET` and `INTEGRATIONS_SLACK_BOT_TOKEN` are set in your `.env` file.
 2.  Use the `.slack_manifest.example.json` file as a template to create a new Slack app.
 3.  Follow Slack's documentation for creating an app from a manifest.
 4.  This will enable features like asking questions and receiving answers directly within Slack (assuming the Slack integration is running as part of the Django application).

@@ -11,10 +11,22 @@
     },
     "shortcuts": [
       {
-        "name": "Execute Query",
+        "name": "Run Query (csv)",
         "type": "message",
         "callback_id": "execute_query",
         "description": "Executes the query and returns the result as CSV to the same thread"
+      },
+      {
+        "name": "Learn from this thread",
+        "type": "message",
+        "callback_id": "learn_from_thread",
+        "description": "Extracts learnings from the current thread and saves to knowledge base."
+      },
+      {
+        "name": "Create Metabase Query",
+        "type": "message",
+        "callback_id": "create_metabase_query",
+        "description": "Saves this message as a SQL query in Metabase and posts a link to it."
       }
     ],
     "slash_commands": []
@@ -29,6 +41,7 @@
         "chat:write.public",
         "groups:history",
         "channels:history",
+        "users:read",
         "files:read",
         "files:write",
         "reactions:read"
