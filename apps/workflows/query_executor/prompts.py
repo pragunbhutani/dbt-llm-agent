@@ -1,7 +1,8 @@
 # Prompts for the Query Executor Workflow
 
-# Placeholder for a potential debug prompt if we use an LLM to help fix SQL queries
-SQL_DEBUG_PROMPT_TEMPLATE = """
+# SQL_DEBUG_PROMPT_TEMPLATE has been moved to apps/workflows/sql_verifier/prompts.py
+# BUT is still imported by QueryExecutorWorkflow. Uncommenting for now.
+SQL_DEBUG_PROMPT_TEMPLATE = """ 
 An SQL query failed with the following error:
 {error_message}
 

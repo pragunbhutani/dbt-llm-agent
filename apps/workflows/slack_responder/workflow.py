@@ -3,6 +3,7 @@ import logging
 import uuid
 import json
 import asyncio
+import re  # Import re for regex
 from typing import Dict, List, Any, Optional, Union, Set, TypedDict
 from typing_extensions import Annotated
 
@@ -31,6 +32,9 @@ from asgiref.sync import sync_to_async  # For DB operations in async context
 # Import our models and the other agent
 from apps.workflows.models import Question
 from apps.workflows.question_answerer import QuestionAnswererAgent
+
+# NEW: Import SQLVerifierWorkflow
+from apps.workflows.sql_verifier.workflow import SQLVerifierWorkflow
 
 # Import prompts
 from .prompts import (
@@ -79,9 +83,17 @@ class SlackResponderState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
     thread_history: Optional[List[Dict[str, Any]]]
     acknowledgement_sent: Optional[bool]
-    qa_final_answer: Optional[str]
+    qa_final_answer: Optional[str]  # The full response from QA agent
+    qa_sql_query: Optional[str]  # SQL extracted from qa_final_answer
     qa_models: Optional[List[Dict[str, Any]]]  # Keep track of models used by QA
-    error_message: Optional[str]
+
+    # SQL Verification fields
+    sql_is_verified: Optional[bool]
+    verified_sql_query: Optional[str]
+    sql_verification_error: Optional[str]
+    sql_verification_explanation: Optional[str]
+
+    error_message: Optional[str]  # General error message for the workflow
     response_sent: Optional[bool]
     response_message_ts: Optional[str]
     response_file_message_ts: Optional[str]
@@ -96,6 +108,7 @@ class SlackResponderAgent:
         self,
         slack_client: AsyncWebClient,  # Pass the client from Bolt
         memory: Optional[BaseCheckpointSaver] = None,
+        sql_verifier_max_debug_loops: int = 3,  # Max debug loops for SQL Verifier
     ):
         self.slack_client = slack_client
         # Set verbosity based on Django settings
@@ -106,18 +119,32 @@ class SlackResponderAgent:
             )
 
         # Instantiate the QuestionAnswerer agent internally
-        # Note: QA agent now uses Django ORM/services, no direct DB deps needed here
         self.question_answerer = QuestionAnswererAgent(
-            # verbose=self.verbose, # QA agent will also use settings
             memory=memory,
             data_warehouse_type=getattr(settings, "DATA_WAREHOUSE_TYPE", None),
-        )  # Pass memory if QA should use same checkpoint
+        )
         self.llm = (
             self.question_answerer.llm
-        )  # Use the LLM from the QA agent for consistency
-        self.memory = (
-            memory  # Use the same memory as QA agent for this orchestration layer
+        )  # Use the LLM from the QA agent for consistency for SlackResponder's own decisions
+        self.memory = memory
+
+        # Instantiate the SQLVerifierWorkflow
+        # If SQLVerifierWorkflow needs its own memory, it should be passed here.
+        # For now, assuming it can run stateless or with its own memory config if checkpointed.
+        self.sql_verifier = SQLVerifierWorkflow(
+            memory=None, max_debug_loops=sql_verifier_max_debug_loops
         )
+        if not self.sql_verifier.llm:
+            logger.warning(
+                "SlackResponderAgent: SQLVerifierWorkflow was initialized without an LLM. SQL debugging will not be available."
+            )
+        if (
+            not self.sql_verifier.snowflake_creds
+            and self.sql_verifier.warehouse_type == "snowflake"
+        ):
+            logger.warning(
+                "SlackResponderAgent: SQLVerifierWorkflow is missing Snowflake credentials. Snowflake SQL verification will fail."
+            )
 
         # For storing current request's context
         self.current_channel_id: Optional[str] = None
@@ -384,6 +411,8 @@ class SlackResponderAgent:
         workflow.add_node("tools", tool_node)
         workflow.add_node("update_state", self.update_state_node)
         workflow.add_node("record_interaction", self.record_interaction_node)
+        workflow.add_node("error_handler", self.error_handler_node)
+        workflow.add_node("verify_sql", self.verify_sql_node)
 
         # Edges
         workflow.set_entry_point("agent")
@@ -399,10 +428,17 @@ class SlackResponderAgent:
         # After updating state based on tool results, decide if we need agent again or can record
         workflow.add_conditional_edges(
             "update_state",
-            self.check_if_response_sent,  # Custom routing function
-            {"agent": "agent", "record_interaction": "record_interaction"},
+            self.route_after_update_state,
+            {
+                "agent": "agent",
+                "verify_sql": "verify_sql",
+                "record_interaction": "record_interaction",
+                "error_handler": "error_handler",
+                END: END,
+            },
         )
-        # After recording, end the flow
+        # After verification, always go back to agent to decide what to do with the verified/failed SQL
+        workflow.add_edge("verify_sql", "agent")
         workflow.add_edge("record_interaction", END)
 
         # Compile with memory if available
@@ -413,16 +449,66 @@ class SlackResponderAgent:
         return workflow.compile(**compile_kwargs)
 
     # --- Routing Logic ---
-    def check_if_response_sent(self, state: SlackResponderState) -> str:
-        """Routes to agent if no response sent yet, otherwise records interaction."""
+    def route_after_update_state(self, state: SlackResponderState) -> str:
+        """Routes after the update_state node, deciding the next step in the workflow."""
+        if self.verbose:
+            logger.info("Routing after update_state_node...")
+
+        # CRITICAL CHECK: If a response has been successfully sent by any tool, go to record and end.
         if state.get("response_sent"):
             if self.verbose:
-                logger.info("Response sent, routing to record_interaction.")
+                logger.info("Response has been sent, routing to record_interaction.")
             return "record_interaction"
-        else:
-            if self.verbose:
-                logger.info("Response not sent, routing back to agent.")
+
+        last_message = state["messages"][-1] if state.get("messages") else None
+
+        if state.get("error_message") and not isinstance(
+            last_message, (ToolMessage, AIMessage)
+        ):
+            logger.warning(
+                f"Error message present in state: {state['error_message']}. Routing to agent for decision."
+            )
             return "agent"
+
+        if isinstance(last_message, ToolMessage):
+            tool_name = last_message.name
+            if self.verbose:
+                logger.info(f"Last message was ToolMessage from tool: {tool_name}")
+
+            if tool_name == "ask_question_answerer":
+                if state.get("qa_sql_query"):
+                    logger.info("QA response received with SQL, routing to verify_sql.")
+                    return "verify_sql"
+                else:
+                    logger.info(
+                        "QA response received (no SQL or error), routing to agent to handle."
+                    )
+                    return "agent"
+
+            # For other tools (like fetch_slack_thread, acknowledge_question),
+            # or if a posting tool somehow didn't set response_sent correctly (though it should have been caught above)
+            logger.info(
+                f"Tool {tool_name} finished, routing back to agent for next decision."
+            )
+            return "agent"
+
+        if isinstance(last_message, AIMessage) and last_message.tool_calls:
+            logger.warning(
+                "AIMessage with tool_calls reached route_after_update_state. This might be unexpected. Routing to agent."
+            )
+            return "agent"
+
+        # This check is now effectively a fallback if response_sent wasn't set but should have been, covered by the top check.
+        # if state.get("response_sent"):
+        #     if self.verbose:
+        #         logger.info("Response already sent, routing to record_interaction.")
+        #     return "record_interaction"
+
+        if self.verbose:
+            logger.info(
+                "Default routing to agent (e.g., initial turn or after verify_sql)."
+            )
+        return "agent"
 
     # --- Agent Node ---
     def agent_node(self, state: SlackResponderState) -> Dict[str, Any]:
@@ -436,7 +522,12 @@ class SlackResponderAgent:
             original_question=state["original_question"],
             thread_history=state.get("thread_history"),
             qa_final_answer=state.get("qa_final_answer"),
+            qa_sql_query=state.get("qa_sql_query"),
             qa_models=state.get("qa_models"),
+            sql_is_verified=state.get("sql_is_verified"),
+            verified_sql_query=state.get("verified_sql_query"),
+            sql_verification_error=state.get("sql_verification_error"),
+            sql_verification_explanation=state.get("sql_verification_explanation"),
             acknowledgement_sent=state.get("acknowledgement_sent"),
             error_message=state.get("error_message"),
         )
@@ -611,18 +702,27 @@ class SlackResponderAgent:
                     )
                 else:
                     # Success - store answer and models used
-                    updates["qa_final_answer"] = tool_content.get(
-                        "answer"
-                    )  # Changed key from final_answer
-                    updates["qa_models"] = tool_content.get(
-                        "models_used", []
-                    )  # Get models_used list
-                    state_changed = True  # Mark state as changed
+                    qa_full_answer = tool_content.get("answer")
+                    updates["qa_final_answer"] = qa_full_answer
+                    updates["qa_models"] = tool_content.get("models_used", [])
+
+                    # Attempt to extract SQL from the QA's answer
+                    extracted_sql = self._extract_sql_from_qa_response(qa_full_answer)
+                    if extracted_sql:
+                        updates["qa_sql_query"] = extracted_sql
+                        logger.info(
+                            f"Extracted SQL from QA response: {extracted_sql[:200]}..."
+                        )
+                    else:
+                        logger.info("No SQL query found in QA response by extractor.")
+                        updates["qa_sql_query"] = None  # Explicitly set to None
+                        # The agent_node will then see no SQL and can decide to post_text_response
+
+                    state_changed = True
                     if self.verbose:
                         logger.info(
                             f"Received QA answer: {str(updates['qa_final_answer'])[:100]}..."
                         )
-                    if self.verbose:
                         logger.info(
                             f"QA agent used models: {[m.get('name') for m in updates['qa_models'] if m]}"
                         )
@@ -767,6 +867,138 @@ class SlackResponderAgent:
         else:
             return {"error_message": "Failed to record interaction in database."}
 
+    # --- Node to Verify SQL ---
+    async def verify_sql_node(self, state: SlackResponderState) -> Dict[str, Any]:
+        logger.info("Node: verify_sql_node")
+        updates: Dict[str, Any] = {
+            "sql_is_verified": False,  # Default to False
+            "verified_sql_query": None,
+            "sql_verification_error": None,
+            "sql_verification_explanation": None,
+        }
+
+        raw_sql_query = state.get("qa_sql_query")
+
+        if not raw_sql_query or not raw_sql_query.strip():
+            logger.info("No raw SQL query found in state to verify.")
+            updates["sql_verification_error"] = (
+                "No SQL query was extracted from the Question Answerer's response."
+            )
+            # No need to call verifier if no SQL
+            return updates
+
+        # Check if SQL verifier is usable (has Snowflake creds and LLM if debugging is expected)
+        # For now, we proceed and let the verifier handle its own configuration issues,
+        # which will be reported in its result.
+        if (
+            self.sql_verifier.warehouse_type == "snowflake"
+            and not self.sql_verifier.snowflake_creds
+        ):
+            logger.error(
+                "SQLVerifierWorkflow is missing Snowflake credentials. Verification will be skipped/marked as failed."
+            )
+            updates["sql_verification_error"] = (
+                "SQL verification step could not run due to missing Snowflake credentials."
+            )
+            updates["sql_verification_explanation"] = (
+                "The system is not configured to connect to Snowflake to validate the SQL."
+            )
+            return updates
+
+        # Max debug attempts for SQL verifier can be configured in SlackResponderAgent init
+        # Or passed dynamically if needed. Using the one from init for now.
+        max_debug_attempts = self.sql_verifier.default_max_debug_loops
+
+        logger.info(f"Calling SQLVerifierWorkflow for query: {raw_sql_query[:200]}...")
+        try:
+            # Derive a conversation_id for the verifier if needed for its checkpointing
+            verifier_conv_id = (
+                f"{state.get('channel_id')}-{state.get('thread_ts')}-sqlverify"
+            )
+
+            verifier_result = await self.sql_verifier.run(
+                sql_query=raw_sql_query,
+                max_debug_attempts=max_debug_attempts,  # from self.sql_verifier.default_max_debug_loops
+                dbt_models_info=state.get(
+                    "qa_models"
+                ),  # Pass qa_models as dbt_models_info
+                conversation_id=verifier_conv_id,
+            )
+
+            updates["sql_is_verified"] = verifier_result.get("is_valid")
+            updates["verified_sql_query"] = verifier_result.get(
+                "corrected_sql_query"
+            )  # This is the SQL to use if valid
+            updates["sql_verification_error"] = verifier_result.get("execution_error")
+            updates["sql_verification_explanation"] = verifier_result.get(
+                "debug_explanation"
+            )
+
+            if updates["sql_is_verified"]:
+                logger.info(
+                    f"SQL successfully verified. Corrected/Verified SQL: {updates['verified_sql_query'][:200]}..."
+                )
+            else:
+                logger.warning(
+                    f"SQL verification failed. Error: {updates['sql_verification_error']}. Explanation: {updates['sql_verification_explanation']}"
+                )
+        except Exception as e:
+            logger.exception(
+                f"Error occurred during SQLVerifierWorkflow execution: {e}"
+            )
+            updates["sql_verification_error"] = (
+                f"A critical error occurred while trying to verify the SQL: {e}"
+            )
+            updates["sql_verification_explanation"] = (
+                "The SQL verification process encountered an unexpected issue."
+            )
+            updates["sql_is_verified"] = False  # Ensure it's marked as not verified
+
+        return updates
+
+    def _extract_sql_from_qa_response(
+        self, qa_response_text: Optional[str]
+    ) -> Optional[str]:
+        if not qa_response_text:
+            return None
+
+        # Regex to find SQL code blocks (```sql ... ```) or (``` ... ```) if sql marker is missing
+        # It will try to find a ```sql block first. If not found, it will look for any ``` block.
+        # This is a common way LLMs format SQL.
+        sql_match = re.search(
+            r"```sql\s*([\s\S]+?)\s*```", qa_response_text, re.IGNORECASE
+        )
+        if sql_match:
+            return sql_match.group(1).strip()
+        else:
+            # Fallback: look for any code block if 'sql' specifier is missing
+            code_block_match = re.search(r"```\s*([\s\S]+?)\s*```", qa_response_text)
+            if code_block_match:
+                # We need to be a bit careful here. This could be Python code or something else.
+                # A simple heuristic: if it contains SELECT, FROM, WHERE, GROUP BY, JOIN etc., it's likely SQL.
+                potential_sql = code_block_match.group(1).strip()
+                sql_keywords = [
+                    "select",
+                    "from",
+                    "where",
+                    "group by",
+                    "order by",
+                    "join",
+                    "with",
+                    "insert into",
+                    "update",
+                    "delete from",
+                ]
+                if any(keyword in potential_sql.lower() for keyword in sql_keywords):
+                    logger.info("Extracted SQL from a generic code block.")
+                    return potential_sql
+                else:
+                    logger.warning(
+                        "Found a generic code block, but it doesn't look like SQL. Skipping."
+                    )
+                    return None
+        return None
+
     # --- Main Workflow Runner ---
     async def run_slack_workflow(
         self, question: str, channel_id: str, thread_ts: str, user_id: str
@@ -796,7 +1028,12 @@ class SlackResponderAgent:
             thread_history=None,
             acknowledgement_sent=None,
             qa_final_answer=None,
+            qa_sql_query=None,
             qa_models=None,
+            sql_is_verified=None,
+            verified_sql_query=None,
+            sql_verification_error=None,
+            sql_verification_explanation=None,
             error_message=None,
             response_sent=None,
             response_message_ts=None,
@@ -848,3 +1085,11 @@ class SlackResponderAgent:
                 )
 
         # The function returns None, results are posted via tools within the graph
+
+    # --- Error Handling Node ---
+    async def error_handler_node(self, state: SlackResponderState) -> Dict[str, Any]:
+        logger.error(
+            f"Entering error_handler_node. State error: {state.get('error_message')}"
+        )
+        # Implement error handling logic here
+        return {}

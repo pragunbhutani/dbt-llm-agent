@@ -121,7 +121,12 @@ def create_system_prompt(
 *   **Table Referencing:** Always use fully qualified table names (e.g., `database_name.schema_name.table_name`) in your SQL queries. Do NOT use dbt `{{ ref() }}` macros or similar Jinja templating.
 *   **SQL Dialect:** {sql_dialect_instruction}
 *   **Clarity:** Prefer CTEs for complex logic. Alias tables clearly. Use `SAFE_CAST` or similar functions for potentially problematic type conversions.
-*   **SQL Styling:** Strictly adhere to the formatting shown in the 'SQL Style Guide Example' below. This includes placing comments describing CTEs *above* the CTE definition, formatted as shown (e.g., `--\n-- comment about CTE\n--`), and using inline comments (`-- explanation`) for specific lines or logic within the SQL where appropriate.
+*   **SQL Styling:** Strictly adhere to the formatting shown in the 'SQL Style Guide Example' below AND the following explicit rules:
+    *   **Case:** Ensure all SQL keywords, function names, table names, column names, and CTE names are in **lowercase** (e.g., `select`, `from`, `my_table`, `my_column`, `with my_cte as`). Comments are an exception and can use uppercase where appropriate.
+    *   **Naming Convention:** All variable names (if applicable in SQL context, e.g. in some procedural extensions, though less common in dbt) and CTE (Common Table Expression) names MUST use **snake_case** (e.g., `user_interaction_summary`, `calculated_daily_revenue`).
+    *   **CTE Spacing:** Insert a **blank new line** between the end of one CTE (e.g., after the closing parenthesis `)`) and the start of the next CTE definition (e.g., before `with next_cte as` or before a `-- comment block` preceding the next CTE, as shown in the style guide example).
+    *   **Line Length:** Ensure that no line of SQL code exceeds **120 characters** in length. Break longer lines logically, for example, after commas in a select list, before/after JOIN conditions, or within complex CASE statements, while maintaining proper indentation for readability.
+    *   **CTE Commenting:** Descriptive comment blocks for a CTE should be placed on the lines immediately preceding the `cte_name as (...)` definition. These comment blocks must start with `--` on each line. Ensure a blank line exists between the end of the previous CTE (i.e., after its closing parenthesis `)`) and the start of the comment block for the next CTE. If it's the first CTE after the `with` keyword, the comment block (if present) should also be preceded by a blank line after `with`. Do not place these multi-line descriptive comment blocks *inside* the CTE's parentheses as the first lines.
 *   **Explanations:** Add concise comments within the SQL (`-- explanation`) to clarify joins or complex logic.
 *   **Limitations:** If the available models are insufficient to fully answer the question, generate the best possible query using *only* the available models and clearly state these limitations as a list of bullet points (e.g., `* Limitation 1\n* Limitation 2`) *after* the SQL block. Do NOT add a "Footnotes:", "Notes:", or any other heading to this list of bullet points; only provide the raw bullet points. The system will handle the appropriate header.
 *   **Output Format:** The SQL query itself should be plain text, adhering to the style guide below. Do NOT wrap the SQL query in triple backticks or any other Slack markdown within the `final_answer` parameter of the `finish_workflow` call; the display will be handled by the Slack integration.
@@ -152,8 +157,8 @@ cte_without_comment as (
         )
 ),
 
--- 
--- this cte only has a small comment
+--
+-- This CTE only has a small comment.
 --
 cte_with_small_comment as (
     select
@@ -164,7 +169,7 @@ cte_with_small_comment as (
 )
 
 --
--- this cte has a few more styling examples and comes with a comment that_condition
+-- This CTE has a few more styling examples and comes with a comment that_condition
 -- spans multiple lines
 --
 cte_with_comment as (

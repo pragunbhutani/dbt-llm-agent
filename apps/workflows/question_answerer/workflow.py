@@ -464,7 +464,7 @@ class QuestionAnswererAgent:
             logger.info("\n--- Entering QuestionAnswerer Agent Node ---")
             # Log the actual accumulated_models from the input state more visibly
             logger.info(
-                f"Agent Node: Received state with accumulated_models: {json.dumps(state.get('accumulated_models'))}"
+                f"Agent Node: Received state with accumulated_models: {_create_models_summary(state.get('accumulated_models', []))}"
             )
 
         # --- Lazily load model summary ---
@@ -504,7 +504,7 @@ class QuestionAnswererAgent:
         # Log the accumulated_models before creating guidance message
         if self.verbose:
             logger.info(
-                f"Agent Node: accumulated_models variable before guidance: {json.dumps(accumulated_models)}"
+                f"Agent Node: accumulated_models variable before guidance: {_create_models_summary(accumulated_models)}"
             )
 
         # Guidance Logic
@@ -608,7 +608,7 @@ class QuestionAnswererAgent:
             # Add separators
             logger.info("\n--- Updating QuestionAnswerer State ---")
             logger.info(
-                f"Update State Node: Received state with accumulated_models: {json.dumps(state.get('accumulated_models'))}"
+                f"Update State Node: Received state with accumulated_models: {_create_models_summary(state.get('accumulated_models', []))}"
             )
         # Ensure this node is async if called by ainvoke
         updates: Dict[str, Any] = {}
@@ -734,7 +734,7 @@ class QuestionAnswererAgent:
             # Log the actual content of updates for accumulated_models
             if "accumulated_models" in updates:
                 logger.info(
-                    f"Update State Node: Returning updates with accumulated_models: {json.dumps(updates['accumulated_models'])}"
+                    f"Update State Node: Returning updates with accumulated_models: {_create_models_summary(updates['accumulated_models'])}"
                 )
             else:
                 logger.info(
@@ -1125,3 +1125,12 @@ class QuestionAnswererAgent:
             )
 
         return result
+
+
+def _create_models_summary(models: List[Dict[str, Any]]) -> str:
+    """Create a concise summary of models for logging purposes."""
+    if not models:
+        return "No models"
+
+    model_names = [model.get("name", "Unknown") for model in models]
+    return f"{len(models)} models: {', '.join(model_names)}"
