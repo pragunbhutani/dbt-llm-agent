@@ -43,6 +43,7 @@ dependencies = [
     "dj-database-url>=2.3.0",
     "starlette>=0.46.1",
     "snowflake-connector-python>=3.15.0",
+    "pytz>=2025.2",
 ]
 
 [project.scripts]

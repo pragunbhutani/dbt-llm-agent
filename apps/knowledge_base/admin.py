@@ -32,7 +32,7 @@ class ModelAdmin(admin.ModelAdmin):
         "created_at",
         "updated_at",
     )
-    actions = ["embed_models", "interpret_models"]
+    actions = ["embed_models", "interpret_models", "interpret_and_embed_models"]
 
     # --- embed_models action ---
     def embed_models(self, request, queryset):
@@ -97,3 +97,60 @@ class ModelAdmin(admin.ModelAdmin):
             messages.success(request, msg)
 
     interpret_models.short_description = "Interpret selected models (using Service)"
+
+    # --- interpret_and_embed_models action ---
+    def interpret_and_embed_models(self, request, queryset):
+        """Triggers interpretation and then embedding for selected models."""
+        interpret_success_count = 0
+        interpret_error_count = 0
+        embed_success_count = 0
+        embed_error_count = 0
+        admin_verbosity = getattr(settings, "AGENT_DEFAULT_VERBOSITY", 0)
+
+        for model in queryset:
+            # Interpret
+            try:
+                if trigger_model_interpretation(model=model, verbosity=admin_verbosity):
+                    interpret_success_count += 1
+                    # Embed only if interpretation was successful
+                    try:
+                        if embed_knowledge_model(model=model, include_docs=True):
+                            embed_success_count += 1
+                        else:
+                            embed_error_count += 1
+                    except Exception as e:
+                        logger.error(
+                            f"Unexpected error embedding model {model.name} after interpretation: {e}",
+                            exc_info=True,
+                        )
+                        messages.error(
+                            request,
+                            f"Unexpected error embedding {model.name} after interpretation: {e}",
+                        )
+                        embed_error_count += 1
+                else:
+                    interpret_error_count += 1
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error interpreting model {model.name}: {e}",
+                    exc_info=True,
+                )
+                messages.error(
+                    request, f"Unexpected error interpreting {model.name}: {e}"
+                )
+                interpret_error_count += 1
+
+        # Prepare messages
+        interpret_msg = f"Interpretation: {interpret_success_count} succeeded, {interpret_error_count} failed."
+        embed_msg = f"Embedding: {embed_success_count} succeeded, {embed_error_count} failed (tried for {interpret_success_count} models)."
+
+        final_message = f"{interpret_msg} {embed_msg}"
+
+        if interpret_error_count > 0 or embed_error_count > 0:
+            messages.warning(request, final_message)
+        else:
+            messages.success(request, final_message)
+
+    interpret_and_embed_models.short_description = (
+        "Interpret and Embed selected models (using Service)"
+    )
