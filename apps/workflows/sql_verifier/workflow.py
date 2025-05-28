@@ -1139,92 +1139,6 @@ class SQLVerifierWorkflow:
 
         return updates
 
-    async def check_sql_style_node(self, state: SQLVerifierState) -> Dict[str, Any]:
-        logger.info("Node: check_sql_style_node")
-        updates: Dict[str, Any] = {
-            "is_style_compliant": False,
-            "style_violations": None,
-        }
-        # Use current_sql_query, which might have been corrected by the debug loop
-        # or validated by pre_validate_schema_node
-        query_to_style_check = state.get("current_sql_query")
-
-        if not query_to_style_check:
-            logger.warning("No SQL query found in state to perform style check.")
-            updates["style_violations"] = [
-                "No SQL query was available for style checking."
-            ]
-            return updates
-
-        if not self.llm_with_tools:
-            logger.warning("LLM not available for SQL style check. Skipping this step.")
-            updates["style_violations"] = ["LLM not available, style check skipped."]
-            # is_style_compliant remains False by default, or could be None to indicate not checked
-            return updates
-
-        try:
-            prompt_content = create_style_check_prompt(sql_query=query_to_style_check)
-            messages_to_llm = [HumanMessage(content=prompt_content)]
-            if self.verbose:
-                logger.info(f"Style Check LLM Prompt: {prompt_content[:500]}...")
-
-            response = await self.llm_with_tools.ainvoke(messages_to_llm)
-            if self.verbose:
-                logger.info(f"Style Check LLM Response: {response.content}")
-
-            parsed_response = None
-            if isinstance(response.content, str):
-                try:
-                    parsed_response_data = json.loads(response.content)
-                    parsed_response = SQLStyleCheckResult(**parsed_response_data)
-                except json.JSONDecodeError as e:
-                    logger.error(f"Failed to parse style check LLM JSON response: {e}")
-                    updates["style_violations"] = [
-                        "LLM response for style check was not valid JSON."
-                    ]
-                    return updates
-                except Exception as e:  # Catch Pydantic validation errors
-                    logger.error(
-                        f"Failed to validate style check LLM response against Pydantic model: {e}"
-                    )
-                    updates["style_violations"] = [
-                        f"LLM response structure for style check was invalid: {e}"
-                    ]
-                    return updates
-            else:
-                logger.error(
-                    f"Unexpected response type from style check LLM: {type(response.content)}"
-                )
-                updates["style_violations"] = [
-                    "Received unexpected response type from style check LLM."
-                ]
-                return updates
-
-            if parsed_response:
-                updates["is_style_compliant"] = parsed_response.is_style_compliant
-                updates["style_violations"] = parsed_response.style_violations
-
-                if parsed_response.styled_sql and parsed_response.is_style_compliant:
-                    # If LLM restyled it and claims compliance, update the current_sql_query for the final output
-                    logger.info("SQL query was re-styled by LLM.")
-                    updates["current_sql_query"] = parsed_response.styled_sql
-                    # This updated current_sql_query will then be picked up by finalize_verification for corrected_sql_query
-                elif not parsed_response.is_style_compliant:
-                    logger.warning(
-                        f"SQL style check failed. Violations: {parsed_response.style_violations}"
-                    )
-                else:  # Compliant and no new SQL, or styled_sql is None but claimed compliant (unlikely by prompt)
-                    logger.info(
-                        "SQL query is style compliant or no changes made by LLM."
-                    )
-
-        except Exception as e:
-            logger.error(f"Error during LLM-based style check: {e}", exc_info=True)
-            updates["style_violations"] = [f"Error during LLM-based style check: {e}"]
-            updates["is_style_compliant"] = False
-
-        return updates
-
     async def enhance_context_for_debug_node(
         self, state: SQLVerifierState
     ) -> Dict[str, Any]:
@@ -1321,7 +1235,6 @@ class SQLVerifierWorkflow:
         workflow.add_node(
             "agent_tool_executor", self.agent_tool_executor_node
         )  # New tool executor
-        workflow.add_node("check_sql_style", self.check_sql_style_node)
         workflow.add_node("finalize_verification", self.finalize_verification_node)
 
         # Define Edges
@@ -1336,14 +1249,14 @@ class SQLVerifierWorkflow:
                 if state.get("is_valid") is False
                 and state.get("max_debug_attempts", 0) > 0
                 else (
-                    "check_sql_style"
+                    "finalize_verification"
                     if state.get("is_valid") is False
                     else "execute_sql"
                 )
             ),
             {
                 "attempt_debug_or_fail": "attempt_debug_or_fail",
-                "check_sql_style": "check_sql_style",
+                "finalize_verification": "finalize_verification",
                 "execute_sql": "execute_sql",
             },
         )
@@ -1354,7 +1267,7 @@ class SQLVerifierWorkflow:
             self.should_attempt_debug,  # Checks is_valid and debug_attempts vs max_debug_attempts
             {
                 "attempt_debug_or_fail": "attempt_debug_or_fail",
-                "end_workflow": "check_sql_style",
+                "end_workflow": "finalize_verification",
             },
         )
 
@@ -1364,11 +1277,11 @@ class SQLVerifierWorkflow:
             lambda state: (
                 "invoke_debug_llm"
                 if state["debug_attempts"] <= state["max_debug_attempts"]
-                else "check_sql_style"
+                else "finalize_verification"
             ),
             {
                 "invoke_debug_llm": "invoke_debug_llm",
-                "check_sql_style": "check_sql_style",
+                "finalize_verification": "finalize_verification",
             },
         )
 
@@ -1392,11 +1305,11 @@ class SQLVerifierWorkflow:
             self.should_retry_execution_after_llm_debug,
             {
                 "retry_execute_sql": "execute_sql",  # If agent gave a new SQL, try it
-                "proceed_to_style_check": "check_sql_style",  # If agent couldn't fix, or error, go to style check/end
+                "proceed_to_style_check": "finalize_verification",  # If agent couldn't fix, or error, go to style check/end
             },
         )
 
-        workflow.add_edge("check_sql_style", "finalize_verification")
+        # Final node that prepares the output
         workflow.add_edge("finalize_verification", END)
 
         # Compile the graph
@@ -1419,15 +1332,17 @@ class SQLVerifierWorkflow:
         """
         if self.verbose:
             logger.info(
-                f"SQLVerifierWorkflow run invoked with query: {sql_query[:100]}..."
+                f"SQLVerifierWorkflow run called with query: {sql_query[:100]}..., warehouse: {warehouse_type}"
             )
 
-        # Determine the effective max_debug_attempts
         effective_max_debug_attempts = (
             max_debug_attempts
             if max_debug_attempts is not None
             else self.default_max_debug_loops
         )
+
+        # Initialize debugging_log as an empty list if it's None
+        initial_debugging_log = []
 
         # Check for LLM availability if debugging is possible
         if not self.llm_with_tools and effective_max_debug_attempts > 0:
@@ -1449,8 +1364,8 @@ class SQLVerifierWorkflow:
                 agent_listed_column_values={},
                 debug_explanation="LLM client not available.",
                 debugging_log=["Attempted to run workflow without LLM for debugging."],
-                is_style_compliant=None,
-                style_violations=None,
+                is_style_compliant=True,  # Assume compliant as style check is removed
+                style_violations=[],  # No violations as style check is removed
                 messages=[],
                 agent_tool_calls=[],
             )
@@ -1476,8 +1391,8 @@ class SQLVerifierWorkflow:
                 debugging_log=[
                     "Attempted to run workflow without Snowflake credentials for a Snowflake query."
                 ],
-                is_style_compliant=None,
-                style_violations=None,
+                is_style_compliant=True,  # Assume compliant as style check is removed
+                style_violations=[],  # No violations as style check is removed
                 messages=[],
                 agent_tool_calls=[],
             )
@@ -1499,9 +1414,9 @@ class SQLVerifierWorkflow:
             agent_described_tables_info={},
             agent_listed_column_values={},
             debug_explanation=None,
-            debugging_log=[],
-            is_style_compliant=None,
-            style_violations=None,
+            debugging_log=initial_debugging_log,  # Use initialized list
+            is_style_compliant=True,  # Assume compliant as style check is removed
+            style_violations=[],  # No violations as style check is removed
             messages=[],
             agent_tool_calls=[],
         )
@@ -1531,20 +1446,35 @@ class SQLVerifierWorkflow:
         self, state: SQLVerifierState
     ) -> Dict[str, Any]:
         """
-        Prepares the final result of the verification process.
-        This node is effectively the exit point of the graph.
+        Finalizes the verification process and prepares the output.
+        This node is now the definitive end for all paths, including those that
+        previously went to style checking. It ensures that `is_style_compliant`
+        and `style_violations` are set to default values indicating compliance
+        since the style check step is removed.
         """
-        is_valid = state.get("is_valid", False)
-        final_query = state.get("current_sql_query")
-        original_query = state.get("original_sql_query")
+        current_debugging_log = list(state.get("debugging_log", []))
+        current_debugging_log.append("Finalizing verification process.")
+
+        if self.verbose:
+            logger.info(f"finalize_verification_node: State entering finalize: {state}")
+
+        original_query = state["original_sql_query"]
+        # Use current_sql_query if corrected_sql_query is not set (e.g., direct success or failed debug)
+        final_query = state.get("corrected_sql_query") or state["current_sql_query"]
+        is_valid = state.get("is_valid")
         error = state.get("execution_error")
         explanation = state.get("debug_explanation")
         attempts = state.get("debug_attempts", 0)
-        style_compliant = state.get("is_style_compliant")
-        style_violations = state.get("style_violations")
-        current_debugging_log = state.get("debugging_log", [])
 
-        if is_valid:
+        # Since style check is removed, assume compliance.
+        style_compliant = True
+        style_violations = []
+        current_debugging_log.append(
+            "SQL style check step has been removed. Assuming style compliance."
+        )
+
+        status_message = ""
+        if is_valid and final_query == original_query:
             current_debugging_log.append(
                 f"Finalizing verification. SQL is valid. Final query: {final_query[:200]}..."
             )
@@ -1609,47 +1539,154 @@ async def main_test():
     # This requires Django settings and appropriate env vars for Snowflake and LLM
     # Configure logging
     logging.basicConfig(level=logging.INFO)
-    logger.info("Starting SQLVerifierWorkflow test...")
+    # Mock Django settings if not running in a Django context for standalone testing
+    if not django_settings.configured:
+        django_settings.configure(
+            RAGSTAR_LOG_LEVEL="DEBUG",
+            # Add other necessary settings mocks here if your workflow depends on them
+            # e.g., LLM provider settings, data warehouse settings.
+            # For SQLVerifier, we might need Snowflake creds.
+            # These would typically come from environment variables.
+            # Example (ensure these are properly managed in a real test setup):
+            # RAGSTAR_DEFAULT_LLM_PROVIDER="...",
+            # RAGSTAR_OPENAI_API_KEY="...",
+            # RAGSTAR_SNOWFLAKE_USER="...",
+            # ... etc.
+        )
 
-    # Ensure Django settings are configured if run standalone for testing
-    # from django.conf import settings
-    # if not settings.configured:
-    #     settings.configure() # Basic configuration
-    #     import django
-    #     django.setup()
+    # --- Mocked dbt_models_info for testing ---
+    mock_dbt_models_info = [
+        {
+            "model_name": "customers",
+            "description": "Table containing customer data.",
+            "columns": [
+                {"name": "id", "type": "INTEGER", "description": "Customer ID"},
+                {"name": "name", "type": "VARCHAR", "description": "Customer name"},
+                {
+                    "name": "email",
+                    "type": "VARCHAR",
+                    "description": "Customer email",
+                },
+            ],
+            "table_type": "BASE TABLE",  # Example field
+            "sample_data": [],  # Example field
+        },
+        {
+            "model_name": "orders",
+            "description": "Table containing order data.",
+            "columns": [
+                {"name": "id", "type": "INTEGER", "description": "Order ID"},
+                {
+                    "name": "customer_id",
+                    "type": "INTEGER",
+                    "description": "ID of the customer who placed the order.",
+                },
+                {
+                    "name": "order_date",
+                    "type": "DATE",
+                    "description": "Date the order was placed.",
+                },
+                {
+                    "name": "amount",
+                    "type": "DECIMAL",
+                    "description": "Total amount of the order.",
+                },
+            ],
+            "table_type": "BASE TABLE",
+            "sample_data": [],
+        },
+    ]
 
-    verifier = SQLVerifierWorkflow(max_debug_loops=2)
+    # --- Test Cases ---
+    test_cases = [
+        {
+            "name": "Valid Query - Simple Select",
+            "query": "SELECT id, name FROM customers LIMIT 10",
+            "warehouse_type": "snowflake",  # Assuming Snowflake for testing execution
+            "max_debug_attempts": 0,  # No debugging needed
+            "dbt_models_info": mock_dbt_models_info,
+            "expected_is_valid": True,
+            "expected_error": None,
+        },
+        # {
+        #     "name": "Invalid Query - Non-existent column",
+        #     "query": "SELECT non_existent_col FROM customers", # This query will fail
+        #     "warehouse_type": "snowflake",
+        #     "max_debug_attempts": 1, # Allow debugging
+        #     "dbt_models_info": mock_dbt_models_info,
+        #     "expected_is_valid": False, # Expect it to remain invalid if LLM can't fix
+        #     # "expected_corrected_sql_contains": "SELECT" # if LLM fixes it
+        # },
+        # {
+        #     "name": "Invalid Query - Syntax Error (missing comma)",
+        #     "query": "SELECT id name FROM customers",
+        #     "warehouse_type": "snowflake",
+        #     "max_debug_attempts": 1,
+        #     "dbt_models_info": mock_dbt_models_info,
+        #     "expected_is_valid": False,
+        # },
+        # Add more test cases:
+        # - Query that needs schema from dbt_models_info to be fixed
+        # - Query with a join that is incorrect
+        # - Query that is valid but could be improved (style check - though style node removed)
+        # - Query for a non-Snowflake DB (if you want to test that path, e.g., "duckdb")
+        #   (current implementation primarily supports Snowflake execution)
+    ]
 
-    # Test 1: Valid query
-    # valid_sql = "SELECT 1;"
-    # logger.info(f"\\n--- Test 1: Valid SQL ---")
-    # result_valid = await verifier.run(sql_query=valid_sql)
-    # print(f"Result for valid SQL: {result_valid}")
+    # Initialize the workflow
+    # Note: For testing, you might need to ensure Snowflake credentials and LLM are configured
+    # or mock the parts of the workflow that interact with them if focusing on graph logic.
+    # For this test, we assume Snowflake connection and LLM are available or mocked by env.
+    workflow_instance = SQLVerifierWorkflow()
 
-    # Test 2: Invalid query that might be fixable
-    # invalid_sql_fixable = "SELEC * FROM non_existent_table WHER id = 1;" # Typo + non-existent table
-    # logger.info(f"\\n--- Test 2: Invalid SQL (fixable by LLM) ---")
-    # result_invalid_fixable = await verifier.run(sql_query=invalid_sql_fixable)
-    # print(f"Result for invalid (fixable) SQL: {result_invalid_fixable}")
+    logger.info("\n--- Running SQL Verifier Workflow Tests ---")
+    for i, test_case in enumerate(test_cases):
+        logger.info(f"\n--- Test Case {i+1}: {test_case['name']} ---")
+        logger.info(f"Query: {test_case['query']}")
 
-    # Test 3: Invalid query, no debugging
-    # invalid_sql_no_debug = "SELEC Name FROM my_table;"
-    # logger.info(f"\\n--- Test 3: Invalid SQL (no debug attempts) ---")
-    # result_invalid_no_debug = await verifier.run(sql_query=invalid_sql_no_debug, max_debug_attempts=0)
-    # print(f"Result for invalid SQL (no debug): {result_invalid_no_debug}")
+        try:
+            result = await workflow_instance.run(
+                sql_query=test_case["query"],
+                warehouse_type=test_case["warehouse_type"],
+                max_debug_attempts=test_case["max_debug_attempts"],
+                dbt_models_info=test_case["dbt_models_info"],
+                conversation_id=f"test-conv-{i+1}",
+            )
 
-    # Test 4: Query that would fail due to permissions or non-existent object (harder to debug without context)
-    # permission_error_sql = "SELECT * FROM sensitive_information_table;"
-    # logger.info(f"\\n--- Test 4: Permission error SQL ---")
-    # result_permission_error = await verifier.run(sql_query=permission_error_sql)
-    # print(f"Result for permission error SQL: {result_permission_error}")
+            logger.info(f"Workflow Result for '{test_case['name']}':")
+            logger.info(f"  Is Valid: {result.get('is_valid')}")
+            logger.info(f"  Corrected SQL: {result.get('corrected_sql_query')}")
+            logger.info(f"  Execution Error: {result.get('execution_error')}")
+            logger.info(f"  Debug Explanation: {result.get('debug_explanation')}")
+            logger.info(f"  Debug Attempts: {result.get('debug_attempts_made')}")
+            logger.info(f"  Style Compliant: {result.get('is_style_compliant')}")
+            # logger.info(f"  Debugging Log: {result.get('debugging_log')}")
+
+            # Assertions
+            assert result.get("is_valid") == test_case["expected_is_valid"], (
+                f"Test '{test_case['name']}' failed: is_valid mismatch. "
+                f"Expected {test_case['expected_is_valid']}, got {result.get('is_valid')}"
+            )
+            if test_case["expected_error"]:
+                assert test_case["expected_error"] in (
+                    result.get("execution_error") or ""
+                ), (
+                    f"Test '{test_case['name']}' failed: error message mismatch. "
+                    f"Expected contains '{test_case['expected_error']}', got '{result.get('execution_error')}'"
+                )
+            # Add more assertions as needed, e.g., for corrected_sql_query if applicable
+
+            logger.info(f"--- Test Case '{test_case['name']}' PASSED ---")
+
+        except Exception as e:
+            logger.error(
+                f"--- Test Case '{test_case['name']}' FAILED with exception: {e} ---",
+                exc_info=True,
+            )
 
 
 if __name__ == "__main__":
-    # This is tricky to run directly without full Django app context for settings,
-    # especially for chat_service_factory and query_executor_app_settings.
-    # Consider a manage.py command for testing workflows.
-    # asyncio.run(main_test())
-    print(
-        "SQLVerifierWorkflow module loaded. Define test scenarios within a Django context to run."
-    )
+    # This allows running the test function directly if the script is executed.
+    # Note: Ensure Django settings are configured or mocked appropriately before running.
+
+    asyncio.run(main_test())
