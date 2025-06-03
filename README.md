@@ -219,7 +219,15 @@ If you prefer not to use Docker, you can set up a local Python environment.
     # Or --method core, or --method local, depending on your dbt project setup.
     ```
 
-10. **Run the Development Server:**
+10. **Initialize your project (for `dbt` core):**
+    If you use `dbt` core you might need to set up adapters first.  Sample below for PostgreSQL.
+
+    ```bash
+    uv pip install dbt-core dbt-postgres
+    uv run python manage.py init_project --method core
+    ```
+
+11. **Run the Development Server:**
 
     ```bash
     uv run python manage.py runserver
