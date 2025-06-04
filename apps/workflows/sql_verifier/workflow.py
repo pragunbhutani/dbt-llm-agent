@@ -576,26 +576,36 @@ class SQLVerifierWorkflow:
         Determines if debugging should be attempted or if the process should fail.
         Increments debug attempts.
         """
-        current_attempts = state.get("debug_attempts", 0)
-        max_attempts = state.get("max_debug_attempts", self.default_max_debug_loops)
         current_debugging_log = state.get("debugging_log", [])
+        debug_attempts = state.get("debug_attempts", 0) + 1
+        max_attempts = state.get("max_debug_attempts", self.default_max_debug_loops)
+
         current_debugging_log.append(
-            f"Attempting debug: {current_attempts + 1} of {max_attempts}."
+            f"Attempting debug: {debug_attempts} of {max_attempts}."
+        )
+        logger.info(
+            f"attempt_debug_or_fail_node: Debug attempt {debug_attempts}, Max attempts: {max_attempts}"
+        )
+        logger.warning(  # Log the current error that triggered this debug attempt
+            f"attempt_debug_or_fail_node: Current execution error: {state.get('execution_error')}"
         )
 
-        if self.verbose:
-            logger.info(
-                f"attempt_debug_or_fail_node: Debug attempt {current_attempts + 1}, Max attempts: {max_attempts}"
-            )
-            logger.info(
-                f"attempt_debug_or_fail_node: Current execution error: {state.get('execution_error')}"
-            )
-        # This node is reached if is_valid is False.
-        # We increment debug_attempts here before deciding to go to LLM or fail.
-        return {
-            "debug_attempts": current_attempts + 1,
+        updates: Dict[str, Any] = {
+            "debug_attempts": debug_attempts,
             "debugging_log": current_debugging_log,
         }
+
+        # Add a new HumanMessage to the messages list describing the current failure.
+        # This ensures the LLM is aware of the latest error it needs to fix.
+        # The 'messages' field in the state uses `add_messages`, so this new message will be appended by LangGraph.
+        new_human_message_content = (
+            f"The previously attempted SQL query:\\n```sql\\n{state['current_sql_query']}\\n```\\n"
+            f"Failed with the following error:\\n{state['execution_error']}\\n\\n"
+            f"Please analyze this error and provide a corrected SQL query and explanation."
+        )
+        updates["messages"] = [HumanMessage(content=new_human_message_content)]
+
+        return updates
 
     async def agent_tool_executor_node(self, state: SQLVerifierState) -> Dict[str, Any]:
         """Executes tools called by the agent and returns their outputs as ToolMessages."""
@@ -720,34 +730,66 @@ class SQLVerifierWorkflow:
         """
         current_debugging_log = state.get("debugging_log", [])
         messages = list(state.get("messages", []))  # Get a mutable copy
-        current_warehouse_type = state.get("warehouse_type", "snowflake")
 
-        # If messages list is empty, it's the start of the agent interaction for this debug attempt.
-        # Initialize with System Prompt and the current problem.
-        if not messages:
+        # Ensure SystemMessage is present, typically the first message.
+        # attempt_debug_or_fail_node now adds a HumanMessage for retries,
+        # so `messages` list won't be empty on a retry path here.
+        # The initial population of SystemMessage + HumanMessage (for first error)
+        # happens in start_verification_node which transitions to invoke_debug_llm_node (or execute_sql_node first).
+        # For SQLVerifier, the first call to invoke_debug_llm_node comes after a failure in execute_sql_node,
+        # via attempt_debug_or_fail_node. So messages should already have System + Human(err1).
+        # Let's ensure SystemMessage is at the start if we are building messages from scratch.
+
+        if not messages or not isinstance(messages[0], SystemMessage):
+            # This case should ideally not be hit if graph is structured correctly,
+            # but as a safeguard, prepend SystemMessage.
             system_prompt_str = create_sql_verifier_debug_prompt(
-                warehouse_type=current_warehouse_type,
+                warehouse_type=state.get("warehouse_type", "snowflake"),
                 dbt_models_info=state.get("dbt_models_info"),
             )
-            messages.append(SystemMessage(content=system_prompt_str))
-
-            problem_description = f"The following SQL query failed:\n```sql\n{state['current_sql_query']}\n```\nError message:\n{state['execution_error']}"
-            messages.append(HumanMessage(content=problem_description))
+            messages.insert(0, SystemMessage(content=system_prompt_str))
             current_debugging_log.append(
-                "Initialized SQL Debugging Agent with system prompt and problem description."
+                "Safeguard: Prepended SystemMessage in invoke_debug_llm_node as it was missing or not first."
+            )
+            logger.warning(
+                "invoke_debug_llm_node: Safeguard triggered for SystemMessage."
             )
 
+        # Prepare the actual list of messages to be sent to the LLM for this invocation.
+        llm_actual_input_messages = list(messages)
+
+        # Problem 1 Fix: If the message before the current Human error message
+        # (which should now be the actual last one due to attempt_debug_or_fail_node's addition)
+        # was an AIMessage with no tool_calls (i.e., a JSON response from the LLM that failed),
+        # we should remove it to prevent confusing the LLM.
+        if (
+            len(llm_actual_input_messages) >= 2
+        ):  # Need at least [..., PrevAI, CurrentHumanError]
+            # The last message is HumanMessage(current_error) added by attempt_debug_or_fail_node
+            # The one before it (-2) is potentially the problematic AI JSON response
+            potential_prev_ai_msg = llm_actual_input_messages[-2]
+            if (
+                isinstance(potential_prev_ai_msg, AIMessage)
+                and not potential_prev_ai_msg.tool_calls
+            ):
+                logger.info(
+                    "invoke_debug_llm_node: Removing second-to-last message as it was likely a "
+                    "failed AI JSON response from the previous debug attempt."
+                )
+                llm_actual_input_messages.pop(
+                    -2
+                )  # Remove the AI's previous JSON output
+
         current_debugging_log.append(
-            f"Invoking SQL Debugging Agent with {len(messages)} messages in history."
+            f"Invoking SQL Debugging Agent with {len(llm_actual_input_messages)} messages for LLM (after potential pruning). Full history length: {len(messages)}."
         )
         if self.verbose:
-            # Log detailed message content previews
+            # Log detailed message content previews for the messages being sent to LLM
             detailed_message_log = []
-            for i, m in enumerate(messages):
+            for i, m in enumerate(llm_actual_input_messages):
                 content_preview = ""
                 if hasattr(m, "content"):
                     if isinstance(m.content, list):
-                        # Handle list content (e.g., from Anthropic)
                         preview_parts = []
                         for part in m.content:
                             if isinstance(part, str):
@@ -761,9 +803,7 @@ class SQLVerifierWorkflow:
                                     else part["text"]
                                 )
                             else:
-                                preview_parts.append(
-                                    str(part)[:200] + "..."
-                                )  # Fallback
+                                preview_parts.append(str(part)[:200] + "...")
                         content_preview = " | ".join(preview_parts)
                     elif isinstance(m.content, str):
                         content_preview = (
@@ -783,11 +823,10 @@ class SQLVerifierWorkflow:
                     tool_calls_summary = f", ToolCalls: {m.tool_calls}"
 
                 detailed_message_log.append(
-                    f"  {i}. {type(m).__name__}: {content_preview}{tool_calls_summary}"
+                    f"  LLM_INPUT {i}. {type(m).__name__}: {content_preview}{tool_calls_summary}"
                 )
-
             logger.info(
-                f"invoke_debug_llm_node: Invoking agent. Current messages ({len(messages)} total):\n"
+                f"invoke_debug_llm_node: Messages being sent to LLM ({len(llm_actual_input_messages)} total):\n"
                 + "\n".join(detailed_message_log)
             )
 
@@ -806,9 +845,14 @@ class SQLVerifierWorkflow:
             }
 
         try:
-            # Invoke the agent
-            ai_response_message = await self.llm_with_tools.ainvoke(messages)
-            messages.append(ai_response_message)  # Add AI response to history
+            # Invoke the agent using the pruned messages
+            ai_response_message = await self.llm_with_tools.ainvoke(
+                llm_actual_input_messages
+            )
+
+            # IMPORTANT: Append the new AI response to the original `messages` list
+            # (which reflects the full state history being built up), NOT to `llm_actual_input_messages`.
+            messages.append(ai_response_message)
             current_debugging_log.append(
                 f"Agent responded. Total messages: {len(messages)}"
             )
@@ -1455,8 +1499,8 @@ class SQLVerifierWorkflow:
         current_debugging_log = list(state.get("debugging_log", []))
         current_debugging_log.append("Finalizing verification process.")
 
-        if self.verbose:
-            logger.info(f"finalize_verification_node: State entering finalize: {state}")
+        # if self.verbose: # Comment out or remove the full state dump
+        #     logger.info(f"finalize_verification_node: State entering finalize: {state}")
 
         original_query = state["original_sql_query"]
         # Use current_sql_query if corrected_sql_query is not set (e.g., direct success or failed debug)
@@ -1490,16 +1534,19 @@ class SQLVerifierWorkflow:
                 status_message += f" Last error: {error}"
 
         if self.verbose:
-            logger.info(f"finalize_verification_node: Is valid: {is_valid}")
             logger.info(
-                f"finalize_verification_node: Final query: {final_query[:100]}..."
+                "finalize_verification_node: Finalizing with the following key state values:"
             )
+            logger.info(f"  Is valid: {is_valid}")
+            logger.info(f"  Final query (preview): {final_query[:200]}...")
+            logger.info(f"  Original query (preview): {original_query[:200]}...")
+            logger.info(f"  Execution Error: {error}")
+            logger.info(f"  Debug Explanation: {explanation}")
+            logger.info(f"  Debug Attempts: {attempts}")
             logger.info(
-                f"finalize_verification_node: Original query: {original_query[:100]}..."
+                f"  Number of messages in history: {len(state.get('messages', []))}"
             )
-            logger.info(f"finalize_verification_node: Error: {error}")
-            logger.info(f"finalize_verification_node: Explanation: {explanation}")
-            logger.info(f"finalize_verification_node: Attempts: {attempts}")
+            # Avoid logging full dbt_models_info or messages content here unless specifically needed for deep debug
 
         # Return all relevant fields that QueryExecutorWorkflow might need.
         # This structure should align with what SQLDebugResult expects, more or less.
