@@ -1,0 +1,49 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Monorepo Structure
+
+The project is a monorepo that looks something like this:
+
+/ragstar-project-root/
+├── backend_django/              # Django application (moved from root)
+│   ├── manage.py
+│   ├── ragstar/                 # Django settings directory
+│   ├── apps/                    # Django apps
+│   ├── static/
+│   ├── pyproject.toml           # Python dependencies
+│   ├── uv.lock                  # Lock file
+│   ├── .python-version          # Python version specification
+│   └── Dockerfile               # Backend-specific Docker config
+├── frontend_nextjs/             # Renamed from client/ - ready for Next.js
+├── mcp_server/                  # MCP Server for LLM applications
+├── config_examples/             # Config examples like .slack_manifest.example.json, .ragstarrules.example.yml
+├── docs/                        # GitHub Pages docs (unchanged)
+├── docker-compose.yml           # Orchestrates all services
+├── .env.example                 # Example environment file
+└── .env                         # Shared environment variables
+
+## Monorepo Projects
+
+- backend_django
+- frontend_nextjs
+- mcp_server
+
+### Other Services Used
+
+- postgres db with pgvector
+- redis
+
+# Environment Variable Strategy
+- Root .env: Shared configuration for all services, used by docker-compose.yml
+- Local Development: backend_django/manage.py loads the root .env file
+- Docker: docker-compose.yml injects root .env variables into containers
+
+# General Rules
+- Use UV for python package management. We're using a pyproject.toml and not requirements.txt.
+- Use pnpm for javascript / typescript package management.
+- When adding or removing packages, do so via the command line in the appropriate directory instead of directly adding or removing package names to the respective configuration in order to ensure you're always installing the latest package because your training knowledge base may have become outdated.
+- In the NextJS app, use TailwindCSS classes for style only. Do not define custom or inline css.
+- Use comments when necessary but don't leave unnecessary comments in your wake like leaving breadcrumbs for all the changes you've done. When you want to remove lines, remove them and don't just comment them out.

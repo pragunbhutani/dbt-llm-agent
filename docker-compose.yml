@@ -9,7 +9,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-user}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password} # Change this in production!
     ports:
-      - "${POSTGRES_PORT:-5432}:5432" # Expose DB port to host if needed
+      - "${POSTGRES_PORT:-5432}:5433" # Expose DB port to host if needed
     healthcheck:
       test:
         [
@@ -21,18 +21,14 @@ services:
       retries: 5
     restart: unless-stopped
 
-  app:
+  backend_django:
+    image: ragstar/backend_django
     build:
-      context: .
+      context: ./backend_django
       dockerfile: Dockerfile
-    container_name: ragstar_app
+    container_name: ragstar_django
     ports:
-      - "${APP_PORT:-8000}:8000" # Expose API server port
-    volumes:
-      # Mount local code for development (optional)
-      # Be mindful of potential performance issues on non-Linux hosts
-      - .:/app
-      # You might need to mount other volumes if your app writes data outside /app
+      - "${APP_PORT:-8000}:8080" # Expose API server port
     env_file:
       - .env
     environment:

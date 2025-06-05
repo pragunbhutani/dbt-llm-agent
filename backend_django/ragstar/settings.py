@@ -117,7 +117,7 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_local_dev"),
+            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_django"),
             "USER": os.environ.get("DB_USER_FALLBACK", "postgres"),
             "PASSWORD": os.environ.get("DB_PASSWORD_FALLBACK", "password"),
             "HOST": os.environ.get("DB_HOST_FALLBACK", "localhost"),
