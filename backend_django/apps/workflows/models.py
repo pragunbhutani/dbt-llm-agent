@@ -1,11 +1,10 @@
 from django.db import models
 from pgvector.django import VectorField
-
-# Import the Model from the knowledge_base app
 from apps.knowledge_base.models import Model
+from apps.accounts.models import OrganisationScopedModelMixin
 
 
-class Question(models.Model):
+class Question(OrganisationScopedModelMixin, models.Model):
     question_text = models.TextField(null=False)
     answer_text = models.TextField(null=True, blank=True)
     question_embedding = VectorField(
@@ -38,9 +37,8 @@ class Question(models.Model):
         max_length=50, null=True, blank=True, db_index=True
     )
 
-    # Relationship handled by QuestionModel
     models_used = models.ManyToManyField(
-        Model,  # Reference the imported Model
+        Model,
         through="QuestionModel",
         related_name="questions_used_in",
     )
@@ -58,15 +56,13 @@ class QuestionModel(models.Model):
     """Association table tracking which Models were used for each Question."""
 
     question = models.ForeignKey(Question, on_delete=models.CASCADE)
-    model = models.ForeignKey(
-        Model, on_delete=models.CASCADE  # Reference the imported Model
-    )
+    model = models.ForeignKey(Model, on_delete=models.CASCADE)
     relevance_score = models.IntegerField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "question_models"  # Match existing table name
-        unique_together = (("question", "model"),)  # Primary key in original schema
+        unique_together = (("question", "model"),)
         verbose_name = "Question Model Usage"
         verbose_name_plural = "Question Model Usages"
 

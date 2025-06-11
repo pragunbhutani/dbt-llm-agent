@@ -56,9 +56,11 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "rest_framework_simplejwt",
     "pgvector.django",
+    # "django_cryptography",
     # Use full AppConfig paths
-    "apps.core.apps.CoreConfig",
+    "apps.accounts.apps.AccountsConfig",
     "apps.data_sources.apps.DataSourcesConfig",
     "apps.knowledge_base.apps.KnowledgeBaseConfig",
     "apps.embeddings.apps.EmbeddingsConfig",
@@ -66,6 +68,8 @@ INSTALLED_APPS = [
     "apps.workflows.apps.WorkflowsConfig",
     "apps.integrations.apps.IntegrationsConfig",
 ]
+
+AUTH_USER_MODEL = "accounts.User"
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
@@ -117,7 +121,7 @@ else:
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_django"),
+            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_local_dev"),
             "USER": os.environ.get("DB_USER_FALLBACK", "postgres"),
             "PASSWORD": os.environ.get("DB_PASSWORD_FALLBACK", "password"),
             "HOST": os.environ.get("DB_HOST_FALLBACK", "localhost"),
@@ -227,6 +231,13 @@ RAGSTAR_LOG_LEVEL = (
 # --- Logging Configuration ---
 # Add this towards the end of your settings.py file
 # (After other settings like DATABASES, OPENAI_API_KEY, etc.)
+
+# Add REST_FRAMEWORK settings for JWT
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+    )
+}
 
 LOGGING = {
     "version": 1,

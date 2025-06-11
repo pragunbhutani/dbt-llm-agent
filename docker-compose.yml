@@ -42,6 +42,25 @@ services:
     # command: poetry run uvicorn ragstar.api.server:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
 
+  frontend_nextjs:
+    image: ragstar/frontend_nextjs
+    build:
+      context: ./frontend_nextjs
+      dockerfile: Dockerfile
+    container_name: ragstar_frontend
+    ports:
+      - "${FRONTEND_PORT:-3001}:3000" # Expose Next.js app port (host:container)
+    volumes:
+      - ./frontend_nextjs:/app # Mount local code for development
+      - /app/node_modules # Keep container node_modules
+      - /app/.next # Keep container .next folder
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend_django:8080/api # URL for the Django API
+      NODE_ENV: development # Explicitly set development mode for Next.js
+    depends_on:
+      - backend_django
+    restart: unless-stopped
+
 volumes:
   postgres_data:
     driver: local

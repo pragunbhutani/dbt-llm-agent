@@ -1,4 +1,5 @@
-from django.urls import path, include
+from django.urls import path
+from .views import UserRegistrationView, UserView, OrganisationSettingsView
 
 # Core URL patterns can be defined here if needed later.
 
@@ -9,6 +10,9 @@ from django.urls import path, include
 # - slack_events_handler -> apps.integrations.urls
 
 urlpatterns = [
+    path("register/", UserRegistrationView.as_view(), name="user-registration"),
+    path("me/", UserView.as_view(), name="user-me"),
+    path("settings/", OrganisationSettingsView.as_view(), name="organisation-settings"),
     # Add core-specific URLs here if any
 ]
 

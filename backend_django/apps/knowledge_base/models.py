@@ -1,14 +1,16 @@
 from django.db import models
 from django.contrib.postgres.fields import ArrayField
-
-# Assuming PostgreSQL for ArrayField/JSONField, JSONField is standard in recent Django
 from pgvector.django import (
     VectorField,
-)  # Keep VectorField if used elsewhere, otherwise remove if only for models moved out
+)  # Assuming this might still be used, if not, can be removed later
+from apps.accounts.models import OrganisationScopedModelMixin  # Import the mixin
+
+# Assuming PostgreSQL for ArrayField/JSONField, JSONField is standard in recent Django
 
 
 # Model representing a dbt artifact and its interpretation
-class Model(models.Model):
+class Model(OrganisationScopedModelMixin, models.Model):
+    # Organisation field will be inherited from OrganisationScopedModelMixin
     name = models.CharField(max_length=255, unique=True, null=False)
     path = models.CharField(max_length=1024, null=False)
     schema_name = models.CharField(

@@ -1,7 +1,8 @@
 from django.shortcuts import render
-from rest_framework import viewsets, status
+from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.exceptions import PermissionDenied
 from pgvector.django import L2Distance, CosineDistance, MaxInnerProduct
 
 # Update imports
@@ -13,27 +14,65 @@ from apps.llm_providers.services import default_embedding_service
 class ModelEmbeddingViewSet(viewsets.ModelViewSet):
     """API endpoint that allows Model Embeddings to be viewed or edited."""
 
-    queryset = ModelEmbedding.objects.all().order_by("-created_at")
     serializer_class = ModelEmbeddingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, "organisation") and user.organisation:
+            return ModelEmbedding.objects.for_organisation(user.organisation).order_by(
+                "-created_at"
+            )
+        return ModelEmbedding.objects.none()
 
     def perform_create(self, serializer):
-        document_text = serializer.validated_data.get("document")
-        embedding = None
+        user = self.request.user
+        if not (hasattr(user, "organisation") and user.organisation):
+            raise PermissionDenied("User is not associated with an organisation.")
+
+        # First, save the instance with the organisation and other serializer-handled fields.
+        # The 'embedding' field is read-only in the serializer, so it won't be set here.
+        instance = serializer.save(organisation=user.organisation)
+
+        # Now, generate and set the embedding if document text is present.
+        document_text = (
+            instance.document
+        )  # instance.document should be populated by serializer.save()
         if document_text:
-            embedding = default_embedding_service.get_embedding(document_text)
-        serializer.save(embedding=embedding)
+            instance.embedding = default_embedding_service.get_embedding(document_text)
+            instance.save(
+                update_fields=["embedding"]
+            )  # Save again to store the embedding
+        # If document_text is empty, embedding remains null (as per model default/previous state)
 
     def perform_update(self, serializer):
-        document_text = serializer.validated_data.get("document")
-        embedding = None
-        if document_text:
-            embedding = default_embedding_service.get_embedding(document_text)
-            serializer.save(embedding=embedding)
-        else:
-            serializer.save()
+        # get_object ensures the instance is already scoped to the user's organisation.
+        # Save changes from serializer (excluding embedding as it's read-only).
+        instance = serializer.save()
+
+        # If the document text was part of the update, regenerate the embedding.
+        # Check if 'document' was in request.data to see if it was intended to be updated.
+        if "document" in serializer.context["request"].data:
+            document_text = instance.document
+            if document_text:
+                instance.embedding = default_embedding_service.get_embedding(
+                    document_text
+                )
+            else:
+                instance.embedding = None  # Clear embedding if document is cleared
+            instance.save(
+                update_fields=["embedding"]
+            )  # Save again to store the new embedding or None
 
     @action(detail=False, methods=["post"], url_path="search")
     def search_embeddings(self, request):
+        user = self.request.user
+        if not (hasattr(user, "organisation") and user.organisation):
+            return Response(
+                {"error": "User is not associated with an organisation."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         query_text = request.data.get("query")
         n_results = int(request.data.get("n_results", 5))
         metric_type = request.data.get("metric", "cosine").lower()
@@ -48,18 +87,21 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
-        queryset = ModelEmbedding.objects.filter(can_be_used_for_answers=True)
+        # Base queryset scoped by organisation
+        base_queryset = ModelEmbedding.objects.for_organisation(
+            user.organisation
+        ).filter(can_be_used_for_answers=True)
 
         if metric_type == "cosine":
-            queryset = queryset.annotate(
+            queryset = base_queryset.annotate(
                 distance=CosineDistance("embedding", query_embedding)
             ).order_by("distance")
         elif metric_type == "l2":
-            queryset = queryset.annotate(
+            queryset = base_queryset.annotate(
                 distance=L2Distance("embedding", query_embedding)
             ).order_by("distance")
         elif metric_type == "inner_product":
-            queryset = queryset.annotate(
+            queryset = base_queryset.annotate(
                 distance=MaxInnerProduct("embedding", query_embedding)
             ).order_by("-distance")
         else:

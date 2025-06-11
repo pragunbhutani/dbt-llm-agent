@@ -3,6 +3,18 @@ description:
 globs: 
 alwaysApply: true
 ---
+# Project Description
+
+We are building an LLM powered AI data analyst for Data Engineering teams that work with dbt to manage their analytics code bases. To use this project, users should be able to connect with their dbt cloud projects or their dbt core github repos via an interface which is then used to build a knowlege base. We then use various AI based workflows to allow users to ask questions about their data and then surface the queries, charts or insights needed to answer their data questions.
+
+We will enable interaction through a variety of interfaces including Slack, MCP connectivity with LLM apps, a streaming chat interface and maybe even more in future.
+
+We will also allow users to connect our app with their data warehouses so we can try and answer their questions directly, and support our answers with charts and visualisations etc. If not, we should surface the queries users can use to answer their questions.
+
+We may add more functionality in future or get rid of some of the functionality I've mentioned. I've shared this information for context but we may not be building all of these things at once.
+
+Ask clarifying questions and give your feedback on design decisions objectively - there is no need to agree with every design decision I propose, feel free to provide constructive feedback.
+
 # Monorepo Structure
 
 The project is a monorepo that looks something like this:
@@ -18,6 +30,15 @@ The project is a monorepo that looks something like this:
 │   ├── .python-version          # Python version specification
 │   └── Dockerfile               # Backend-specific Docker config
 ├── frontend_nextjs/             # Renamed from client/ - ready for Next.js
+│   ├── public/                  # Public static assets
+│   ├── src/
+│   │   ├── app/                 # Next JS App router project structure
+│   │   │   ├── (auth)/          # Signin and Signup pages
+│   │   │   ├── dashboard/       # Dashboard pages
+│   │   │   ├── ...
+│   │   ├── components/          # Creates reusable react components
+│   │   ├── ...                  # Other reusable utilities should be placed here
+│   ├── ...                      # NextJS, Typescript, package.json, eslint etc.
 ├── mcp_server/                  # MCP Server for LLM applications
 ├── config_examples/             # Config examples like .slack_manifest.example.json, .ragstarrules.example.yml
 ├── docs/                        # GitHub Pages docs (unchanged)
@@ -28,10 +49,21 @@ The project is a monorepo that looks something like this:
 ## Monorepo Projects
 
 - backend_django
+  - The API for our NextJS frontend, MCP server, Authentication, Third party integrations etc.
 - frontend_nextjs
+  - Admin panel used to configure our app, build and edit the knowledge base, study conversations etc.
 - mcp_server
+  - MCP server used to enable direct integration with LLMs that support it.
 
-### Other Services Used
+### Monorepo Project Rules
+
+#### frontend_nextjs
+- We're using the app router with NextJS.
+- Use auth.js for authentication.
+- Use TailwindCSS classes for style only. Do not define custom or inline css.
+- Examine the structure of the src/ folder before creating new directories to avoid duplication.
+
+## Other Services Used
 
 - postgres db with pgvector
 - redis
@@ -43,7 +75,8 @@ The project is a monorepo that looks something like this:
 
 # General Rules
 - Use UV for python package management. We're using a pyproject.toml and not requirements.txt.
-- Use pnpm for javascript / typescript package management.
+- You need to put `uv run` before Python commands to make sure they run in the right environment. e.g. instead of `cd backend_django && python manage.py migrate`, run `cd backend_django && uv run python manage.py migrate`.
+- Use pnpm for javascript / typescript package management. Make sure you're within the correct monorepo project before running pnpm or uv commands.
 - When adding or removing packages, do so via the command line in the appropriate directory instead of directly adding or removing package names to the respective configuration in order to ensure you're always installing the latest package because your training knowledge base may have become outdated.
-- In the NextJS app, use TailwindCSS classes for style only. Do not define custom or inline css.
 - Use comments when necessary but don't leave unnecessary comments in your wake like leaving breadcrumbs for all the changes you've done. When you want to remove lines, remove them and don't just comment them out.
+- You may not be able to access .env or .env.example so you should ask me to make any changes to those files as required.
