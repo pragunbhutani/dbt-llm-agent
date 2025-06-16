@@ -17,16 +17,34 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
 from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
+from django.conf import settings
+from django.conf.urls.static import static
+
+
+# Create CSRF-exempt token refresh view
+@method_decorator(csrf_exempt, name="dispatch")
+class CSRFExemptTokenRefreshView(TokenRefreshView):
+    pass
+
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     # API URLs
     path("api/token/", TokenObtainPairView.as_view(), name="token_obtain_pair"),
-    path("api/token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
+    path(
+        "api/token/refresh/", CSRFExemptTokenRefreshView.as_view(), name="token_refresh"
+    ),
+    path(
+        "token/refresh/",
+        CSRFExemptTokenRefreshView.as_view(),
+        name="token_refresh_no_api",
+    ),
     path("api/accounts/", include("apps.accounts.urls")),
     path("api/knowledge_base/", include("apps.knowledge_base.urls")),
     path("api/workflows/", include("apps.workflows.urls")),
@@ -35,3 +53,7 @@ urlpatterns = [
     # Integration URLs (e.g., Slack)
     path("integrations/", include("apps.integrations.urls")),
 ]
+
+if settings.DEBUG:
+    urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

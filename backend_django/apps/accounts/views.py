@@ -1,51 +1,57 @@
-from django.shortcuts import render
 import logging
-from rest_framework import status, views
-from rest_framework.response import Response
+
+from django.contrib.auth import get_user_model
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import generics, permissions, status, views
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from .serializers import UserRegistrationSerializer, UserSerializer
+from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenObtainPairView
-from rest_framework import generics
-from .models import OrganisationSettings
-from .serializers import OrganisationSettingsSerializer
+
+from .models import Organisation, OrganisationSettings
+from .serializers import (
+    OrganisationSettingsSerializer,
+    UserRegistrationSerializer,
+    UserSerializer,
+)
 
 logger = logging.getLogger(__name__)
-
-# Create your core views here, if needed later.
-
-# Views previously in this file moved to:
-# - ModelViewSet -> apps.knowledge_base.views
-# - QuestionViewSet, AskQuestionView -> apps.workflows.views
-# - ModelEmbeddingViewSet -> apps.embeddings.views
-
-# --- End of file --- Ensure everything below this line is removed ---
+User = get_user_model()
 
 
-class UserRegistrationView(views.APIView):
+@method_decorator(csrf_exempt, name="dispatch")
+class UserRegistrationView(generics.CreateAPIView):
     permission_classes = [AllowAny]
-    # serializer_class = UserRegistrationSerializer # Not needed here as we instantiate manually
+    serializer_class = UserRegistrationSerializer
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = serializer.save()
+        refresh = RefreshToken.for_user(user)
+        user_data = UserSerializer(user, context={"request": request}).data
+
+        return Response(
+            {
+                "refresh": str(refresh),
+                "access": str(refresh.access_token),
+                "user": user_data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class CustomTokenObtainPairView(TokenObtainPairView):
     def post(self, request, *args, **kwargs):
-        serializer = UserRegistrationSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-
-            # Generate JWT tokens for the new user
-            refresh = RefreshToken.for_user(user)
-
-            # Get user data for the response using UserSerializer
+        response = super().post(request, *args, **kwargs)
+        if response.status_code == 200:
+            user = User.objects.get(email=request.data["email"])
             user_data = UserSerializer(user, context={"request": request}).data
-
-            return Response(
-                {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                    "user": user_data,
-                },
-                status=status.HTTP_201_CREATED,
-            )
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            response.data["user"] = user_data
+        return response
 
 
 class UserView(views.APIView):
@@ -58,19 +64,18 @@ class UserView(views.APIView):
 
 class OrganisationSettingsView(generics.RetrieveUpdateAPIView):
     """
-    API endpoint for viewing and editing the organisation's settings.
+    Retrieve or update the settings for the user's organisation.
     """
 
     serializer_class = OrganisationSettingsSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_object(self):
-        """
-        Retrieve or create the settings object for the user's organisation.
-        """
-        organisation = self.request.user.organisation
-        # get_or_create returns a tuple (object, created_boolean)
-        settings, created = OrganisationSettings.objects.get_or_create(
-            organisation=organisation
+        user = self.request.user
+        if not hasattr(user, "organisation") or not user.organisation:
+            raise NotFound(detail="User is not associated with an organisation.")
+
+        settings, _ = OrganisationSettings.objects.get_or_create(
+            organisation=user.organisation
         )
         return settings

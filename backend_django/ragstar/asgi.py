@@ -10,15 +10,12 @@ https://docs.djangoproject.com/en/5.2/howto/deployment/asgi/
 import os
 import django
 from django.core.asgi import get_asgi_application
-from dotenv import load_dotenv
 from starlette.applications import Starlette
 from starlette.routing import Lifespan, Mount
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware  # If you need CORS
 from typing import Optional
-
-# Load environment variables from .env file
-load_dotenv()
+from django.conf import settings
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ragstar.settings")
 # Initialize Django settings and applications
@@ -28,13 +25,13 @@ django.setup()
 # Attempt to import the agent or its checkpointer
 # This path is based on your logs. Adjust if necessary.
 try:
-    from apps.workflows.question_answerer.workflow import QuestionAnswererAgent
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg_pool import AsyncConnectionPool  # Import for type checking
 except ImportError:
-    QuestionAnswererAgent = None
+    AsyncPostgresSaver = None
     AsyncConnectionPool = None  # Define if import failed
     print(
-        "WARNING: Could not import QuestionAnswererAgent or AsyncConnectionPool for checkpointer setup in asgi.py"
+        "WARNING: Could not import LangGraph components for checkpointer setup in asgi.py"
     )
 
 
@@ -47,54 +44,42 @@ _global_checkpointer_pool: Optional[AsyncConnectionPool] = None
 async def run_checkpointer_setup():
     """Initializes the LangGraph AsyncPostgresSaver checkpointer."""
     global _global_checkpointer_pool
-    if QuestionAnswererAgent and AsyncConnectionPool:
-        print(
-            "INFO: Attempting to setup LangGraph checkpointer via QuestionAnswererAgent..."
-        )
-        agent = None
+    if AsyncPostgresSaver and AsyncConnectionPool:
+        print("INFO: Attempting to setup LangGraph checkpointer...")
         try:
-            # Instantiate the agent. If it's a singleton or needs specific config,
-            # this might need to be handled differently (e.g., accessing a global instance).
-            # For this example, we assume it can be instantiated directly.
-            agent = QuestionAnswererAgent()
-            checkpointer = getattr(agent, "memory", None)
+            db_settings = settings.DATABASES["default"]
+            pg_conn_string = f"postgresql://{db_settings['USER']}:{db_settings['PASSWORD']}@{db_settings['HOST']}:{db_settings['PORT']}/{db_settings['NAME']}"
 
-            if checkpointer:
-                pool_to_manage = getattr(checkpointer, "conn", None)
+            # Create and open the connection pool
+            pool = AsyncConnectionPool(
+                conninfo=pg_conn_string,
+                max_size=20,
+                min_size=5,
+                open=False,
+            )
+            await pool.open()
+            print(f"INFO: AsyncConnectionPool {pool.name} opened successfully.")
+            _global_checkpointer_pool = pool  # Store for shutdown
 
-                if isinstance(pool_to_manage, AsyncConnectionPool):
-                    print(
-                        f"INFO: Found AsyncConnectionPool: {pool_to_manage.name}. Attempting to open..."
-                    )
-                    await pool_to_manage.open()
-                    print(
-                        f"INFO: AsyncConnectionPool {pool_to_manage.name} opened successfully."
-                    )
-                    _global_checkpointer_pool = pool_to_manage  # Store for shutdown
-                else:
-                    print(
-                        "INFO: Checkpointer does not have an AsyncConnectionPool instance at .conn, or AsyncConnectionPool not imported."
-                    )
+            # Instantiate the checkpointer and run setup with autocommit connection
+            checkpointer = AsyncPostgresSaver(conn=pool)
 
-                if hasattr(checkpointer, "setup") and callable(checkpointer.setup):
-                    await checkpointer.setup()
-                    print("INFO: LangGraph checkpointer.setup() complete.")
-                # The langgraph library itself typically uses setup().
-                # langchain_postgres (a separate package) uses acreate_tables().
-                # Checking for acreate_tables as a fallback or alternative.
-                elif hasattr(checkpointer, "acreate_tables") and callable(
-                    checkpointer.acreate_tables
+            # Get a connection and set it to autocommit mode for the setup
+            async with pool.connection() as conn:
+                await conn.set_autocommit(True)
+                # Create a temporary checkpointer with this autocommit connection
+                temp_checkpointer = AsyncPostgresSaver(conn=conn)
+
+                if hasattr(temp_checkpointer, "setup") and callable(
+                    temp_checkpointer.setup
                 ):
-                    await checkpointer.acreate_tables()
-                    print("INFO: LangGraph checkpointer.acreate_tables() complete.")
+                    await temp_checkpointer.setup()
+                    print("INFO: LangGraph checkpointer.setup() complete.")
                 else:
                     print(
-                        "ERROR: QuestionAnswererAgent.memory does not have a recognized setup method (setup or acreate_tables)."
+                        "ERROR: AsyncPostgresSaver does not have a recognized setup method."
                     )
-            else:
-                print(
-                    "ERROR: QuestionAnswererAgent instance does not have a 'memory' attribute."
-                )
+
         except Exception as e:
             print(f"ERROR: Failed to setup LangGraph checkpointer: {e}")
             import traceback
@@ -109,9 +94,7 @@ async def run_checkpointer_setup():
                 _global_checkpointer_pool = None
 
     else:
-        print(
-            "INFO: QuestionAnswererAgent or AsyncConnectionPool not available, skipping checkpointer setup."
-        )
+        print("INFO: LangGraph components not available, skipping checkpointer setup.")
 
 
 async def startup_event():

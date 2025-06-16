@@ -62,11 +62,23 @@ The project is a monorepo that looks something like this:
 - Use auth.js for authentication.
 - Use TailwindCSS classes for style only. Do not define custom or inline css.
 - Examine the structure of the src/ folder before creating new directories to avoid duplication.
+- The `shadcn-ui` package has been deprecated in favour of `shadcn`
 
 ## Other Services Used
 
 - postgres db with pgvector
 - redis
+
+## Authentication
+
+This project uses next-auth/react on the frontend and Django REST Framework with Simple JWT on the backend. Here's the correct way to handle authenticated API requests from the Next.js client to the Django API:
+1. Session Management: Authentication is handled by next-auth. The JWT access token required by the Django backend is made available on the client-side session object.
+2. Fetching the Token: In any component that needs to make an authenticated API call, we must use the useSession hook from next-auth/react to get the current session. The access token is located at session.accessToken.
+3. Making Authenticated Requests: All API requests to the Django backend must include an Authorization header with the format: Bearer <accessToken>.
+A custom fetcher function should be created for data-fetching libraries like SWR. This function should accept the access token and attach the header to the request.
+4. Conditional Fetching: It's crucial to only trigger API requests after the session token is available. Sending requests before the session is established will result in 401 Unauthorized errors. With SWR, this is achieved by making the key conditional, like this:
+useSWR(session?.accessToken ? '/api/endpoint' : null, fetcher)
+
 
 # Environment Variable Strategy
 - Root .env: Shared configuration for all services, used by docker-compose.yml

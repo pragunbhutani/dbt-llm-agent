@@ -8,6 +8,6 @@ urlpatterns = [
     # Path for Slack events
     path("slack/events", slack_events_handler, name="slack_events"),
     # Include URLs for Slack-specific integrations (like commands)
-    path("slack/", include("apps.integrations.slack.urls")),
+    # path("slack/", include("apps.integrations.slack.urls")),
     # Add other general integration URLs here if needed
 ]

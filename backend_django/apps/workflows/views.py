@@ -9,8 +9,9 @@ from pgvector.django import L2Distance, CosineDistance, MaxInnerProduct
 # Update imports
 from .models import Question
 from .serializers import QuestionSerializer
-from apps.llm_providers.services import default_embedding_service
-from .question_answerer import QuestionAnswererAgent  # Relative import within workflows
+from apps.llm_providers.services import EmbeddingService
+from apps.accounts.models import OrganisationSettings
+from .question_answerer import QuestionAnswererAgent
 
 logger = logging.getLogger(__name__)
 
@@ -50,11 +51,22 @@ class QuestionViewSet(viewsets.ModelViewSet):
 
     def _update_embeddings(self, instance, request_data, is_new=False):
         """Helper to update embeddings for create and update."""
+        try:
+            org_settings = OrganisationSettings.objects.get(
+                organisation=instance.organisation
+            )
+            embedding_service = EmbeddingService(org_settings=org_settings)
+        except OrganisationSettings.DoesNotExist:
+            logger.error(
+                f"OrganisationSettings not found for {instance.organisation.name}. Cannot generate embeddings."
+            )
+            return
+
         update_fields = []
         # For new instances, or if fields are explicitly in request_data for updates
         if is_new or "question_text" in request_data:
             if instance.question_text:
-                instance.question_embedding = default_embedding_service.get_embedding(
+                instance.question_embedding = embedding_service.get_embedding(
                     instance.question_text
                 )
                 if not is_new:
@@ -62,17 +74,15 @@ class QuestionViewSet(viewsets.ModelViewSet):
 
         if is_new or "original_message_text" in request_data:
             if instance.original_message_text:
-                instance.original_message_embedding = (
-                    default_embedding_service.get_embedding(
-                        instance.original_message_text
-                    )
+                instance.original_message_embedding = embedding_service.get_embedding(
+                    instance.original_message_text
                 )
                 if not is_new:
                     update_fields.append("original_message_embedding")
 
         if is_new or "feedback" in request_data:
             if instance.feedback:
-                instance.feedback_embedding = default_embedding_service.get_embedding(
+                instance.feedback_embedding = embedding_service.get_embedding(
                     instance.feedback
                 )
             else:
@@ -96,6 +106,17 @@ class QuestionViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        try:
+            org_settings = OrganisationSettings.objects.get(
+                organisation=user.organisation
+            )
+            embedding_service = EmbeddingService(org_settings=org_settings)
+        except OrganisationSettings.DoesNotExist:
+            return Response(
+                {"error": "Organisation settings not found, cannot perform search."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
         query_text = request.data.get("query")
         search_field = request.data.get("field", "question").lower()
         n_results = int(request.data.get("n_results", 5))
@@ -104,7 +125,7 @@ class QuestionViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": "Query text is required."}, status=status.HTTP_400_BAD_REQUEST
             )
-        query_embedding = default_embedding_service.get_embedding(query_text)
+        query_embedding = embedding_service.get_embedding(query_text)
         if not query_embedding:
             return Response(
                 {"error": "Failed to generate query embedding."},
@@ -188,11 +209,10 @@ class AskQuestionView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         try:
-            # TODO: IMPORTANT - QuestionAnswererAgent needs to be made organisation-aware.
-            # This might involve passing user.organisation to its constructor or methods,
-            # and ensuring it scopes any data it retrieves (e.g., knowledge_base.Model)
-            # or creates (e.g., new Question instances) by this organisation.
-            agent = QuestionAnswererAgent(verbose=True, organisation=user.organisation)
+            org_settings = OrganisationSettings.objects.get(
+                organisation=user.organisation
+            )
+            agent = QuestionAnswererAgent(org_settings=org_settings)
             result = agent.run_agentic_workflow(
                 question=question_text,
                 thread_context=thread_context,
@@ -201,6 +221,11 @@ class AskQuestionView(APIView):
             if result.get("error"):
                 return Response(result, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
             return Response(result, status=status.HTTP_200_OK)
+        except OrganisationSettings.DoesNotExist:
+            return Response(
+                {"error": "Organisation settings not found."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         except Exception as e:
             logger.exception(f"Unexpected error during /ask processing: {e}")
             return Response(

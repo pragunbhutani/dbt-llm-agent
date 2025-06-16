@@ -1,60 +1,54 @@
-# Stage 1: Builder
-FROM node:20-alpine AS builder
-
-# Set working directory
+# ---- Base Image ----
+# Use a specific Node.js version on Alpine for a small and secure base.
+FROM node:20-alpine AS base
 WORKDIR /app
-
-# Install pnpm
+# Install pnpm globally for package management.
 RUN npm install -g pnpm
 
-# Copy package.json and pnpm-lock.yaml
+# ---- Dependencies Stage ----
+# This stage is dedicated to installing all dependencies.
+# It's a separate stage to leverage Docker's layer caching.
+# If package.json or pnpm-lock.yaml don't change, this layer won't be rebuilt.
+FROM base AS dependencies
 COPY package.json pnpm-lock.yaml ./
-
-# Install dependencies
+# Install all dependencies, including devDependencies, which are needed for the dev server.
 RUN pnpm install --frozen-lockfile
 
-# Copy the rest of the application code
+# ---- Development Stage ----
+# This stage is for local development. It uses the installed dependencies
+# and starts the Next.js development server.
+FROM dependencies AS development
+# Copy the rest of the application source code.
+# While docker-compose will mount the local directory, this makes the image runnable on its own.
 COPY . .
+# The command to start the dev server with hot-reloading.
+CMD ["pnpm", "dev"]
 
-# Build the Next.js application
+# ---- Builder Stage ----
+# This stage builds the production-ready application.
+# It uses the dependencies from the 'dependencies' stage and runs the build script.
+FROM dependencies AS builder
+COPY . .
 RUN pnpm build
 
-# Stage 2: Runner
-FROM node:20-alpine AS runner
-
+# ---- Production Stage ----
+# This is the final, optimized image for production.
+# It copies only the necessary build artifacts from the 'builder' stage.
+FROM base AS production
+ENV NODE_ENV production
 WORKDIR /app
-
-# Install pnpm
-RUN npm install -g pnpm
-
-# Copy package.json and pnpm-lock.yaml for pnpm start
+# Copy only the necessary files for a production server.
+COPY --from=builder /app/public ./public
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
-
-# Create a non-root user and group
-RUN addgroup -g 1001 -S nodejs
-RUN adduser -S nextjs -u 1001
-
-# Copy built assets from the builder stage
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder /app/next.config.ts ./next.config.ts
-
-# Ensure node_modules are available for 'pnpm start' if it needs runtime dependencies not bundled by Next.js build.
-# Typically, 'next start' relies on the .next standalone output or its own server capabilities,
-# but having node_modules from a pruned production install can be safer.
-# We will install only production dependencies here.
-COPY package.json pnpm-lock.yaml ./
+# Copy the standalone Next.js server output.
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
+# Install only production dependencies to keep the image small.
 RUN pnpm install --prod --frozen-lockfile
-
-# Change ownership of the app directory
-RUN chown -R nextjs:nodejs /app
-
-# Switch to the non-root user
+# Create a non-root user for security.
+RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
 USER nextjs
-
-# Expose the port Next.js runs on
 EXPOSE 3000
-
-# Set the command to start the Next.js application
-CMD ["pnpm", "start"] 
+# The command to start the production server.
+CMD ["node", "server.js"] 

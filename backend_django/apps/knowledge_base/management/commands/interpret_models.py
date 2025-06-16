@@ -1,13 +1,14 @@
 import logging
 import re
 import json  # Import json for processing agent output
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
 from typing import List, Dict, Any, Optional  # Add Any, Optional
 
 # Django Imports
 from apps.knowledge_base.models import Model
-from apps.llm_providers.services import default_chat_service
+from apps.accounts.models import Organisation, OrganisationSettings
+from apps.llm_providers.services import ChatService
 
 # Agent Import
 from apps.workflows.model_interpreter import (
@@ -29,19 +30,25 @@ logger = logging.getLogger(__name__)
 
 # Removed find_refs helper function - Agent handles refs internally
 
+from ..services import trigger_model_interpretation
+
 
 class Command(BaseCommand):
     help = (
         "Generates agentic LLM interpretations (description, columns) for dbt models."
     )
 
-    def add_arguments(self, parser):
-        # Keep existing arguments, maybe add agent-specific ones later if needed
+    def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
-            "--models",
-            nargs="*",
+            "--model-name",
             type=str,
-            help="Specific model names to interpret. If not provided, processes all models.",
+            help="The name of a specific model to interpret. If not provided, all models will be interpreted.",
+        )
+        parser.add_argument(
+            "--organisation",
+            type=str,
+            required=True,
+            help="The name or ID of the organisation whose settings to use.",
         )
         parser.add_argument(
             "--all",
@@ -67,73 +74,49 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        model_names = options["models"]
+        model_names = options["model_name"]
         interpret_all = options["all"]
         force_update = options["force"]
-        skip_desc = options["skip_desc"]  # Currently unused by agent workflow
-        skip_cols = options["skip_cols"]  # Currently unused by agent workflow
         verbosity = options["verbosity"]
+        organisation_identifier = options["organisation"]
 
-        # Basic validation (keep as is)
         if not model_names and not interpret_all:
-            raise CommandError("Specify --models or use --all.")
+            raise CommandError("Specify --model-name or use --all.")
         if model_names and interpret_all:
-            raise CommandError("Cannot use both --models and --all.")
-        # if skip_desc and skip_cols:
-        #     self.stdout.write(self.style.WARNING("Agent generates both desc/cols. Ignoring skip flags."))
-        # return
+            raise CommandError("Cannot use both --model-name and --all.")
 
-        # Select models (keep as is)
         base_queryset = Model.objects.exclude(raw_sql__isnull=True).exclude(raw_sql="")
         if interpret_all:
-            models_to_interpret = base_queryset.all()
-            self.stdout.write(
-                "Attempting agentic interpretation for all models with raw SQL..."
-            )
+            models_to_process = base_queryset.all()
         else:
-            models_to_interpret = base_queryset.filter(name__in=model_names)
-            found_names = set(models_to_interpret.values_list("name", flat=True))
-            missing_names = set(model_names) - found_names
-            if missing_names:
-                self.stdout.write(
-                    self.style.WARNING(f"Models not found/no SQL: {missing_names}")
-                )
-            self.stdout.write(f"Processing specified models: {list(found_names)}")
+            models_to_process = base_queryset.filter(name__in=model_names)
 
-        if not models_to_interpret.exists():
-            self.stdout.write(self.style.WARNING("No models found to interpret."))
-            return
-
-        # --- Initialize Agent --- #
-        # Pass the integer verbosity level directly
-        # agent_verbose = verbosity > 1 # Old logic
         try:
-            # Pass chat service and console (if available and verbosity > 0) to agent
-            interpreter_agent = ModelInterpreterAgent(
-                chat_service=default_chat_service,
-                verbosity=verbosity,  # Pass integer verbosity directly
-                console=(
-                    console if verbosity > 0 else None
-                ),  # Pass console if verbosity > 0
+            if len(organisation_identifier) > 30:
+                organisation = Organisation.objects.get(pk=organisation_identifier)
+            else:
+                organisation = Organisation.objects.get(name=organisation_identifier)
+            org_settings = OrganisationSettings.objects.get(organisation=organisation)
+        except (Organisation.DoesNotExist, OrganisationSettings.DoesNotExist):
+            raise CommandError(
+                f"Organisation '{organisation_identifier}' or its settings not found."
             )
-        except ValueError as e:  # Catch init errors (e.g., no LLM client)
-            raise CommandError(f"Failed to initialize ModelInterpreterAgent: {e}")
-        # --- End Initialize Agent --- #
 
         processed_count = 0
-        updated_count = 0  # Count successful updates
+        updated_count = 0
         failed_count = 0
+        total_to_process = models_to_process.count()
 
-        total_to_process = models_to_interpret.count()
-        self.stdout.write(f"Found {total_to_process} models to process.")
+        self.stdout.write(
+            f"Found {total_to_process} models to process for organisation '{organisation.name}'."
+        )
 
-        for model in models_to_interpret:
+        for model in models_to_process:
             processed_count += 1
             self.stdout.write(
-                f"\nProcessing ({processed_count}/{total_to_process}): {model.name}"
+                f"Processing ({processed_count}/{total_to_process}): {model.name}"
             )
 
-            # Check force flag or if interpretation is missing
             should_process = (
                 force_update
                 or not model.interpreted_description
@@ -141,112 +124,25 @@ class Command(BaseCommand):
             )
             if not should_process:
                 self.stdout.write(
-                    f"  Skipping {model.name}, interpretation exists and --force not used."
+                    "  Skipping, interpretation exists and --force not used."
                 )
                 continue
 
-            if not model.raw_sql:
-                self.stdout.write(
-                    self.style.WARNING(f"  Skipping {model.name}, raw_sql is missing.")
-                )
-                failed_count += 1  # Count as failure if SQL missing
-                continue
-
-            # --- Run Agent Workflow --- #
-            if verbosity > 0:
-                self.stdout.write(
-                    f"  Running agent interpretation workflow for {model.name}..."
-                )
-
-            agent_result = interpreter_agent.run_interpretation_workflow(
-                model_name=model.name, raw_sql=model.raw_sql
+            success = trigger_model_interpretation(
+                model=model, org_settings=org_settings, verbosity=verbosity
             )
 
-            # --- Process Agent Result --- #
-            if agent_result["success"] and agent_result["documentation"]:
-                documentation_dict = agent_result["documentation"]
-
-                # Basic validation using Pydantic model (optional but good practice)
-                try:
-                    validated_doc = ModelDocumentation(**documentation_dict)
-                except Exception as pydantic_err:
-                    self.stdout.write(
-                        self.style.ERROR(
-                            f"  Agent returned invalid documentation structure for {model.name}: {pydantic_err}"
-                        )
-                    )
-                    logger.error(
-                        f"Pydantic validation failed for {model.name}. Data: {documentation_dict}",
-                        exc_info=True,
-                    )
-                    failed_count += 1
-                    continue  # Skip saving invalid data
-
-                # Extract data for saving
-                interpreted_description = validated_doc.description
-                interpreted_columns = {
-                    col.name: col.description for col in validated_doc.columns
-                }
-
-                # Save to Django Model
-                try:
-                    with transaction.atomic():
-                        model.interpreted_description = interpreted_description
-                        model.interpreted_columns = interpreted_columns
-                        model.save(
-                            update_fields=[
-                                "interpreted_description",
-                                "interpreted_columns",
-                            ]
-                        )
-                        updated_count += 1
-                        if verbosity > 0:
-                            self.stdout.write(
-                                self.style.SUCCESS(
-                                    f"  Successfully saved interpretation for {model.name}"
-                                )
-                            )
-                except Exception as e:
-                    self.stdout.write(
-                        self.style.ERROR(
-                            f"  Error saving interpretation for {model.name}: {e}"
-                        )
-                    )
-                    logger.error(
-                        f"Failed to save interpretation for {model.name}", exc_info=True
-                    )
-                    failed_count += 1
-
-            else:  # Agent workflow failed
-                failed_count += 1
-                error_msg = agent_result.get("error", "Unknown agent error")
+            if success:
+                updated_count += 1
                 self.stdout.write(
-                    self.style.ERROR(
-                        f"  Agent failed to interpret {model.name}: {error_msg}"
-                    )
+                    self.style.SUCCESS("  -> Successfully interpreted and saved.")
                 )
-                # Optionally log agent messages on failure
-                if verbosity > 2 and agent_result.get("messages"):
-                    self.stdout.write("  Agent messages on failure:")
-                    try:
-                        # Pretty print messages if rich console available
-                        if console:
-                            console.print(agent_result["messages"])
-                        else:
-                            self.stdout.write(str(agent_result["messages"]))
-                    except Exception:
-                        self.stdout.write("  (Could not display agent messages)")
+            else:
+                failed_count += 1
+                self.stdout.write(self.style.ERROR("  -> Failed to interpret."))
 
-            # --- End Process Agent Result ---
-
-        # Final summary
         self.stdout.write(
-            self.style.SUCCESS("\nAgentic interpretation process complete.")
-        )
-        self.stdout.write(f"  Models processed: {processed_count}")
-        self.stdout.write(
-            f"  Interpretations successfully generated/updated: {updated_count}"
-        )
-        self.stdout.write(
-            f"  Failures (missing SQL, agent error, save error): {failed_count}"
+            self.style.SUCCESS(
+                f"Finished. Updated: {updated_count}, Failed: {failed_count}, Skipped: {total_to_process - processed_count}"
+            )
         )

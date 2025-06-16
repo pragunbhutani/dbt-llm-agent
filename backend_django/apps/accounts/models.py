@@ -103,10 +103,30 @@ class OrganisationSettings(models.Model):
     slack_app_token = models.TextField(blank=True, null=True)
 
     # LLM Provider Settings
-    llm_chat_provider = models.CharField(max_length=50, blank=True, null=True)
-    llm_chat_model = models.CharField(max_length=100, blank=True, null=True)
-    # TODO: This should be encrypted
-    llm_api_key = models.TextField(blank=True, null=True)
+    llm_chat_provider = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="e.g., 'openai', 'google', 'anthropic'",
+    )
+    llm_chat_model = models.CharField(
+        max_length=100, blank=True, null=True, help_text="e.g., 'gpt-4', 'gemini-pro'"
+    )
+    llm_embeddings_provider = models.CharField(
+        max_length=50, blank=True, null=True, help_text="e.g., 'openai', 'google'"
+    )
+    llm_embeddings_model = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="e.g., 'text-embedding-ada-002'",
+    )
+
+    # LLM API Keys
+    # TODO: These fields should be encrypted.
+    llm_openai_api_key = models.TextField(blank=True, null=True)
+    llm_google_api_key = models.TextField(blank=True, null=True)
+    llm_anthropic_api_key = models.TextField(blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

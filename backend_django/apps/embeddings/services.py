@@ -5,7 +5,7 @@ from django.utils import timezone
 # Import models and services from other apps
 from apps.knowledge_base.models import Model
 from apps.knowledge_base.serializers import ModelSerializer  # Needed for metadata
-from apps.llm_providers.services import default_embedding_service
+from apps.llm_providers.services import EmbeddingService
 from .models import ModelEmbedding  # Local import
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,21 @@ def embed_knowledge_model(model: Model, include_docs: bool = True) -> bool:
     """
     logger.info(f"Starting embedding process for model: {model.name}")
     try:
+        # 0. Get OrganisationSettings from the model
+        if not model.dbt_project or not model.dbt_project.organisation:
+            logger.error(
+                f"Cannot embed model '{model.name}': It is not linked to an organisation."
+            )
+            return False
+        org_settings = model.dbt_project.organisation.settings
+        if not org_settings:
+            logger.error(
+                f"Cannot embed model '{model.name}': Organisation settings not found."
+            )
+            return False
+
+        embedding_service = EmbeddingService(org_settings)
+
         # 1. Generate text representation
         document_text = model.get_text_representation(
             include_documentation=include_docs
@@ -34,7 +49,7 @@ def embed_knowledge_model(model: Model, include_docs: bool = True) -> bool:
             return False
 
         # 2. Generate embedding
-        embedding_vector = default_embedding_service.get_embedding(document_text)
+        embedding_vector = embedding_service.get_embedding(document_text)
         if not embedding_vector:
             logger.error(f"Failed to generate embedding vector for {model.name}")
             return False
@@ -61,7 +76,9 @@ def embed_knowledge_model(model: Model, include_docs: bool = True) -> bool:
 
         # 4. Save embedding
         embedding_instance, created = ModelEmbedding.objects.update_or_create(
-            model_name=model.name,
+            model=model,
+            organisation=model.organisation,
+            dbt_project=model.dbt_project,
             defaults={
                 "document": document_text,
                 "embedding": embedding_vector,

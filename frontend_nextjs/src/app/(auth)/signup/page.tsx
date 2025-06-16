@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import api from "@/lib/api";
 
 export default function SignUpPage() {
   const [name, setName] = useState("");
@@ -15,43 +16,30 @@ export default function SignUpPage() {
     setError("");
 
     try {
-      const res = await fetch("/api/accounts/register/", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          first_name: name,
-          email,
-          password,
-          organisation_name: `${name}'s Organisation`,
-        }),
+      await api.post("/accounts/register/", {
+        first_name: name,
+        email,
+        password,
+        organisation_name: `${name}'s Organisation`,
       });
-
-      if (!res.ok) {
-        const data = await res.json();
-        // Construct a user-friendly error message
-        let errorMessage = "Something went wrong. Please try again.";
-        if (data) {
-          const errors = Object.entries(data)
-            .map(([key, value]) => {
-              const messages = Array.isArray(value)
-                ? value.join(" ")
-                : String(value);
-              return `${key}: ${messages}`;
-            })
-            .join("; ");
-          if (errors) {
-            errorMessage = errors;
-          }
-        }
-        setError(errorMessage);
-        return;
-      }
-
       router.push("/signin");
-    } catch (error) {
-      setError(
-        "An unexpected error occurred. Could not connect to the server."
-      );
+    } catch (error: any) {
+      // Construct a user-friendly error message
+      let errorMessage = "Something went wrong. Please try again.";
+      if (error.data) {
+        const errors = Object.entries(error.data)
+          .map(([key, value]) => {
+            const messages = Array.isArray(value)
+              ? value.join(" ")
+              : String(value);
+            return `${key}: ${messages}`;
+          })
+          .join("; ");
+        if (errors) {
+          errorMessage = errors;
+        }
+      }
+      setError(errorMessage);
     }
   };
 

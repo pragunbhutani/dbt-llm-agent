@@ -29,7 +29,8 @@ from django.conf import settings as django_settings  # To access Django global s
 from asgiref.sync import sync_to_async
 
 # LLM Service import (similar to QuestionAnswerer)
-from apps.llm_providers.services import default_chat_service
+from apps.llm_providers.services import default_chat_service, ChatService
+from apps.accounts.models import OrganisationSettings
 
 # Query Executor specific imports
 # REMOVED: from . import tools as query_executor_tools
@@ -331,6 +332,7 @@ class QueryExecutorWorkflow:
 
     def __init__(
         self,
+        org_settings: OrganisationSettings,
         slack_client: Optional[AsyncWebClient] = None,
         memory: Optional[BaseCheckpointSaver] = None,
         max_debug_loops: int = 3,
@@ -350,10 +352,8 @@ class QueryExecutorWorkflow:
             )
 
         try:
-            self.chat_service = default_chat_service
-            self.llm = (
-                self.chat_service.get_client()
-            )  # This LLM is for the QueryExecutor's own tools
+            self.chat_service = ChatService(org_settings=org_settings)
+            self.llm = self.chat_service.get_client()
             if not self.llm:
                 logger.error(
                     "QueryExecutorWorkflow: LLM client could not be initialized. Debugging LLM will not work for its tools."
@@ -370,9 +370,7 @@ class QueryExecutorWorkflow:
         self.max_debug_loops = max_debug_loops  # Max debug loops for the SQL Verifier
 
         # Instantiate the SQLVerifierWorkflow
-        self.sql_verifier = SQLVerifierWorkflow(
-            memory=self.memory, max_debug_loops=self.max_debug_loops
-        )
+        self.sql_verifier = SQLVerifierWorkflow(org_settings=org_settings)
 
         try:
             self.snowflake_creds = (

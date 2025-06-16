@@ -24,23 +24,22 @@ logger = logging.getLogger(__name__)
 
 
 class EmbeddingService:
-    """Service for generating text embeddings using configured provider."""
+    """Service for generating text embeddings using a configured provider."""
 
-    def __init__(self):
+    def __init__(self, org_settings: "OrganisationSettings"):
         """
-        Initializes the embedding service. Provider is determined by
-        settings.LLM_EMBEDDINGS_PROVIDER_NAME, and the API key is fetched from
-        settings.LLM_<PROVIDER>_API_KEY (e.g., settings.LLM_OPENAI_API_KEY).
+        Initializes the embedding service using settings from the provided
+        OrganisationSettings object.
         """
         self.client: Optional[Embeddings] = None
-        provider_name = settings.LLM_EMBEDDINGS_PROVIDER_NAME
-        model_name = settings.LLM_EMBEDDINGS_MODEL
+        provider_name = org_settings.llm_embeddings_provider
+        model_name = org_settings.llm_embeddings_model
         api_key: Optional[str] = None
 
         if provider_name == "openai":
-            api_key = settings.LLM_OPENAI_API_KEY
+            api_key = org_settings.llm_openai_api_key
         elif provider_name == "google":
-            api_key = settings.LLM_GOOGLE_API_KEY
+            api_key = org_settings.llm_google_api_key
         # Anthropic not currently supported for embeddings in this basic setup
 
         if not api_key and provider_name in ["openai", "google"]:
@@ -105,29 +104,27 @@ class EmbeddingService:
 
 
 class ChatService:
-    """Service for providing access to the default chat LLM client."""
+    """Service for providing access to a configured chat LLM client."""
 
-    def __init__(self):
+    def __init__(self, org_settings: "OrganisationSettings"):
         """
-        Initializes the chat service. Provider is determined by settings.LLM_CHAT_PROVIDER_NAME,
-        and the API key is fetched from settings.LLM_<PROVIDER>_API_KEY (e.g., settings.LLM_OPENAI_API_KEY).
-        Optional configs like temperature are read from settings.LLM_CHAT_CONFIG_TEMPERATURE.
+        Initializes the chat service using settings from the provided
+        OrganisationSettings object.
         """
         self.llm: Optional[BaseChatModel] = None
-        provider_name = settings.LLM_CHAT_PROVIDER_NAME
-        model_name = settings.LLM_CHAT_MODEL
+        provider_name = org_settings.llm_chat_provider
+        model_name = org_settings.llm_chat_model
         api_key: Optional[str] = None
 
         if provider_name == "openai":
-            api_key = settings.LLM_OPENAI_API_KEY
+            api_key = org_settings.llm_openai_api_key
         elif provider_name == "google":
-            api_key = settings.LLM_GOOGLE_API_KEY
+            api_key = org_settings.llm_google_api_key
         elif provider_name == "anthropic":
-            api_key = settings.LLM_ANTHROPIC_API_KEY
+            api_key = org_settings.llm_anthropic_api_key
 
-        temperature = (
-            settings.LLM_CHAT_CONFIG_TEMPERATURE
-        )  # This is already a float or None
+        # TODO: Add temperature to OrganisationSettings model
+        temperature = getattr(settings, "LLM_CHAT_CONFIG_TEMPERATURE", None)
 
         init_kwargs: Dict[str, Any] = {}
         if temperature is not None:
@@ -149,24 +146,14 @@ class ChatService:
                 self.llm = ChatOpenAI(
                     openai_api_key=api_key, model=model_name, **init_kwargs
                 )
-                logger.info(
-                    f"ChatService initialized ChatOpenAI client with model: {model_name} and config: {init_kwargs}"
-                )
             elif provider_name == "google":
                 self.llm = ChatGoogleGenerativeAI(
                     google_api_key=api_key, model=model_name, **init_kwargs
-                )
-                logger.info(
-                    f"ChatService initialized ChatGoogleGenerativeAI client with model: {model_name} and config: {init_kwargs}"
                 )
             elif provider_name == "anthropic":
                 self.llm = ChatAnthropic(
                     anthropic_api_key=api_key, model=model_name, **init_kwargs
                 )
-                logger.info(
-                    f"ChatService initialized ChatAnthropic client with model: {model_name} and config: {init_kwargs}"
-                )
-            # No else needed due to earlier return for unsupported providers
         except Exception as e:
             logger.error(
                 f"Failed to initialize {provider_name} chat client (model: {model_name}, config: {init_kwargs}): {e}",
@@ -179,6 +166,6 @@ class ChatService:
 
 
 # --- Default Service Instances ---
-# These instances provide easy access across the application
-default_embedding_service = EmbeddingService()
-default_chat_service = ChatService()
+# These are now gone, as services must be initialized per-organisation.
+# default_embedding_service = EmbeddingService()
+# default_chat_service = ChatService()

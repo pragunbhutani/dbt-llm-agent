@@ -52,8 +52,6 @@ if not INTEGRATIONS_SLACK_SIGNING_SECRET:
     logger.critical(
         "INTEGRATIONS_SLACK_SIGNING_SECRET is not configured in Django settings. Slack request verification will fail!"
     )
-    # In a real app, you might want to prevent startup or raise an ImproperlyConfigured exception
-    # For now, verifier will be None if secret is missing, and verification will skip/fail.
     signature_verifier = None
 else:
     signature_verifier = SignatureVerifier(INTEGRATIONS_SLACK_SIGNING_SECRET)
@@ -65,16 +63,8 @@ def verify_slack_request(request: HttpRequest) -> bool:
         logger.error(
             "Slack request verification skipped: SignatureVerifier not initialized (INTEGRATIONS_SLACK_SIGNING_SECRET missing)."
         )
-        # Depending on security policy, you might return False here to block unverified requests.
-        # For development, you might allow if DEBUG=True, but be cautious.
-        return (
-            not django_settings.DEBUG
-        )  # Only allow if not in DEBUG mode when secret is missing
+        return not django_settings.DEBUG
 
-    timestamp = request.headers.get("X-Slack-Request-Timestamp", "")
-    signature = request.headers.get("X-Slack-Signature", "")
-
-    # The request body must be a raw string
     if not signature_verifier.is_valid_request(
         body=request.body.decode("utf-8"), headers=dict(request.headers)
     ):
@@ -99,19 +89,24 @@ def parse_slack_message_link(link: str) -> tuple[Optional[str], Optional[str]]:
 
 
 @csrf_exempt
+async def slack_events_view(request: HttpRequest):
+    # Placeholder for event handling
+    return HttpResponse("OK", status=200)
+
+
+@csrf_exempt
+async def slack_interactive_view(request: HttpRequest):
+    # Placeholder for interactive components
+    return HttpResponse("OK", status=200)
+
+
+@csrf_exempt
 async def slack_shortcut_view(request: HttpRequest):
     """Handles interactive shortcut payloads from Slack."""
-    if request.method != "POST":
-        logger.warning(
-            f"Received non-POST request to slack_shortcut_view: {request.method}"
-        )
-        return HttpResponse("Invalid request method.", status=405)
-
     if not verify_slack_request(request):
         return HttpResponse("Slack request verification failed.", status=403)
 
     try:
-        # For interactive components (like shortcuts), payload is in request.POST['payload'] as a JSON string
         payload_str = request.POST.get("payload")
         if not payload_str:
             logger.warning("slack_shortcut_view: No payload found in request.")
@@ -136,12 +131,14 @@ async def slack_shortcut_view(request: HttpRequest):
             )
             return HttpResponse(status=200)  # Acknowledge receipt
 
+        # Multi-tenant client initialization using the new service function
         slack_client = get_slack_web_client()
         if not slack_client:
-            logger.error(
-                f"slack_shortcut_view ({callback_id}): Slack client not available."
+            logger.error(f"Could not initialize Slack client")
+            # Potentially post an ephemeral message to the user if possible
+            return HttpResponse(
+                "Configuration error: Slack client unavailable.", status=500
             )
-            return HttpResponse(status=200)
 
         # Get the bot's user ID to filter its own messages later
         bot_user_id_for_filtering = None
@@ -219,10 +216,11 @@ async def slack_shortcut_view(request: HttpRequest):
 
                 async def process_thread_and_log_learnings_task():
                     try:
-                        llm_client = default_chat_service.get_client()
+                        llm_service = get_llm_chat_service()
+                        llm_client = llm_service.get_client()
                         if not llm_client:
                             logger.error(
-                                "learn_from_thread shortcut: LLM client not available from default_chat_service. Check LLM provider settings."
+                                "learn_from_thread shortcut: LLM client not available from get_llm_chat_service. Check LLM provider settings."
                             )
                             await slack_client.chat_postMessage(
                                 channel=user_id,  # DM the user who invoked
@@ -554,9 +552,8 @@ async def slack_shortcut_view(request: HttpRequest):
         )
         return HttpResponse("Invalid JSON payload.", status=400)
     except Exception as e:
-        logger.error(f"Error processing shortcut: {e}", exc_info=True)
-        # Acknowledge to prevent Slack retries, even for unexpected errors
-        return HttpResponse(status=200)
+        logger.exception(f"Error in slack_shortcut_view: {e}")
+        return HttpResponse("Internal Server Error", status=500)
 
 
 # You might also need to add INTEGRATIONS_SLACK_SIGNING_SECRET to your ragstar/settings.py

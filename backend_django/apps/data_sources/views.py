@@ -1,8 +1,15 @@
 from django.shortcuts import render
-from rest_framework import viewsets
+from django.db import transaction
+from rest_framework import viewsets, status
+from rest_framework.response import Response
+from rest_framework.decorators import action
 from .models import DbtProject
-from .serializers import DbtProjectSerializer
+from .serializers import DbtProjectSerializer, DbtCloudProjectCreateSerializer
 from rest_framework.permissions import IsAuthenticated
+from .services import initialize_dbt_cloud_project
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Create your views here.
 
@@ -29,3 +36,63 @@ class DbtProjectViewSet(viewsets.ModelViewSet):
         Automatically associate the dbt project with the user's organisation.
         """
         serializer.save(organisation=self.request.user.organisation)
+
+    @action(
+        detail=False, methods=["post"], serializer_class=DbtCloudProjectCreateSerializer
+    )
+    def create_dbt_cloud_project(self, request):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        validated_data = serializer.validated_data
+
+        try:
+            with transaction.atomic():
+                project = DbtProject.objects.create(
+                    name=validated_data.get("name") or "dbt Cloud Project",
+                    organisation=request.user.organisation,
+                    connection_type=DbtProject.ConnectionType.DBT_CLOUD,
+                    dbt_cloud_url=validated_data["dbt_cloud_url"],
+                    dbt_cloud_account_id=validated_data["dbt_cloud_account_id"],
+                    dbt_cloud_api_key=validated_data["dbt_cloud_api_key"],
+                )
+                initialize_dbt_cloud_project(
+                    dbt_project=project,
+                    organisation=request.user.organisation,
+                )
+            return Response(
+                DbtProjectSerializer(project).data, status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            logger.error(f"Failed to create dbt Cloud project: {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=["post"])
+    def refresh(self, request, pk=None):
+        """
+        Refresh a dbt project by re-fetching and processing its models.
+        """
+        project = self.get_object()
+
+        try:
+            # Re-initialize the project to refresh its models
+            results = initialize_dbt_cloud_project(
+                dbt_project=project,
+                organisation=request.user.organisation,
+            )
+
+            # Update the project's updated_at timestamp
+            project.save()
+
+            return Response(
+                {"message": "Project refreshed successfully", "results": results},
+                status=status.HTTP_200_OK,
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Failed to refresh dbt project {project.id}: {e}", exc_info=True
+            )
+            return Response(
+                {"error": f"Failed to refresh project: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )

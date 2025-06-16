@@ -15,6 +15,7 @@ import os  # Import os for environment variables
 import sys  # Add this line
 import dj_database_url  # Add this import
 from typing import Optional
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,6 +39,8 @@ ALLOWED_HOSTS = [
     ".ngrok-free.app",
     "127.0.0.1",
     "localhost",
+    "backend-django",
+    "frontend-nextjs",
 ]
 
 # Add APP_HOST from environment variables
@@ -55,8 +58,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
     "pgvector.django",
     # "django_cryptography",
     # Use full AppConfig paths
@@ -72,6 +77,7 @@ INSTALLED_APPS = [
 AUTH_USER_MODEL = "accounts.User"
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -128,6 +134,16 @@ else:
             "PORT": os.environ.get("DB_PORT_FALLBACK", "5432"),
         }
     }
+
+
+# Celery Configuration
+# ------------------------------------------------------------------------------
+CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
+CELERY_RESULT_BACKEND = CELERY_BROKER_URL
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"
 
 
 # Password validation
@@ -239,6 +255,26 @@ REST_FRAMEWORK = {
     )
 }
 
+# Simple JWT Configuration
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": True,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": SECRET_KEY,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "TOKEN_TYPE_CLAIM": "token_type",
+    "JTI_CLAIM": "jti",
+    "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
+    "TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSerializer",
+}
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,  # Keep Django's default loggers
@@ -313,6 +349,11 @@ LOGGING = {
             "level": RAGSTAR_LOG_LEVEL,
             "propagate": False,
         },
+        "apps.data_sources": {  # Logger for data_sources
+            "handlers": ["console"],
+            "level": RAGSTAR_LOG_LEVEL,
+            "propagate": False,
+        },
     },
 }
 
@@ -324,3 +365,50 @@ LOGGING = {
 
 INTEGRATIONS_SLACK_SIGNING_SECRET = os.environ.get("INTEGRATIONS_SLACK_SIGNING_SECRET")
 INTEGRATIONS_SLACK_BOT_TOKEN = os.environ.get("INTEGRATIONS_SLACK_BOT_TOKEN")
+
+# CORS Configuration
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+CORS_ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",  # Explicit local development
+    "http://127.0.0.1:3000",  # Alternative localhost
+]
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.ngrok-free\.app$",
+    r"^https://.*\.vercel\.app$",  # For Vercel deployments
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# CORS Security Settings
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = False  # Be explicit about not allowing all origins
+
+# Allowed headers for CORS requests
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+# Allowed methods for CORS requests
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]

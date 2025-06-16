@@ -22,7 +22,8 @@ from django.conf import settings as django_settings
 from asgiref.sync import sync_to_async
 
 # Project specific imports
-from apps.llm_providers.services import default_chat_service
+from apps.llm_providers.services import ChatService
+from apps.accounts.models import OrganisationSettings
 from apps.workflows.query_executor import (
     settings as query_executor_app_settings,
 )  # For Snowflake creds
@@ -99,6 +100,7 @@ class SQLVerifierWorkflow:
 
     def __init__(
         self,
+        org_settings: OrganisationSettings,
         memory: Optional[BaseCheckpointSaver] = None,  # For potential checkpointing
         max_debug_loops: int = 3,
     ):
@@ -107,7 +109,7 @@ class SQLVerifierWorkflow:
             logger.info(f"SQLVerifierWorkflow initialized with verbose={self.verbose}")
 
         try:
-            self.chat_service = default_chat_service
+            self.chat_service = ChatService(org_settings=org_settings)
             self.llm = self.chat_service.get_client()
             if not self.llm:
                 logger.error(

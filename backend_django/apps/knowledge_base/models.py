@@ -4,6 +4,7 @@ from pgvector.django import (
     VectorField,
 )  # Assuming this might still be used, if not, can be removed later
 from apps.accounts.models import OrganisationScopedModelMixin  # Import the mixin
+from apps.data_sources.models import DbtProject
 
 # Assuming PostgreSQL for ArrayField/JSONField, JSONField is standard in recent Django
 
@@ -11,6 +12,9 @@ from apps.accounts.models import OrganisationScopedModelMixin  # Import the mixi
 # Model representing a dbt artifact and its interpretation
 class Model(OrganisationScopedModelMixin, models.Model):
     # Organisation field will be inherited from OrganisationScopedModelMixin
+    dbt_project = models.ForeignKey(
+        DbtProject, on_delete=models.CASCADE, related_name="models", null=True
+    )
     name = models.CharField(max_length=255, unique=True, null=False)
     path = models.CharField(max_length=1024, null=False)
     schema_name = models.CharField(

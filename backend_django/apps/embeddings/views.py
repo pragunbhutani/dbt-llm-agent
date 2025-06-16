@@ -2,13 +2,14 @@ from django.shortcuts import render
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import PermissionDenied, NotFound
 from pgvector.django import L2Distance, CosineDistance, MaxInnerProduct
 
 # Update imports
 from .models import ModelEmbedding
 from .serializers import ModelEmbeddingSerializer
-from apps.llm_providers.services import default_embedding_service
+from apps.llm_providers.services import EmbeddingService
+from apps.accounts.models import OrganisationSettings
 
 
 class ModelEmbeddingViewSet(viewsets.ModelViewSet):
@@ -16,6 +17,20 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
 
     serializer_class = ModelEmbeddingSerializer
     permission_classes = [permissions.IsAuthenticated]
+
+    def _get_embedding_service(self):
+        """Helper to get the embedding service based on the user's organisation."""
+        user = self.request.user
+        if not (hasattr(user, "organisation") and user.organisation):
+            raise PermissionDenied("User is not associated with an organisation.")
+
+        org_settings = OrganisationSettings.objects.filter(
+            organisation=user.organisation
+        ).first()
+        if not org_settings:
+            raise NotFound("Organisation settings not found for this user.")
+
+        return EmbeddingService(org_settings)
 
     def get_queryset(self):
         user = self.request.user
@@ -39,7 +54,8 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
             instance.document
         )  # instance.document should be populated by serializer.save()
         if document_text:
-            instance.embedding = default_embedding_service.get_embedding(document_text)
+            embedding_service = self._get_embedding_service()
+            instance.embedding = embedding_service.get_embedding(document_text)
             instance.save(
                 update_fields=["embedding"]
             )  # Save again to store the embedding
@@ -55,9 +71,8 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
         if "document" in serializer.context["request"].data:
             document_text = instance.document
             if document_text:
-                instance.embedding = default_embedding_service.get_embedding(
-                    document_text
-                )
+                embedding_service = self._get_embedding_service()
+                instance.embedding = embedding_service.get_embedding(document_text)
             else:
                 instance.embedding = None  # Clear embedding if document is cleared
             instance.save(
@@ -66,12 +81,10 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=["post"], url_path="search")
     def search_embeddings(self, request):
-        user = self.request.user
-        if not (hasattr(user, "organisation") and user.organisation):
-            return Response(
-                {"error": "User is not associated with an organisation."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        embedding_service = self._get_embedding_service()
+        user = (
+            self.request.user
+        )  # user is safe to use here due to _get_embedding_service check
 
         query_text = request.data.get("query")
         n_results = int(request.data.get("n_results", 5))
@@ -80,7 +93,7 @@ class ModelEmbeddingViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": "Query text is required."}, status=status.HTTP_400_BAD_REQUEST
             )
-        query_embedding = default_embedding_service.get_embedding(query_text)
+        query_embedding = embedding_service.get_embedding(query_text)
         if not query_embedding:
             return Response(
                 {"error": "Failed to generate query embedding."},

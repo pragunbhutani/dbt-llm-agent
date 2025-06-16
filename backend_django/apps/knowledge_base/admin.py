@@ -12,6 +12,7 @@ from .models import Model
 # Import the new service functions
 from apps.embeddings.services import embed_knowledge_model
 from apps.workflows.services import trigger_model_interpretation
+from apps.accounts.models import OrganisationSettings
 
 logger = logging.getLogger(__name__)
 
@@ -73,8 +74,26 @@ class ModelAdmin(admin.ModelAdmin):
 
         for model in queryset:
             try:
+                # Get the organisation settings
+                try:
+                    org_settings = OrganisationSettings.objects.get(
+                        organisation=model.organisation
+                    )
+                except OrganisationSettings.DoesNotExist:
+                    logger.error(
+                        f"OrganisationSettings not found for organisation: {model.organisation}"
+                    )
+                    messages.error(
+                        request,
+                        f"OrganisationSettings not found for model {model.name}",
+                    )
+                    error_count += 1
+                    continue
+
                 # Call the service function
-                if trigger_model_interpretation(model=model, verbosity=admin_verbosity):
+                if trigger_model_interpretation(
+                    model=model, org_settings=org_settings, verbosity=admin_verbosity
+                ):
                     success_count += 1
                 else:
                     error_count += 1
@@ -110,7 +129,25 @@ class ModelAdmin(admin.ModelAdmin):
         for model in queryset:
             # Interpret
             try:
-                if trigger_model_interpretation(model=model, verbosity=admin_verbosity):
+                # Get the organisation settings
+                try:
+                    org_settings = OrganisationSettings.objects.get(
+                        organisation=model.organisation
+                    )
+                except OrganisationSettings.DoesNotExist:
+                    logger.error(
+                        f"OrganisationSettings not found for organisation: {model.organisation}"
+                    )
+                    messages.error(
+                        request,
+                        f"OrganisationSettings not found for model {model.name}",
+                    )
+                    interpret_error_count += 1
+                    continue
+
+                if trigger_model_interpretation(
+                    model=model, org_settings=org_settings, verbosity=admin_verbosity
+                ):
                     interpret_success_count += 1
                     # Embed only if interpretation was successful
                     try:

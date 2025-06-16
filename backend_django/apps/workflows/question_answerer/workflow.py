@@ -31,10 +31,8 @@ from apps.embeddings.models import ModelEmbedding
 from apps.workflows.models import Question
 
 # Update service imports
-from apps.llm_providers.services import (
-    default_embedding_service,
-    default_chat_service,
-)
+from apps.llm_providers.services import ChatService, EmbeddingService
+from apps.accounts.models import OrganisationSettings
 
 # Import DRF serializers from new locations
 from apps.knowledge_base.serializers import ModelSerializer
@@ -109,14 +107,14 @@ class QuestionAnswererAgent:
 
     def __init__(
         self,
-        temperature: float = 0.0,
+        org_settings: OrganisationSettings,
         memory: Optional[AsyncPostgresSaver] = None,
         data_warehouse_type: Optional[str] = None,
     ):
-        self.embedding_service = default_embedding_service
-        self.chat_service = default_chat_service
+        self.embedding_service = EmbeddingService(org_settings=org_settings)
+        self.chat_service = ChatService(org_settings=org_settings)
         self.llm = self.chat_service.get_client()
-        self.temperature = temperature
+        self.temperature = 0.0
         self.data_warehouse_type = data_warehouse_type
         # Set verbosity based on Django settings
         self.verbose = settings.RAGSTAR_LOG_LEVEL == "DEBUG"

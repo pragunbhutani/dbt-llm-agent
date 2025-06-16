@@ -5,7 +5,8 @@ from django.conf import settings
 
 # Import models and services/agents
 from apps.knowledge_base.models import Model
-from apps.llm_providers.services import default_chat_service
+from apps.llm_providers.services import ChatService
+from apps.accounts.models import OrganisationSettings
 from .model_interpreter import ModelInterpreterAgent, ModelDocumentation
 
 # Optional Rich console integration
@@ -27,8 +28,6 @@ logger = logging.getLogger(__name__)
 
 # --- Slack Client Service ---
 _slack_client_instance: Optional[AsyncWebClient] = None
-# _slack_sdk_available_check is implicitly handled by whether AsyncWebClient is None or not after import attempt
-# We can remove _slack_sdk_available_check global variable as its role is covered by AsyncWebClient itself.
 
 
 def get_slack_web_client() -> Optional[AsyncWebClient]:
@@ -61,11 +60,14 @@ def get_slack_web_client() -> Optional[AsyncWebClient]:
 
 
 # --- Model Interpretation Service ---
-def trigger_model_interpretation(model: Model, verbosity: int = 0) -> bool:
+def trigger_model_interpretation(
+    model: Model, org_settings: OrganisationSettings, verbosity: int = 0
+) -> bool:
     """Triggers the ModelInterpreterAgent workflow for a single model.
 
     Args:
         model: The knowledge_base.Model instance to interpret.
+        org_settings: The OrganisationSettings instance for the model.
         verbosity: Verbosity level for agent execution.
 
     Returns:
@@ -79,8 +81,9 @@ def trigger_model_interpretation(model: Model, verbosity: int = 0) -> bool:
 
     try:
         # Initialize Agent
+        chat_service = ChatService(org_settings=org_settings)
         interpreter_agent = ModelInterpreterAgent(
-            chat_service=default_chat_service,
+            chat_service=chat_service,
             verbosity=verbosity,
             console=(console if verbosity > 0 else None),
         )

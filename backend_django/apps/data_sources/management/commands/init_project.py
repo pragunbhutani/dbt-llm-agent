@@ -18,7 +18,11 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from django.apps import apps
 
 # Import the new services
-from apps.data_sources.services import import_from_manifest, import_from_source
+from apps.data_sources.services import (
+    import_from_manifest,
+    import_from_source,
+    initialize_dbt_cloud_project,
+)
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -66,127 +70,6 @@ class Command(BaseCommand):
             )
         except Exception as e:
             raise CommandError(f"Failed to clear existing model data: {e}")
-
-    def _get_dbt_cloud_manifest(
-        self, dbt_cloud_url, dbt_cloud_account_id, dbt_cloud_api_key
-    ):
-        """Fetches the latest manifest.json from dbt Cloud using provided credentials."""
-        # Validation happens in the handle method before calling this
-        headers = {
-            "Authorization": f"Token {dbt_cloud_api_key}",
-            "Content-Type": "application/json",
-        }
-        base_api_url = (
-            f"{dbt_cloud_url.rstrip('/')}/api/v2/accounts/{dbt_cloud_account_id}"
-        )
-        latest_run_id = None
-        manifest_content = None
-        temp_manifest_path = None
-
-        try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                transient=True,
-                console=console,
-            ) as progress:
-                # 1. Find latest successful run with artifacts
-                runs_task = progress.add_task(
-                    "Finding latest dbt Cloud run with manifest...", total=None
-                )
-                runs_url = f"{base_api_url}/runs/"
-                params = {
-                    "order_by": "-finished_at",
-                    "status": 10,
-                    "limit": 10,
-                }  # status 10 = success
-                response = requests.get(
-                    runs_url, headers=headers, params=params, timeout=30
-                )
-                response.raise_for_status()
-                runs_data = response.json().get("data", [])
-
-                if not runs_data:
-                    raise CommandError(
-                        f"No recent successful runs found for account ID {dbt_cloud_account_id}."
-                    )
-
-                for run in runs_data:
-                    run_id = run.get("id")
-                    if not run_id:
-                        continue
-                    artifact_url = (
-                        f"{base_api_url}/runs/{run_id}/artifacts/manifest.json"
-                    )
-                    try:
-                        artifact_response = requests.get(
-                            artifact_url, headers=headers, timeout=10
-                        )
-                        if artifact_response.status_code == 200:
-                            latest_run_id = run_id
-                            logger.info(
-                                f"Found manifest artifact in run ID: {latest_run_id}"
-                            )
-                            break
-                        # else: logger.debug(f"Run {run_id} manifest status: {artifact_response.status_code}")
-                    except requests.exceptions.RequestException as e:
-                        logger.warning(
-                            f"Error checking artifacts for run {run_id}: {e}. Trying next."
-                        )
-
-                if not latest_run_id:
-                    limit_val = params.get("limit", 10)  # Get limit value safely
-                    raise CommandError(
-                        f"Could not find manifest.json in the latest {limit_val} successful runs."
-                    )
-
-                # Create description string separately using concatenation
-                description_str = "Found manifest in run " + str(latest_run_id)
-                progress.update(runs_task, completed=True, description=description_str)
-
-                # 2. Fetch the manifest
-                artifact_task = progress.add_task(
-                    "Fetching manifest.json...", total=None
-                )
-                artifact_url = (
-                    f"{base_api_url}/runs/{latest_run_id}/artifacts/manifest.json"
-                )
-                response = requests.get(artifact_url, headers=headers, timeout=60)
-                response.raise_for_status()
-                manifest_content = response.json()
-                progress.update(
-                    artifact_task, completed=True, description="Fetched manifest.json"
-                )
-
-                # 3. Save to temp file
-                save_task = progress.add_task(
-                    "Saving manifest temporarily...", total=None
-                )
-                with tempfile.NamedTemporaryFile(
-                    mode="w", delete=False, suffix=".json", encoding="utf-8"
-                ) as temp_file:
-                    json.dump(manifest_content, temp_file)
-                    temp_manifest_path = temp_file.name
-                progress.update(
-                    save_task,
-                    completed=True,
-                    description=f"Saved manifest to {os.path.basename(temp_manifest_path)}",
-                )
-
-            return temp_manifest_path
-
-        except requests.exceptions.RequestException as e:
-            raise CommandError(f"dbt Cloud API request failed: {e}")
-        except json.JSONDecodeError:
-            raise CommandError("Failed to decode manifest.json from dbt Cloud.")
-        except Exception as e:
-            # Clean up temp file if created before error
-            if temp_manifest_path and os.path.exists(temp_manifest_path):
-                try:
-                    os.remove(temp_manifest_path)
-                except OSError:
-                    pass
-            raise CommandError(f"Error during dbt Cloud interaction: {e}")
 
     def _run_dbt_compile(self, project_path_obj):
         """Runs 'dbt compile' in the specified project path."""
@@ -324,25 +207,14 @@ class Command(BaseCommand):
             if method == "cloud":
                 manifest_p = None
                 try:
-                    manifest_p = self._get_dbt_cloud_manifest(
-                        dbt_cloud_url, dbt_cloud_account_id, dbt_cloud_api_key
+                    # Use the new service
+                    results = initialize_dbt_cloud_project(
+                        dbt_cloud_url=dbt_cloud_url,
+                        dbt_cloud_account_id=dbt_cloud_account_id,
+                        dbt_cloud_api_key=dbt_cloud_api_key,
                     )
-                    temp_manifest_to_clean = manifest_p
-                    self.stdout.write("Importing from downloaded manifest...")
-                    # Call service directly
-                    results = import_from_manifest(
-                        manifest_path_str=manifest_p,
-                        clear_data=False,  # Already cleared above if requested
-                    )
-                finally:
-                    # Clean up temp file
-                    if temp_manifest_to_clean and os.path.exists(
-                        temp_manifest_to_clean
-                    ):
-                        try:
-                            os.remove(temp_manifest_to_clean)
-                        except OSError:
-                            pass
+                except Exception as e:
+                    raise CommandError(f"Failed to initialize from dbt Cloud: {e}")
 
             elif method == "core":
                 if not project_path:
@@ -389,13 +261,5 @@ class Command(BaseCommand):
                 f"Initialization failed. See logs for details. Error: {e}"
             )
         finally:
-            if temp_manifest_to_clean and os.path.exists(temp_manifest_to_clean):
-                try:
-                    os.remove(temp_manifest_to_clean)
-                    logger.info(
-                        f"Cleaned up temporary manifest file on exit: {temp_manifest_to_clean}"
-                    )
-                except OSError as e:
-                    logger.warning(
-                        f"Could not remove temporary manifest file {temp_manifest_to_clean} on exit: {e}"
-                    )
+            # The new service handles its own temp file cleanup
+            pass

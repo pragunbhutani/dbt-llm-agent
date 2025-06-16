@@ -6,20 +6,126 @@ from django.db import transaction
 from django.core.management.base import CommandError  # Keep for raising errors
 import re
 import yaml
+import requests
+import tempfile
+import os
 
 from apps.knowledge_base.models import Model  # Import Model from correct app
 
 logger = logging.getLogger(__name__)
 
 
+def initialize_dbt_cloud_project(
+    dbt_project: Any,
+    organisation: Any,
+):
+    """
+    Initializes a project from dbt Cloud.
+
+    Args:
+        dbt_project: The DbtProject instance.
+        organisation: The organisation to associate the models with.
+
+    Returns:
+        A dictionary containing counts of created, updated, and skipped models.
+    """
+    manifest_path = None
+    try:
+        manifest_path = _fetch_dbt_cloud_manifest(
+            dbt_project.dbt_cloud_url,
+            dbt_project.dbt_cloud_account_id,
+            dbt_project.dbt_cloud_api_key,
+        )
+        results = import_from_manifest(
+            manifest_path_str=manifest_path,
+            organisation=organisation,
+            dbt_project=dbt_project,
+        )
+        return results
+    finally:
+        if manifest_path and os.path.exists(manifest_path):
+            try:
+                os.remove(manifest_path)
+            except OSError as e:
+                logger.warning(
+                    f"Could not remove temporary manifest file {manifest_path}: {e}"
+                )
+
+
+def _fetch_dbt_cloud_manifest(
+    dbt_cloud_url: str, dbt_cloud_account_id: int, dbt_cloud_api_key: str
+) -> str:
+    """Fetches the latest manifest.json from dbt Cloud."""
+    headers = {
+        "Authorization": f"Token {dbt_cloud_api_key}",
+        "Content-Type": "application/json",
+    }
+    base_api_url = f"{dbt_cloud_url.rstrip('/')}/api/v2/accounts/{dbt_cloud_account_id}"
+    latest_run_id = None
+
+    runs_url = f"{base_api_url}/runs/"
+    params = {
+        "order_by": "-finished_at",
+        "status": 10,
+        "limit": 10,
+    }
+    response = requests.get(runs_url, headers=headers, params=params, timeout=30)
+    response.raise_for_status()
+    runs_data = response.json().get("data", [])
+
+    if not runs_data:
+        raise Exception(
+            f"No recent successful runs found for account ID {dbt_cloud_account_id}."
+        )
+
+    for run in runs_data:
+        run_id = run.get("id")
+        if not run_id:
+            continue
+        artifact_url = f"{base_api_url}/runs/{run_id}/artifacts/manifest.json"
+        try:
+            artifact_response = requests.get(artifact_url, headers=headers, timeout=10)
+            if artifact_response.status_code == 200:
+                latest_run_id = run_id
+                logger.info(f"Found manifest artifact in run ID: {latest_run_id}")
+                break
+        except requests.exceptions.RequestException as e:
+            logger.warning(
+                f"Error checking artifacts for run {run_id}: {e}. Trying next."
+            )
+
+    if not latest_run_id:
+        raise Exception(
+            "Could not find manifest.json in the latest 10 successful runs."
+        )
+
+    artifact_url = f"{base_api_url}/runs/{latest_run_id}/artifacts/manifest.json"
+    response = requests.get(artifact_url, headers=headers, timeout=60)
+    response.raise_for_status()
+    manifest_content = response.json()
+
+    with tempfile.NamedTemporaryFile(
+        mode="w", delete=False, suffix=".json", encoding="utf-8"
+    ) as temp_file:
+        json.dump(manifest_content, temp_file)
+        temp_manifest_path = temp_file.name
+
+    return temp_manifest_path
+
+
 # --- Service for Importing from Manifest ---
 def import_from_manifest(
-    manifest_path_str: str, clear_data: bool = False
+    manifest_path_str: str,
+    organisation: Any,
+    dbt_project: Any,
+    clear_data: bool = False,
 ) -> Dict[str, int]:
     """Imports dbt models from a manifest file into the Django database.
 
     Args:
         manifest_path_str: Path to the manifest.json file.
+        organisation: The organisation to associate the models with.
+        dbt_project: The DbtProject to associate the models with.
         clear_data: If True, clears existing Model data first.
 
     Returns:
@@ -77,6 +183,7 @@ def import_from_manifest(
                     "interpreted_description": None,
                     "interpretation_details": None,
                     "unique_id": unique_id,
+                    "dbt_project": dbt_project,
                 },
             }
     logger.info(f"Found {len(parsed_models)} models in manifest.")
@@ -143,44 +250,71 @@ def import_from_manifest(
 
     with transaction.atomic():  # Ensure all or nothing
         if clear_data:
-            logger.warning("Clearing existing Model data...")
-            deleted_count, _ = Model.objects.all().delete()
-            logger.info(f"Successfully deleted {deleted_count} models.")
+            logger.warning(
+                "Clearing existing Model data for organisation %s...", organisation.id
+            )
+            Model.objects.for_organisation(organisation).delete()
 
-        logger.info("Storing models in database...")
+        existing_models = {
+            m.unique_id: m
+            for m in Model.objects.for_organisation(organisation).filter(
+                unique_id__in=parsed_models.keys()
+            )
+        }
+
+        models_to_create = []
+        models_to_update = []
+
         for unique_id, model_info in parsed_models.items():
-            model_data = model_info["data_for_db"]
-            model_name = model_data["name"]
-            try:
-                _, created = Model.objects.update_or_create(
-                    unique_id=unique_id, defaults=model_data
-                )
-                if created:
-                    models_created += 1
-                else:
-                    models_updated += 1
-            except Exception as e:
-                logger.error(
-                    f"Error saving model {model_name} ({unique_id}): {e}", exc_info=True
-                )
-                models_skipped += 1
-                # Optionally re-raise to stop the whole transaction
-                # raise CommandError(f"Failed to save model {model_name}")
+            db_data = model_info["data_for_db"]
+            if unique_id in existing_models:
+                # Update existing model
+                model_instance = existing_models[unique_id]
+                for key, value in db_data.items():
+                    setattr(model_instance, key, value)
+                models_to_update.append(model_instance)
+            else:
+                # Create new model
+                models_to_create.append(Model(**db_data, organisation=organisation))
 
-    logger.info(
-        f"Manifest import complete. Created: {models_created}, Updated: {models_updated}, Skipped: {models_skipped}"
-    )
+        if models_to_create:
+            Model.objects.bulk_create(models_to_create)
+            models_created = len(models_to_create)
+            logger.info(f"Created {models_created} new models.")
+
+        if models_to_update:
+            # Note: bulk_update doesn't call save() or send signals.
+            # This is fine for this use case as we are just syncing data.
+            update_fields = list(
+                parsed_models[next(iter(parsed_models))]["data_for_db"].keys()
+            )
+            Model.objects.bulk_update(models_to_update, update_fields)
+            models_updated = len(models_to_update)
+            logger.info(f"Updated {models_updated} existing models.")
+
+        # This logic can be simplified as we are creating/updating all parsed models
+        models_skipped = 0
+
     return {
         "created": models_created,
         "updated": models_updated,
         "skipped": models_skipped,
-        "total": models_created + models_updated + models_skipped,
     }
 
 
 # --- Service for Importing from Source Code ---
-def import_from_source(project_path_str: str) -> Dict[str, int]:
-    """Parses dbt project source files (.sql, .yml) and imports/updates models."""
+def import_from_source(project_path_str: str, organisation: Any) -> Dict[str, int]:
+    """
+    Parses a dbt project from a local file path and stores the models
+    in the database, associating them with the given organisation.
+
+    Args:
+        project_path_str: The absolute path to the dbt project directory.
+        organisation: The Organisation instance to associate models with.
+
+    Returns:
+        A dictionary with counts of created and updated models.
+    """
     project_path = Path(project_path_str).resolve()
     models_path = project_path / "models"
     dbt_project_file = project_path / "dbt_project.yml"
@@ -220,6 +354,7 @@ def import_from_source(project_path_str: str) -> Dict[str, int]:
     with transaction.atomic():
         logger.info("Storing models from source parsing in database...")
         for model_name, model_data in parsed_models.items():
+            model_data["organisation"] = organisation  # Set organisation
             try:
                 _, created = Model.objects.update_or_create(
                     name=model_name, defaults=model_data

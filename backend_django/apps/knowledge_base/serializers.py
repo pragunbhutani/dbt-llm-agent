@@ -5,11 +5,13 @@ from .models import Model
 from apps.accounts.serializers import (
     OrganisationSerializer,
 )  # Import if you want to nest it
+from apps.embeddings.models import ModelEmbedding
 
 
 class ModelSerializer(serializers.ModelSerializer):
     # To make organisation readable in responses, but not writable directly by API client
     organisation = OrganisationSerializer(read_only=True)
+    answering_status = serializers.SerializerMethodField()
 
     class Meta:
         model = Model
@@ -38,9 +40,21 @@ class ModelSerializer(serializers.ModelSerializer):
             "interpretation_details",
             "unique_id",
             "organisation",  # Include organisation in the output fields
+            "answering_status",
         ]
         read_only_fields = ["id", "created_at", "updated_at", "organisation"]
         # Alternatively, if you don't want to expose organisation details directly
         # via a nested serializer but just its ID:
         # fields = [..., 'organisation'] # Add 'organisation' to fields
         # read_only_fields = [..., 'organisation'] # And make it read-only
+
+    def get_answering_status(self, obj):
+        embedding = ModelEmbedding.objects.filter(model=obj).first()
+        if embedding:
+            if embedding.is_processing:
+                return "Training"
+            elif embedding.can_be_used_for_answers:
+                return "Yes"
+            else:
+                return "No"
+        return "No"

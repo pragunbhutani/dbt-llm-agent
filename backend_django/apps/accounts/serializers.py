@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from .models import Organisation, OrganisationSettings
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from .llm_constants import CHAT_MODELS, EMBEDDING_MODELS
 
 User = get_user_model()
 
@@ -82,6 +83,42 @@ class OrganisationSettingsSerializer(serializers.ModelSerializer):
         model = OrganisationSettings
         fields = "__all__"
         read_only_fields = ("organisation",)
+
+    def validate(self, data):
+        chat_provider = data.get("llm_chat_provider")
+        chat_model = data.get("llm_chat_model")
+        embeddings_provider = data.get("llm_embeddings_provider")
+        embeddings_model = data.get("llm_embeddings_model")
+
+        if chat_provider and chat_model:
+            allowed_models = CHAT_MODELS.get(chat_provider)
+            if allowed_models is None:
+                raise serializers.ValidationError(
+                    {"llm_chat_provider": f"Invalid provider: {chat_provider}"}
+                )
+            if chat_model not in allowed_models:
+                raise serializers.ValidationError(
+                    {
+                        "llm_chat_model": f"Model {chat_model} is not available for provider {chat_provider}."
+                    }
+                )
+
+        if embeddings_provider and embeddings_model:
+            allowed_models = EMBEDDING_MODELS.get(embeddings_provider)
+            if allowed_models is None:
+                raise serializers.ValidationError(
+                    {
+                        "llm_embeddings_provider": f"Invalid provider: {embeddings_provider}"
+                    }
+                )
+            if embeddings_model not in allowed_models:
+                raise serializers.ValidationError(
+                    {
+                        "llm_embeddings_model": f"Model {embeddings_model} is not available for provider {embeddings_provider}."
+                    }
+                )
+
+        return data
 
 
 # Serializers previously in this file moved to:

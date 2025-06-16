@@ -9,18 +9,13 @@ import {
   DialogPanel,
   Menu,
   MenuButton,
-  MenuItem,
-  MenuItems,
   TransitionChild,
 } from "@headlessui/react";
 import {
-  BoltIcon,
+  StarIcon,
   HomeIcon,
   XMarkIcon,
   Cog6ToothIcon,
-  FolderIcon,
-  ChartPieIcon,
-  Squares2X2Icon,
   ChatBubbleLeftRightIcon,
   AcademicCapIcon,
   WrenchScrewdriverIcon,
@@ -95,7 +90,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               {/* Sidebar component, swap this element with another sidebar if you like */}
               <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white px-6 pb-4">
                 <div className="flex h-16 shrink-0 items-center">
-                  <BoltIcon className="h-8 w-8 text-indigo-600" />
+                  <StarIcon className="h-8 w-8 text-indigo-600" />
                 </div>
                 <nav className="flex flex-1 flex-col">
                   <ul role="list" className="flex flex-1 flex-col gap-y-7">
@@ -139,7 +134,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           {/* Sidebar component, swap this element with another sidebar if you like */}
           <div className="flex grow flex-col overflow-y-auto border-r border-gray-200 bg-white">
             <div className="flex h-16 shrink-0 items-center justify-center bg-indigo-600">
-              <BoltIcon className="h-8 w-8 text-white" />
+              <StarIcon className="h-8 w-8 text-white" />
             </div>
             <nav className="flex flex-1 flex-col p-2">
               <ul role="list" className="flex flex-1 flex-col gap-y-7">
