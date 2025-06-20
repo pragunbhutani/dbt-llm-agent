@@ -20,19 +20,51 @@ import {
 import { Button } from "@/components/ui/button";
 import { RefreshCw, DatabaseZap, Trash2, ChevronDown } from "lucide-react";
 
+interface FilterOption {
+  value: string;
+  label: string;
+}
+
+interface BulkAction {
+  key: string;
+  label: string;
+  icon?: React.ReactNode;
+  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost";
+}
+
 interface DataTableToolbarProps<TData> {
   table: Table<TData>;
-  onBulkAction?: (
-    action: "enable" | "disable" | "refresh",
-    selectedRows: TData[]
-  ) => void;
+  filterOptions?: FilterOption[];
+  bulkActions?: BulkAction[];
+  onBulkAction?: (action: string, selectedRows: TData[]) => void;
 }
 
 export function DataTableToolbar<TData>({
   table,
+  filterOptions = [
+    { value: "name", label: "Name" },
+    { value: "path", label: "Path" },
+    { value: "schema_name", label: "Schema" },
+    { value: "tags", label: "Tags" },
+  ],
+  bulkActions = [
+    {
+      key: "refresh",
+      label: "Refresh",
+      icon: <RefreshCw className="mr-2 h-4 w-4" />,
+    },
+    { key: "enable", label: "Use for Answering" },
+    { key: "disable", label: "Don't use for Answering" },
+    {
+      key: "delete",
+      label: "Delete",
+      variant: "destructive" as const,
+      icon: <Trash2 className="mr-2 h-4 w-4" />,
+    },
+  ],
   onBulkAction,
 }: DataTableToolbarProps<TData>) {
-  const [filterBy, setFilterBy] = React.useState("name");
+  const [filterBy, setFilterBy] = React.useState(filterOptions[0]?.value || "");
   const numSelected = table.getFilteredSelectedRowModel().rows.length;
 
   const handleFilterChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -45,105 +77,144 @@ export function DataTableToolbar<TData>({
     setFilterBy(value);
   };
 
+  const handleBulkActionClick = (actionKey: string) => {
+    if (onBulkAction) {
+      onBulkAction(
+        actionKey,
+        table.getFilteredSelectedRowModel().rows.map((row) => row.original)
+      );
+    }
+  };
+
+  // Group bulk actions by type for better UI organization
+  const primaryActions = bulkActions.filter(
+    (action) =>
+      action.key === "refresh" ||
+      action.key === "enable" ||
+      action.key === "disable"
+  );
+  const dangerousActions = bulkActions.filter(
+    (action) => action.variant === "destructive" || action.key === "delete"
+  );
+
   return (
     <div className="flex items-center justify-between">
       <div className="flex items-center space-x-2">
         <DataTableViewOptions table={table} />
-        <Input
-          placeholder={`Filter by ${filterBy}...`}
-          value={(table.getColumn(filterBy)?.getFilterValue() as string) ?? ""}
-          onChange={handleFilterChange}
-          className="h-9 w-[150px] lg:w-[250px]"
-        />
-        <Select value={filterBy} onValueChange={handleSelectChange}>
-          <SelectTrigger className="h-9 w-[120px]">
-            <SelectValue placeholder="Filter by" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="name">Name</SelectItem>
-            <SelectItem value="path">Path</SelectItem>
-            <SelectItem value="schema_name">Schema</SelectItem>
-            <SelectItem value="tags">Tags</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
-      <div className="flex items-center space-x-2">
-        <span className="text-sm font-medium text-muted-foreground">
-          Bulk Actions
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          className="ml-2 h-9"
-          disabled={numSelected === 0}
-          onClick={() =>
-            onBulkAction &&
-            onBulkAction(
-              "refresh",
-              table
-                .getFilteredSelectedRowModel()
-                .rows.map((row) => row.original)
-            )
-          }
-        >
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Refresh
-        </Button>
-
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-9"
-              disabled={numSelected === 0}
-            >
-              <DatabaseZap className="mr-2 h-4 w-4" />
-              Answering
-              <ChevronDown className="ml-2 h-4 w-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem
-              onClick={() =>
-                onBulkAction &&
-                onBulkAction(
-                  "enable",
-                  table
-                    .getFilteredSelectedRowModel()
-                    .rows.map((row) => row.original)
-                )
+        {filterOptions.length > 0 && (
+          <>
+            <Input
+              placeholder={`Filter by ${
+                filterOptions
+                  .find((opt) => opt.value === filterBy)
+                  ?.label?.toLowerCase() || filterBy
+              }...`}
+              value={
+                (table.getColumn(filterBy)?.getFilterValue() as string) ?? ""
               }
-            >
-              Use for Answering
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onClick={() =>
-                onBulkAction &&
-                onBulkAction(
-                  "disable",
-                  table
-                    .getFilteredSelectedRowModel()
-                    .rows.map((row) => row.original)
-                )
-              }
-            >
-              Don&apos;t use for Answering
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
-        <span className="text-gray-300">|</span>
-        <Button
-          variant="destructive"
-          size="sm"
-          className="h-9"
-          disabled={numSelected === 0}
-        >
-          <Trash2 className="mr-2 h-4 w-4" />
-          Delete
-        </Button>
+              onChange={handleFilterChange}
+              className="h-9 w-[150px] lg:w-[250px]"
+            />
+            {filterOptions.length > 1 && (
+              <Select value={filterBy} onValueChange={handleSelectChange}>
+                <SelectTrigger className="h-9 w-[120px]">
+                  <SelectValue placeholder="Filter by" />
+                </SelectTrigger>
+                <SelectContent>
+                  {filterOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </>
+        )}
       </div>
+
+      {bulkActions.length > 0 && (
+        <div className="flex items-center space-x-2">
+          <span className="text-sm font-medium text-muted-foreground">
+            Bulk Actions
+          </span>
+
+          {/* Primary Actions */}
+          {primaryActions.map((action) => {
+            if (action.key === "refresh") {
+              return (
+                <Button
+                  key={action.key}
+                  variant="outline"
+                  size="sm"
+                  className="ml-2 h-9"
+                  disabled={numSelected === 0}
+                  onClick={() => handleBulkActionClick(action.key)}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              );
+            }
+            return null;
+          })}
+
+          {/* Enable/Disable Dropdown */}
+          {primaryActions.some(
+            (action) => action.key === "enable" || action.key === "disable"
+          ) && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9"
+                  disabled={numSelected === 0}
+                >
+                  <DatabaseZap className="mr-2 h-4 w-4" />
+                  Answering
+                  <ChevronDown className="ml-2 h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                {primaryActions
+                  .filter(
+                    (action) =>
+                      action.key === "enable" || action.key === "disable"
+                  )
+                  .map((action) => (
+                    <DropdownMenuItem
+                      key={action.key}
+                      onClick={() => handleBulkActionClick(action.key)}
+                    >
+                      {action.label}
+                    </DropdownMenuItem>
+                  ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+
+          {/* Dangerous Actions */}
+          {dangerousActions.length > 0 && (
+            <>
+              <span className="text-gray-300">|</span>
+              {dangerousActions.map((action) => (
+                <Button
+                  key={action.key}
+                  variant={action.variant || "destructive"}
+                  size="sm"
+                  className="h-9"
+                  disabled={numSelected === 0}
+                  onClick={() => handleBulkActionClick(action.key)}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+            </>
+          )}
+        </div>
+      )}
     </div>
   );
 }

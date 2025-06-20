@@ -1,6 +1,6 @@
 [project]
 name = "ragstar"
-version = "0.8.2"
+version = "1.0.0"
 description = "An LLM-powered agent for interacting with dbt projects"
 authors = [{ name = "Pragun Bhutani", email = "pragun06@gmail.com" }]
 requires-python = "~=3.12"

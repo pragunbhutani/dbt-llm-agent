@@ -28,17 +28,33 @@ import {
 import { DataTablePagination } from "@/components/data-table/data-table-pagination";
 import { DataTableToolbar } from "@/components/data-table/data-table-toolbar";
 
+interface FilterOption {
+  value: string;
+  label: string;
+}
+
+interface BulkAction {
+  key: string;
+  label: string;
+  icon?: React.ReactNode;
+  variant?: "default" | "destructive" | "outline" | "secondary" | "ghost";
+}
+
 interface DataTableProps<TData, TValue> {
   columns: ColumnDef<TData, TValue>[];
   data: TData[];
   initialColumnVisibility?: VisibilityState;
-  onBulkAction?: (action: "enable" | "disable", selectedRows: TData[]) => void;
+  filterOptions?: FilterOption[];
+  bulkActions?: BulkAction[];
+  onBulkAction?: (action: string, selectedRows: TData[]) => void;
 }
 
 export function DataTable<TData, TValue>({
   columns,
   data,
   initialColumnVisibility = {},
+  filterOptions,
+  bulkActions,
   onBulkAction,
 }: DataTableProps<TData, TValue>) {
   const [rowSelection, setRowSelection] = React.useState({});
@@ -73,7 +89,12 @@ export function DataTable<TData, TValue>({
 
   return (
     <div className="space-y-4">
-      <DataTableToolbar table={table} onBulkAction={onBulkAction} />
+      <DataTableToolbar
+        table={table}
+        filterOptions={filterOptions}
+        bulkActions={bulkActions}
+        onBulkAction={onBulkAction}
+      />
       <div className="rounded-md border">
         <Table>
           <TableHeader>

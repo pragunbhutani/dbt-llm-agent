@@ -29,7 +29,7 @@ const navigation = [
     icon: AcademicCapIcon,
   },
   {
-    name: "Chats",
+    name: "Past Conversations",
     href: "/dashboard/chats",
     icon: ChatBubbleLeftRightIcon,
   },

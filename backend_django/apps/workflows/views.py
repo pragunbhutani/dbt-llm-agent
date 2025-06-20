@@ -7,8 +7,12 @@ from rest_framework.exceptions import PermissionDenied
 from pgvector.django import L2Distance, CosineDistance, MaxInnerProduct
 
 # Update imports
-from .models import Question
-from .serializers import QuestionSerializer
+from .models import Question, Conversation, ConversationPart
+from .serializers import (
+    QuestionSerializer,
+    ConversationSerializer,
+    ConversationListSerializer,
+)
 from apps.llm_providers.services import EmbeddingService
 from apps.accounts.models import OrganisationSettings
 from .question_answerer import QuestionAnswererAgent
@@ -179,6 +183,37 @@ class QuestionViewSet(viewsets.ModelViewSet):
                 else results[i].distance
             )
         return Response(data)
+
+
+class ConversationViewSet(viewsets.ModelViewSet):
+    """API endpoint that allows Conversations to be viewed, edited, and deleted."""
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_queryset(self):
+        user = self.request.user
+        if hasattr(user, "organisation") and user.organisation:
+            return Conversation.objects.for_organisation(user.organisation).order_by(
+                "-started_at"
+            )
+        return Conversation.objects.none()
+
+    def get_serializer_class(self):
+        """Use lighter serializer for list view, full serializer for detail view."""
+        if self.action == "list":
+            return ConversationListSerializer
+        return ConversationSerializer
+
+    def perform_create(self, serializer):
+        user = self.request.user
+        if not (hasattr(user, "organisation") and user.organisation):
+            raise PermissionDenied("User is not associated with an organisation.")
+        serializer.save(organisation=user.organisation)
+
+    def perform_destroy(self, instance):
+        """Delete conversation and all its parts."""
+        # The CASCADE relationship in ConversationPart model will handle deletion of parts
+        instance.delete()
 
 
 class AskQuestionView(APIView):

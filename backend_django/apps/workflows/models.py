@@ -210,6 +210,27 @@ class Conversation(OrganisationScopedModelMixin, models.Model):
         title = self.title or f"Conv {self.id}"
         return f"{title} ({self.channel})"
 
+    @property
+    def calculated_total_parts(self):
+        """Calculate the actual number of conversation parts."""
+        return self.parts.count()
+
+    @property
+    def calculated_visible_parts(self):
+        """Calculate the number of user-facing conversation parts (excludes internal system messages)."""
+        hidden_types = ["thinking", "llm_input", "tool_execution"]
+        return self.parts.exclude(message_type__in=hidden_types).count()
+
+    @property
+    def calculated_total_tokens(self):
+        """Calculate the total tokens used across all parts."""
+        return self.parts.aggregate(total=models.Sum("tokens_used"))["total"] or 0
+
+    @property
+    def calculated_total_cost(self):
+        """Calculate the total cost across all parts."""
+        return self.parts.aggregate(total=models.Sum("cost"))["total"] or 0
+
 
 class ConversationPart(models.Model):
     """
