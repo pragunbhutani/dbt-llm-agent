@@ -18,7 +18,7 @@ class ModelEmbedding(OrganisationScopedModelMixin, models.Model):
     )
     document = models.TextField(null=False)
     embedding = VectorField(
-        dimensions=1536, null=False, help_text="Embedding based on model documentation"
+        dimensions=3072, null=False, help_text="Embedding based on model documentation"
     )
     model_metadata = models.JSONField(null=True, blank=True)
     can_be_used_for_answers = models.BooleanField(

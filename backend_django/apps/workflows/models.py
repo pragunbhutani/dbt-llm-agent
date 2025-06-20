@@ -8,7 +8,7 @@ class Question(OrganisationScopedModelMixin, models.Model):
     question_text = models.TextField(null=False)
     answer_text = models.TextField(null=True, blank=True)
     question_embedding = VectorField(
-        dimensions=1536,
+        dimensions=3072,
         null=True,
         blank=True,
         help_text="Embedding vector for the question text",
@@ -16,7 +16,7 @@ class Question(OrganisationScopedModelMixin, models.Model):
     was_useful = models.BooleanField(null=True, blank=True)
     feedback = models.TextField(null=True, blank=True)
     feedback_embedding = VectorField(
-        dimensions=1536,
+        dimensions=3072,
         null=True,
         blank=True,
         help_text="Embedding vector for the feedback text",
@@ -28,7 +28,7 @@ class Question(OrganisationScopedModelMixin, models.Model):
     original_message_ts = models.CharField(max_length=50, null=True, blank=True)
     response_message_ts = models.CharField(max_length=50, null=True, blank=True)
     original_message_embedding = VectorField(
-        dimensions=1536,
+        dimensions=3072,
         null=True,
         blank=True,
         help_text="Embedding vector for the original message text",

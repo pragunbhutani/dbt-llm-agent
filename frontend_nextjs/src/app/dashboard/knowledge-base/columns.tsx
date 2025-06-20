@@ -30,10 +30,12 @@ type ColumnsProps = {
     modelId: string,
     status: DbtModel["answering_status"]
   ) => void;
+  handleRefreshModel: (modelId: string) => void;
 };
 
 export const getColumns = ({
   handleToggleAnswering,
+  handleRefreshModel,
 }: ColumnsProps): ColumnDef<DbtModel>[] => [
   {
     id: "select",
@@ -171,6 +173,12 @@ export const getColumns = ({
               disabled={isTraining}
             >
               {actionText}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onClick={() => handleRefreshModel(model.id)}
+              disabled={isTraining}
+            >
+              Refresh
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem className="text-red-600">Delete</DropdownMenuItem>

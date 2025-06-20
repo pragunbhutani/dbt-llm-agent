@@ -1,42 +1,19 @@
 import logging
-import re
-import json  # Import json for processing agent output
 from django.core.management.base import BaseCommand, CommandError, CommandParser
-from django.db import transaction
-from typing import List, Dict, Any, Optional  # Add Any, Optional
+from typing import List
 
 # Django Imports
 from apps.knowledge_base.models import Model
 from apps.accounts.models import Organisation, OrganisationSettings
-from apps.llm_providers.services import ChatService
 
-# Agent Import
-from apps.workflows.model_interpreter import (
-    ModelInterpreterAgent,
-    ModelDocumentation,  # Import Pydantic model for validation
-    ColumnDocumentation,
-)
-
-# Rich console for agent verbosity (optional)
-try:
-    from rich.console import Console as RichConsole
-
-    console = RichConsole()
-except ImportError:
-    console = None
-    RichConsole = None
+# Import simplified service
+from apps.workflows.services import trigger_model_interpretation
 
 logger = logging.getLogger(__name__)
 
-# Removed find_refs helper function - Agent handles refs internally
-
-from ..services import trigger_model_interpretation
-
 
 class Command(BaseCommand):
-    help = (
-        "Generates agentic LLM interpretations (description, columns) for dbt models."
-    )
+    help = "Generates LLM interpretations (description, columns) for dbt models using a simplified single-prompt approach."
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
@@ -59,18 +36,6 @@ class Command(BaseCommand):
             "--force",
             action="store_true",
             help="Force regeneration of interpretations even if they already exist.",
-        )
-        # Remove skip flags? The agent workflow generates both.
-        # For now, keep them, but maybe disable interpretation steps based on them.
-        parser.add_argument(
-            "--skip-desc",
-            action="store_true",
-            help="(Currently Ignored by Agent) Skip interpreting the model description.",
-        )
-        parser.add_argument(
-            "--skip-cols",
-            action="store_true",
-            help="(Currently Ignored by Agent) Skip interpreting the model columns.",
         )
 
     def handle(self, *args, **options):

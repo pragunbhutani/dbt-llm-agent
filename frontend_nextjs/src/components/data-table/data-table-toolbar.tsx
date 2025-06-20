@@ -22,7 +22,10 @@ import { RefreshCw, DatabaseZap, Trash2, ChevronDown } from "lucide-react";
 
 interface DataTableToolbarProps<TData> {
   table: Table<TData>;
-  onBulkAction?: (action: "enable" | "disable", selectedRows: TData[]) => void;
+  onBulkAction?: (
+    action: "enable" | "disable" | "refresh",
+    selectedRows: TData[]
+  ) => void;
 }
 
 export function DataTableToolbar<TData>({
@@ -73,6 +76,15 @@ export function DataTableToolbar<TData>({
           size="sm"
           className="ml-2 h-9"
           disabled={numSelected === 0}
+          onClick={() =>
+            onBulkAction &&
+            onBulkAction(
+              "refresh",
+              table
+                .getFilteredSelectedRowModel()
+                .rows.map((row) => row.original)
+            )
+          }
         >
           <RefreshCw className="mr-2 h-4 w-4" />
           Refresh

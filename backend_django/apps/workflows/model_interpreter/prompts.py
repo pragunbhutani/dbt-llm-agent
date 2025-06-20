@@ -1,57 +1,89 @@
-"""Prompts for the ModelInterpreter Agent."""
+"""Prompts for the simplified model interpreter workflow."""
 
-# --- NEW IMPORT ---
+from typing import List, Dict, Any
+from apps.knowledge_base.models import Model
 from apps.workflows.rules_loader import get_agent_rules
 
-# --- END NEW IMPORT ---
 
+def create_interpretation_prompt(
+    model: Model, upstream_models: List[Dict[str, Any]]
+) -> str:
+    """Create a comprehensive prompt for model interpretation.
 
-def create_system_prompt(model_name: str) -> str:
-    """Creates the system prompt for the interpretation workflow."""
-    base_prompt = f"""You are an expert dbt model interpreter. Your task is to analyze the SQL code for a target dbt model, recursively explore its upstream dependencies by fetching their raw SQL, and generate CONCISE documentation (as a structured object) suitable for dbt YAML files for the original target model.
+    Args:
+        model: The target Model instance to interpret
+        upstream_models: List of upstream model data dictionaries
 
-Process:
-1. **Analyze SQL:** Carefully analyze the provided SQL (from the initial Human message or subsequent Tool results for `get_models_raw_sql`) to understand its logic and identify ALL models referenced via `ref()`.
-2. **Check History:** Look back through the conversation history. Identify all models whose SQL has been successfully returned in `ToolMessage` results from the `get_models_raw_sql` tool. Also, remember the SQL for the target model (`{model_name}`) was provided initially.
-3. **Identify Needed SQL:** Determine which models referenced in the *most recently analyzed SQL* are NOT among those whose SQL you've already seen (from step 2).
-4. **Fetch Upstream SQL:** If there are unfetched referenced models needed for the analysis, use the `get_models_raw_sql` tool ONCE with a list of ALL such model names.
-5. **Recursive Analysis:** Analyze the newly fetched SQL (from the latest `ToolMessage`), identify further `ref()` calls, and repeat steps 2-4 until you have analyzed all necessary upstream SQL to fully understand the target model's data lineage and column derivations.
-6. **Synthesize Documentation:** Once your analysis is complete (meaning you've seen the SQL for the target and all recursive dependencies mentioned via `ref`), create the final documentation object for the *original target model* (`{model_name}`). Include:
-   - Accurate model name.
-   - A **brief, 1-2 sentence description** summarizing the model's purpose, suitable for a dbt `description:` field.
-   - A complete list of all output columns from the target model's final SELECT statement, with **concise descriptions** for each column, suitable for dbt column documentation.
-7. **Finish:** Call the `finish_interpretation` tool with the complete documentation object.
-
-**IMPORTANT:**
-- Generate **concise** descriptions. Avoid long paragraphs.
-- Use `get_models_raw_sql` only when needed, requesting all necessary SQL in a single batch per turn based on your analysis of the *latest* SQL and conversation history.
-- Do not re-request SQL for models already provided in previous `ToolMessage` results.
-- Only call `finish_interpretation` when you are certain you have analyzed the SQL for the target model and *all* its upstream dependencies referenced directly or indirectly via `ref()`.
-- Ensure the final output to `finish_interpretation` is a structured object with 'name', 'description', and 'columns' (each column having 'name' and 'description')."""
-
-    # --- NEW: Load and append custom rules ---
+    Returns:
+        A comprehensive prompt string for the LLM
+    """
+    # Get custom rules
     custom_rules = get_agent_rules("model_interpreter")
+    custom_rules_section = (
+        f"\n\n**Additional Instructions:**\n{custom_rules}" if custom_rules else ""
+    )
 
-    if custom_rules:
-        final_prompt = base_prompt + "\n\n**Additional Instructions:**\n" + custom_rules
-        return final_prompt
-    else:
-        return base_prompt
-    # --- END NEW --
+    # Build upstream models section
+    upstream_section = ""
+    if upstream_models:
+        upstream_section = "\n\n**Upstream Models (Dependencies):**\n"
+        for i, upstream in enumerate(upstream_models, 1):
+            upstream_section += (
+                f"\n{i}. **{upstream['name']}** (Path: {upstream['path'] or 'N/A'})\n"
+            )
+            if upstream["yml_description"] or upstream["interpreted_description"]:
+                desc = (
+                    upstream["interpreted_description"] or upstream["yml_description"]
+                )
+                upstream_section += f"   Description: {desc}\n"
+            if upstream["raw_sql"]:
+                upstream_section += (
+                    f"   SQL:\n   ```sql\n{upstream['raw_sql']}\n   ```\n"
+                )
+            else:
+                upstream_section += "   SQL: Not available\n"
 
+    prompt = f"""You are an expert dbt model interpreter. Analyze the provided dbt model and generate CONCISE documentation suitable for dbt YAML files.
 
-def create_initial_human_message(model_name: str, raw_sql: str) -> str:
-    """Creates the initial human message containing the target model's SQL."""
-    return f"""Please interpret the dbt model '{model_name}'. Its raw SQL is:
+**Target Model: {model.name}**
+Path: {model.path}
+Schema: {model.schema_name or 'N/A'}
+Database: {model.database or 'N/A'}
+Materialization: {model.materialization or 'N/A'}
 
+**Target Model SQL:**
 ```sql
-{raw_sql}
+{model.raw_sql}
 ```
+{upstream_section}
 
-Follow the interpretation process outlined in the system message. Start by analyzing this initial SQL."""
+**Task:**
+Generate a structured documentation object for the target model '{model.name}' that includes:
 
+1. **name**: The exact model name
+2. **description**: A brief, 1-2 sentence description summarizing the model's purpose, suitable for a dbt description field
+3. **columns**: A complete list of all output columns from the target model's final SELECT statement, with concise descriptions for each column
 
-# --- REMOVED: Old MODEL_INTERPRETATION_PROMPT --- #
-# This prompt was likely for a non-agentic fixed workflow and is not needed
-# for the LangGraph agent.
-# --- END REMOVED --- #
+**Requirements:**
+- Generate **concise** descriptions suitable for dbt documentation
+- Focus on the business purpose and meaning of each column
+- Consider the upstream model context to understand data lineage
+- Only document columns that are actually output by the final SELECT statement
+- Use clear, professional language appropriate for technical documentation
+
+**Output Format:**
+Respond with a JSON object in this exact structure:
+```json
+{{
+  "name": "model_name",
+  "description": "Brief description of the model's purpose",
+  "columns": [
+    {{
+      "name": "column_name",
+      "description": "Brief description of the column"
+    }}
+  ]
+}}
+```{custom_rules_section}"""
+
+    return prompt

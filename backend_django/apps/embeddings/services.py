@@ -4,7 +4,6 @@ from django.utils import timezone
 
 # Import models and services from other apps
 from apps.knowledge_base.models import Model
-from apps.knowledge_base.serializers import ModelSerializer  # Needed for metadata
 from apps.llm_providers.services import EmbeddingService
 from .models import ModelEmbedding  # Local import
 
@@ -54,27 +53,25 @@ def embed_knowledge_model(model: Model, include_docs: bool = True) -> bool:
             logger.error(f"Failed to generate embedding vector for {model.name}")
             return False
 
-        # 3. Prepare metadata
-        # Use serializer from knowledge_base to get consistent metadata?
-        try:
-            serializer = ModelSerializer(model)
-            model_metadata_dict = serializer.data
-            # Clean up potentially large/unwanted fields if necessary
-            if model_metadata_dict.get("tests") is not None:
-                del model_metadata_dict["tests"]
-            # Remove SQL fields?
-            # model_metadata_dict.pop("raw_sql", None)
-            # model_metadata_dict.pop("compiled_sql", None)
-        except Exception as sz_err:
-            logger.warning(
-                f"Failed to serialize model {model.name} for metadata: {sz_err}"
-            )
-            model_metadata_dict = {
-                "name": model.name,
-                "path": model.path,
-            }  # Fallback metadata
+        # 3. Prepare metadata (simplified to avoid UUID serialization issues)
+        model_metadata_dict = {
+            "name": model.name,
+            "path": model.path,
+            "schema_name": model.schema_name,
+            "database": model.database,
+            "materialization": model.materialization,
+            "tags": model.tags,
+            "depends_on": model.depends_on,
+            "all_upstream_models": model.all_upstream_models,
+            "unique_id": model.unique_id,
+            "organisation_id": (
+                str(model.organisation.id) if model.organisation else None
+            ),
+            "dbt_project_id": model.dbt_project.id if model.dbt_project else None,
+        }
 
-        # 4. Save embedding
+        # 4. Save embedding - do NOT override is_processing here
+        # The caller (celery task) will handle the is_processing flag appropriately
         embedding_instance, created = ModelEmbedding.objects.update_or_create(
             model=model,
             organisation=model.organisation,
@@ -83,10 +80,17 @@ def embed_knowledge_model(model: Model, include_docs: bool = True) -> bool:
                 "document": document_text,
                 "embedding": embedding_vector,
                 "model_metadata": model_metadata_dict,
-                "can_be_used_for_answers": True,
                 "updated_at": timezone.now(),
+                # Only set can_be_used_for_answers if not already processing
+                # This ensures we don't override the processing state
             },
         )
+
+        # Only set can_be_used_for_answers=True if not currently processing
+        # This prevents overriding the processing workflow
+        if not embedding_instance.is_processing:
+            embedding_instance.can_be_used_for_answers = True
+            embedding_instance.save()
         action = "Created" if created else "Updated"
         logger.info(f"{action} embedding record for model {model.name}")
         return True
