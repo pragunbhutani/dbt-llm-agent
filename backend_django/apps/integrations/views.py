@@ -2,18 +2,20 @@ import logging
 from django.http import HttpRequest, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 
-# Import necessary Bolt components
-from slack_bolt.async_app import AsyncApp, AsyncBoltRequest
-from slack_bolt.oauth.async_oauth_settings import AsyncOAuthSettings
+# Import necessary Bolt components (changed to sync)
+from slack_bolt import App, BoltRequest  # Changed from AsyncApp, AsyncBoltRequest
+from slack_bolt.oauth.oauth_settings import (
+    OAuthSettings,
+)  # Changed from AsyncOAuthSettings
 
-# Import your AsyncApp instance
+# Import your App instance (now sync)
 from .slack.handlers import app
 
 logger = logging.getLogger(__name__)
 
 
-async def to_async_bolt_request(request: HttpRequest) -> AsyncBoltRequest:
-    """Helper function to convert Django HttpRequest to AsyncBoltRequest."""
+def to_bolt_request(request: HttpRequest) -> BoltRequest:  # Removed async
+    """Helper function to convert Django HttpRequest to BoltRequest."""
     # Access request.body directly (it's bytes, not awaitable)
     body_bytes = request.body
     body_str = body_bytes.decode(request.encoding or "utf-8")
@@ -28,7 +30,7 @@ async def to_async_bolt_request(request: HttpRequest) -> AsyncBoltRequest:
             else v[0] if isinstance(v, list) and len(v) > 0 else ""
         )
 
-    return AsyncBoltRequest(
+    return BoltRequest(  # Changed from AsyncBoltRequest
         body=body_str,
         query=request.GET.urlencode(),  # Pass query string
         headers=headers,  # Pass headers dictionary
@@ -37,7 +39,7 @@ async def to_async_bolt_request(request: HttpRequest) -> AsyncBoltRequest:
     )
 
 
-async def to_django_response(bolt_resp) -> HttpResponse:
+def to_django_response(bolt_resp) -> HttpResponse:  # Removed async
     """Helper function to convert BoltResponse to Django HttpResponse."""
     # Get content-type from headers dictionary, defaulting to None or a standard type
     content_type = bolt_resp.headers.get(
@@ -57,7 +59,7 @@ async def to_django_response(bolt_resp) -> HttpResponse:
 
 
 @csrf_exempt  # Slack requests don't have CSRF tokens
-async def slack_events_handler(request: HttpRequest):
+def slack_events_handler(request: HttpRequest):  # Removed async
     """Receives Slack event HTTP requests, converts to Bolt format, dispatches, and returns response."""
     if request.method != "POST":
         logger.warning(
@@ -67,17 +69,21 @@ async def slack_events_handler(request: HttpRequest):
 
     logger.debug("slack_events_handler: Converting Django request to Bolt request")
     try:
-        bolt_req: AsyncBoltRequest = await to_async_bolt_request(request)
+        bolt_req: BoltRequest = to_bolt_request(request)  # Removed await
     except Exception as e:
         logger.error(f"Error converting request to BoltRequest: {e}", exc_info=True)
         return HttpResponse(
             status=500, content="Internal Server Error during request conversion"
         )
 
+    # Log the bolt request details for debugging
+    logger.info(f"Bolt request body: {bolt_req.body}")
+    logger.info(f"Bolt request headers: {bolt_req.headers}")
+
     # Dispatch the request to the Bolt app's internal handler
-    logger.debug("slack_events_handler: Dispatching Bolt request to AsyncApp")
+    logger.debug("slack_events_handler: Dispatching Bolt request to App")
     try:
-        bolt_resp = await app.async_dispatch(bolt_req)
+        bolt_resp = app.dispatch(bolt_req)  # Changed from async_dispatch, removed await
     except Exception as e:
         logger.error(f"Error dispatching request within Bolt app: {e}", exc_info=True)
         return HttpResponse(
@@ -87,7 +93,7 @@ async def slack_events_handler(request: HttpRequest):
     # Convert the Bolt response back to a Django response
     logger.debug("slack_events_handler: Converting Bolt response to Django response")
     try:
-        django_resp = await to_django_response(bolt_resp)
+        django_resp = to_django_response(bolt_resp)  # Removed await
         logger.debug(
             f"slack_events_handler: Returning Django response status: {django_resp.status_code}"
         )
@@ -99,3 +105,7 @@ async def slack_events_handler(request: HttpRequest):
         return HttpResponse(
             status=500, content="Internal Server Error during response conversion"
         )
+
+
+# Slack team ID detection is now integrated into the OrganisationSettings save flow
+# No separate endpoint needed

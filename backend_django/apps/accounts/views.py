@@ -79,3 +79,34 @@ class OrganisationSettingsView(generics.RetrieveUpdateAPIView):
             organisation=user.organisation
         )
         return settings
+
+    def update(self, request, *args, **kwargs):
+        """Enhanced update method to provide feedback about Slack team detection."""
+        partial = kwargs.pop("partial", False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+
+        # Check if Slack team ID was auto-detected
+        slack_team_id = serializer.validated_data.get("slack_team_id")
+        slack_bot_token = request.data.get("slack_bot_token")
+        team_name = None
+
+        if slack_bot_token and slack_team_id:
+            # Get team name for user feedback
+            from apps.integrations.slack.handlers import get_team_info_from_token
+
+            team_info = get_team_info_from_token(slack_bot_token)
+            if team_info:
+                team_name = team_info.get("team_name")
+
+        self.perform_update(serializer)
+
+        # Customize response to include Slack team detection feedback
+        response_data = serializer.data
+        if team_name:
+            response_data["slack_integration_status"] = (
+                f"✅ Successfully connected to {team_name} Slack workspace"
+            )
+
+        return Response(response_data)

@@ -67,4 +67,271 @@ class QuestionModel(models.Model):
         verbose_name_plural = "Question Model Usages"
 
 
+# Conversation-related choices
+class ConversationStatus(models.TextChoices):
+    ACTIVE = "active", "Active"
+    COMPLETED = "completed", "Completed"
+    ERROR = "error", "Error"
+    TIMEOUT = "timeout", "Timeout"
+
+
+class ConversationTrigger(models.TextChoices):
+    SLACK_MENTION = "slack_mention", "Slack Mention"
+    WEB_INTERFACE = "web_interface", "Web Interface"
+    MCP_SERVER = "mcp_server", "MCP Server"
+    API_CALL = "api_call", "API Call"
+
+
+class Conversation(OrganisationScopedModelMixin, models.Model):
+    """
+    Represents a complete conversation session with a user.
+    Could be from Slack, web interface, MCP server, etc.
+    """
+
+    # Basic conversation info
+    external_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="External ID (e.g., Slack thread ID, web session ID)",
+    )
+    channel = models.CharField(
+        max_length=50,
+        choices=[
+            ("slack", "Slack"),
+            ("web", "Web Interface"),
+            ("mcp", "MCP Server"),
+            ("api", "Direct API"),
+        ],
+        help_text="Channel where conversation originated",
+    )
+    user_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="User identifier from the external system",
+    )
+
+    # Status tracking
+    status = models.CharField(
+        max_length=20,
+        choices=ConversationStatus.choices,
+        default=ConversationStatus.ACTIVE,
+    )
+
+    # Trigger information
+    trigger = models.CharField(
+        max_length=50,
+        choices=ConversationTrigger.choices,
+        default=ConversationTrigger.SLACK_MENTION,
+        help_text="What triggered this conversation",
+    )
+
+    # Conversation metadata
+    title = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Auto-generated or user-provided conversation title",
+    )
+    summary = models.TextField(
+        null=True, blank=True, help_text="AI-generated summary of the conversation"
+    )
+
+    # Initial question and response
+    initial_question = models.TextField(
+        help_text="The first question that started this conversation"
+    )
+
+    # Channel-specific fields
+    channel_type = models.CharField(
+        max_length=50, default="slack", help_text="Type of channel (slack, web, etc.)"
+    )
+    channel_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Channel ID where conversation took place",
+    )
+    user_external_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="External user ID from the source system",
+    )
+
+    # LLM and integration settings
+    llm_provider = models.CharField(
+        max_length=50,
+        default="anthropic",
+        help_text="LLM provider used for this conversation",
+    )
+    enabled_integrations = models.JSONField(
+        default=list, help_text="List of integrations enabled for this conversation"
+    )
+
+    # Performance metrics
+    total_parts = models.PositiveIntegerField(default=0)
+    total_tokens_used = models.PositiveIntegerField(default=0)
+    total_cost = models.DecimalField(
+        max_digits=10, decimal_places=4, default=0, help_text="Total cost in USD"
+    )
+
+    # Timing
+    started_at = models.DateTimeField(auto_now_add=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    # Feedback
+    user_rating = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        choices=[(i, i) for i in range(1, 6)],
+        help_text="User rating 1-5",
+    )
+    user_feedback = models.TextField(null=True, blank=True)
+
+    # Additional context
+    conversation_context = models.JSONField(
+        default=dict, help_text="Additional conversation context and metadata"
+    )
+
+    class Meta:
+        db_table = "conversations"
+        indexes = [
+            models.Index(fields=["external_id", "channel"]),
+            models.Index(fields=["organisation", "started_at"]),
+            models.Index(fields=["status"]),
+            models.Index(fields=["user_id"]),
+        ]
+        verbose_name = "Conversation"
+        verbose_name_plural = "Conversations"
+
+    def __str__(self):
+        title = self.title or f"Conv {self.id}"
+        return f"{title} ({self.channel})"
+
+
+class ConversationPart(models.Model):
+    """
+    Represents individual parts of a conversation:
+    - User messages
+    - Agent responses
+    - Tool calls
+    - Agent thinking/reasoning
+    - Errors
+    """
+
+    conversation = models.ForeignKey(
+        Conversation, on_delete=models.CASCADE, related_name="parts"
+    )
+
+    # Ordering within conversation
+    sequence_number = models.PositiveIntegerField(
+        help_text="Order of this part within the conversation"
+    )
+
+    # Actor and message type
+    actor = models.CharField(
+        max_length=20,
+        choices=[
+            ("user", "User"),
+            ("agent", "Agent"),
+            ("system", "System"),
+            ("llm", "LLM"),
+            ("tool", "Tool"),
+        ],
+        help_text="Who/what generated this part",
+    )
+
+    message_type = models.CharField(
+        max_length=30,
+        choices=[
+            ("message", "Message"),
+            ("intent_classification", "Intent Classification"),
+            ("llm_input", "LLM Input"),
+            ("llm_output", "LLM Output"),
+            ("tool_execution", "Tool Execution"),
+            ("tool_error", "Tool Error"),
+            ("slack_output", "Slack Output"),
+            ("slack_file_output", "Slack File Output"),
+            ("workflow_completion", "Workflow Completion"),
+            ("error", "Error"),
+            ("thinking", "Agent Thinking"),
+        ],
+        help_text="Type of message/interaction",
+    )
+
+    # Legacy field for backward compatibility
+    part_type = models.CharField(
+        max_length=20,
+        choices=[
+            ("user_message", "User Message"),
+            ("agent_response", "Agent Response"),
+            ("tool_call", "Tool Call"),
+            ("tool_result", "Tool Result"),
+            ("agent_thinking", "Agent Thinking"),
+            ("error", "Error"),
+            ("system", "System Message"),
+        ],
+        null=True,
+        blank=True,
+        help_text="Legacy field - use actor and message_type instead",
+    )
+
+    # Content
+    content = models.TextField(help_text="The actual content of this conversation part")
+
+    # Tool-specific fields
+    tool_name = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Name of tool used (if part_type is tool_call/tool_result)",
+    )
+    tool_input = models.JSONField(
+        null=True, blank=True, help_text="Input parameters for tool call"
+    )
+    tool_output = models.JSONField(
+        null=True, blank=True, help_text="Output from tool execution"
+    )
+
+    # Performance tracking
+    tokens_used = models.PositiveIntegerField(
+        default=0, help_text="Tokens used for this part"
+    )
+    cost = models.DecimalField(
+        max_digits=8, decimal_places=4, default=0, help_text="Cost for this part in USD"
+    )
+    duration_ms = models.PositiveIntegerField(
+        default=0, help_text="Duration in milliseconds"
+    )
+
+    # Metadata
+    metadata = models.JSONField(
+        default=dict, help_text="Additional metadata for this part"
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "conversation_parts"
+        indexes = [
+            models.Index(fields=["conversation", "sequence_number"]),
+            models.Index(fields=["actor"]),
+            models.Index(fields=["message_type"]),
+            models.Index(fields=["actor", "message_type"]),
+            models.Index(fields=["part_type"]),  # Keep for backward compatibility
+            models.Index(fields=["tool_name"]),
+            models.Index(fields=["created_at"]),
+        ]
+        unique_together = [("conversation", "sequence_number")]
+        ordering = ["sequence_number"]
+        verbose_name = "Conversation Part"
+        verbose_name_plural = "Conversation Parts"
+
+    def __str__(self):
+        return f"Conv {self.conversation.id} - Part {self.sequence_number} ({self.part_type})"
+
+
 # Note: Removed Model and ModelEmbedding classes.

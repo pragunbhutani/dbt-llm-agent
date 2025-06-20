@@ -24,6 +24,15 @@ The project is a monorepo that looks something like this:
 │   ├── manage.py
 │   ├── ragstar/                 # Django settings directory
 │   ├── apps/                    # Django apps
+│   │   ├── accounts             # user accounts, organisations, org settings etc.
+│   │   ├── data_sources         # connection to knowledge sources like dbt
+│   │   ├── embeddings           # storing and retrieving embeddings
+│   │   ├── integrations         # integrations to external tools like slack, metabase etc.
+│   │   ├── knowledge_base       # information about our dbt projects, models, questions etc.
+│   │   ├── llm_providers        # interface for interacting with LLM provider APIs
+│   │   ├── workflows            # all workflows, agentic or not
+│   │   │   ├── workflow_name    # each workflow has a workflow.py, prompts.py etc.
+│   │   ├──                      # More apps may be found here
 │   ├── static/
 │   ├── pyproject.toml           # Python dependencies
 │   ├── uv.lock                  # Lock file
@@ -37,8 +46,8 @@ The project is a monorepo that looks something like this:
 │   │   │   ├── dashboard/       # Dashboard pages
 │   │   │   ├── ...
 │   │   ├── components/          # Creates reusable react components
-│   │   ├── ...                  # Other reusable utilities should be placed here
-│   ├── ...                      # NextJS, Typescript, package.json, eslint etc.
+│   │   └── ...                  # Other reusable utilities should be placed here
+│   └── ...                      # NextJS, Typescript, package.json, eslint etc.
 ├── mcp_server/                  # MCP Server for LLM applications
 ├── config_examples/             # Config examples like .slack_manifest.example.json, .ragstarrules.example.yml
 ├── docs/                        # GitHub Pages docs (unchanged)
@@ -63,6 +72,10 @@ The project is a monorepo that looks something like this:
 - Use TailwindCSS classes for style only. Do not define custom or inline css.
 - Examine the structure of the src/ folder before creating new directories to avoid duplication.
 - The `shadcn-ui` package has been deprecated in favour of `shadcn`
+
+#### backend_django
+- All of our workflows, whether agentic or not are stored under apps/workflows.
+- Each workflow has a workflow.py, prompts.py and other files that store this infomation consistently.
 
 ## Other Services Used
 

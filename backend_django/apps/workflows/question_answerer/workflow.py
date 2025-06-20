@@ -80,8 +80,10 @@ class SearchOrganizationalContextInput(BaseModel):
 
 
 class FinishWorkflowInput(BaseModel):
-    final_answer: str = Field(
-        description="The comprehensive final answer text containing the SQL query, explanations (as comments), and any footnotes. Follow the SQL style guide provided in the prompt."
+    answer: str = Field(..., description="The user-facing answer text.")
+    sql_query: Optional[str] = Field(
+        default=None,
+        description="A SQL query that supports the answer, if applicable.",
     )
 
 
@@ -159,11 +161,20 @@ class QuestionAnswererAgent:
                     )
                     # Use AsyncPostgresSaver, but it needs an async connection
                     # This initialization might need refactoring if issues persist
-                    self.memory = AsyncPostgresSaver(conn=self.conn_pool)
-                    if self.verbose:
-                        logger.info(
-                            "Initialized AsyncPostgresSaver checkpointer (using async pool)."
-                        )
+                    try:
+                        self.memory = AsyncPostgresSaver(conn=self.conn_pool)
+                        if self.verbose:
+                            logger.info(
+                                "Initialized AsyncPostgresSaver checkpointer (using async pool)."
+                            )
+                    except RuntimeError as e:
+                        if "no running event loop" in str(e):
+                            logger.info(
+                                "AsyncPostgresSaver requires running event loop, deferring initialization until needed"
+                            )
+                            self.memory = None  # Will be initialized later when needed
+                        else:
+                            raise
                 else:
                     self.conn_pool = None
                     logger.warning(
@@ -189,10 +200,17 @@ class QuestionAnswererAgent:
         """Performs the synchronous DB query for model summaries."""
         summary = []
         try:
+            # Get usable model embeddings with their related models
             usable_model_embeddings = ModelEmbedding.objects.filter(
                 can_be_used_for_answers=True
-            ).values_list("model_name", flat=True)
-            usable_models = Model.objects.filter(name__in=list(usable_model_embeddings))
+            ).select_related("model")
+
+            # Extract model names from the embeddings
+            usable_model_names = [
+                emb.model.name for emb in usable_model_embeddings if emb.model
+            ]
+            usable_models = Model.objects.filter(name__in=usable_model_names)
+
             for model in usable_models:
                 summary.append(
                     {
@@ -268,8 +286,8 @@ class QuestionAnswererAgent:
                     .filter(distance__lt=(1.0 - similarity_threshold))
                     .order_by("distance")[:n_results]
                 )
-                found_model_names = [emb.model_name for emb in embeddings]
-                distances_map = {emb.model_name: emb.distance for emb in embeddings}
+                found_model_names = [emb.model.name for emb in embeddings]
+                distances_map = {emb.model.name: emb.distance for emb in embeddings}
                 models = Model.objects.filter(name__in=found_model_names)
                 serializer = ModelSerializer(models, many=True)
                 results = serializer.data
@@ -408,16 +426,16 @@ class QuestionAnswererAgent:
                 return []  # Return empty list on error
 
         @tool(args_schema=FinishWorkflowInput)
-        async def finish_workflow(final_answer: str) -> str:
-            """Concludes the workflow and provides the final answer text to the user."""
+        async def finish_workflow(
+            answer: str, sql_query: Optional[str] = None
+        ) -> Dict[str, Any]:
+            """Concludes the workflow and returns both the answer text and an optional SQL query."""
             if self.verbose:
-                # Add newline for spacing
                 logger.info(
-                    f"\nTool: finish_workflow(final_answer='{final_answer[:100]}...')"
+                    f"\nTool: finish_workflow(answer='{answer[:80]}...', sql_present={bool(sql_query)})"
                 )
-            # This tool needs to be async to be called by ainvoke/astream
-            # but doesn't perform any async operations itself.
-            return final_answer
+
+            return {"answer": answer, "sql_query": sql_query}
 
         self._tools = [
             fetch_model_details,
@@ -708,20 +726,22 @@ class QuestionAnswererAgent:
                         f"Updated similar messages context: {len(tool_content)} items"
                     )
         elif tool_name == "finish_workflow":
-            if isinstance(tool_content, str):
-                updates["final_answer"] = tool_content
-                # Explicitly capture the current accumulated_models when final_answer is set
+            # Expecting dict with keys 'answer' and optional 'sql_query'
+            if isinstance(tool_content, dict):
+                updates["final_answer"] = tool_content.get("answer")
+                if tool_content.get("sql_query"):
+                    updates["sql_query"] = tool_content.get("sql_query")
+
                 updates["models_snapshot_for_final_answer"] = list(
                     state.get("accumulated_models", [])
                 )
+
                 if self.verbose:
-                    # Add separators
                     logger.info("\n--- Final Answer Received via Tool ---")
             else:
                 logger.warning(
-                    f"Finish tool returned non-string content: {type(tool_content)}"
+                    f"Finish tool returned unexpected content type: {type(tool_content)}"
                 )
-                updates["final_answer"] = "Error: Failed to finalize answer format."
 
         if self.verbose and updates:
             # Add separators
@@ -1074,6 +1094,7 @@ class QuestionAnswererAgent:
         # Prepare result dictionary (same as sync version)
         result = {
             "answer": "Could not determine a final answer.",
+            "sql_query": None,
             "models_used": (
                 final_state.get("models_snapshot_for_final_answer", [])
                 if final_state
@@ -1085,10 +1106,9 @@ class QuestionAnswererAgent:
         }
 
         if final_state:
-            if final_state.get(
-                "final_answer"
-            ):  # This should now be set by the graph if an answer was found
+            if final_state.get("final_answer"):
                 result["answer"] = final_state["final_answer"]
+                result["sql_query"] = final_state.get("sql_query")
                 # If final_answer is set, there should be no warning about premature end
                 result["warning"] = (
                     None  # Clear any previous warning if answer is now found

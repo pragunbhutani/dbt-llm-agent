@@ -16,6 +16,9 @@ import sys  # Add this line
 import dj_database_url  # Add this import
 from typing import Optional
 from datetime import timedelta
+import logging
+import pytz
+from datetime import datetime
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -143,7 +146,7 @@ CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
-CELERY_TIMEZONE = "UTC"
+CELERY_TIMEZONE = "UTC"  # Will be updated after TIME_ZONE is determined
 
 
 # Password validation
@@ -170,11 +173,40 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+# Auto-detect system timezone, fallback to UTC if detection fails
+import time
+
+try:
+    # Get system timezone
+    if hasattr(time, "tzname") and time.tzname:
+        # Use system timezone name
+        TIME_ZONE = os.environ.get("TZ") or time.tzname[0] or "UTC"
+    else:
+        TIME_ZONE = os.environ.get("TZ", "UTC")
+except:
+    TIME_ZONE = "UTC"
+
+# For better timezone handling, let's use a more reliable method
+import zoneinfo
+import datetime
+
+try:
+    # Get the system's local timezone
+    local_tz = datetime.datetime.now().astimezone().tzinfo
+    if hasattr(local_tz, "key"):
+        TIME_ZONE = local_tz.key
+    else:
+        # Fallback to environment variable or UTC
+        TIME_ZONE = os.environ.get("TZ", "UTC")
+except:
+    TIME_ZONE = os.environ.get("TZ", "UTC")
 
 USE_I18N = True
 
 USE_TZ = True
+
+# Update Celery timezone to match Django timezone
+CELERY_TIMEZONE = TIME_ZONE
 
 
 # Static files (CSS, JavaScript, Images)
@@ -274,6 +306,7 @@ SIMPLE_JWT = {
     "TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainPairSerializer",
     "TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSerializer",
 }
+
 
 LOGGING = {
     "version": 1,
