@@ -35,6 +35,7 @@
     "scopes": {
       "bot": [
         "commands",
+        "team:read",
         "im:history",
         "app_mentions:read",
         "chat:write",

@@ -136,10 +136,16 @@ middleware = [
     )
 ]
 
-# Create the Starlette application
+# Import the MCP FastAPI app
+from apps.mcp_server.main import app as mcp_app
+
+# Create the Starlette application with MCP server mounted
 application = Starlette(
     on_startup=[startup_event],
     on_shutdown=[shutdown_event],
     middleware=middleware,  # Add middleware if you have any
-    routes=[Mount("/", app=django_asgi_app)],  # Mount the Django app
+    routes=[
+        Mount("/api/mcp", app=mcp_app),  # Mount MCP server at /api/mcp
+        Mount("/", app=django_asgi_app),  # Mount Django app at root
+    ],
 )

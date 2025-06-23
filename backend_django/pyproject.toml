@@ -47,6 +47,12 @@ dependencies = [
     "django-cors-headers>=4.7.0",
     "celery>=5.5.3",
     "redis[hiredis]>=6.2.0",
+    "mcp>=1.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.0.0",
+    "httpx>=0.24.0",
+    "fastmcp>=2.9.0",
 ]
 
 [project.scripts]

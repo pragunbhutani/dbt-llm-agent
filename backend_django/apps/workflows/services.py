@@ -45,8 +45,8 @@ _slack_client_instance: Optional[AsyncWebClient] = None
 def get_slack_web_client() -> Optional[AsyncWebClient]:
     """
     Provides a singleton instance of the Slack AsyncWebClient.
-    Initializes the client on first call using INTEGRATIONS_SLACK_BOT_TOKEN from Django settings.
-    Returns None if slack_sdk is not installed or token is not configured.
+    Uses the first available organization's Slack integration credentials.
+    Returns None if slack_sdk is not installed or no Slack integration is configured.
     """
     global _slack_client_instance
 
@@ -57,16 +57,39 @@ def get_slack_web_client() -> Optional[AsyncWebClient]:
         return None
 
     if _slack_client_instance is None:
-        slack_bot_token = getattr(settings, "INTEGRATIONS_SLACK_BOT_TOKEN", None)
-        if not slack_bot_token:
+        try:
+            from apps.integrations.models import OrganisationIntegration
+
+            # Get the first available Slack integration
+            org_integration = OrganisationIntegration.objects.filter(
+                integration_key="slack",
+                is_enabled=True,
+            ).first()
+
+            if not org_integration:
+                logger.error(
+                    "No enabled Slack integration found. Slack client cannot be initialized."
+                )
+                return None
+
+            slack_bot_token = org_integration.credentials.get("bot_token")
+            if not slack_bot_token:
+                logger.error(
+                    "No bot token found in Slack integration. Slack client cannot be initialized."
+                )
+                return None
+
+            # AsyncWebClient is already imported at module level if available
+            _slack_client_instance = AsyncWebClient(token=slack_bot_token)
+            logger.info(
+                "Slack AsyncWebClient initialized singleton using integration credentials."
+            )
+
+        except Exception as e:
             logger.error(
-                "INTEGRATIONS_SLACK_BOT_TOKEN is not configured in Django settings. Slack client cannot be initialized."
+                f"Error creating Slack client from integration credentials: {e}"
             )
             return None
-
-        # AsyncWebClient is already imported at module level if available
-        _slack_client_instance = AsyncWebClient(token=slack_bot_token)
-        logger.info("Slack AsyncWebClient initialized singleton.")
 
     return _slack_client_instance
 

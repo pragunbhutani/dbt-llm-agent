@@ -75,6 +75,7 @@ INSTALLED_APPS = [
     "apps.llm_providers.apps.LlmProvidersConfig",
     "apps.workflows.apps.WorkflowsConfig",
     "apps.integrations.apps.IntegrationsConfig",
+    "apps.mcp_server.apps.McpServerConfig",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -237,6 +238,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 LLM_OPENAI_API_KEY = os.environ.get("LLM_OPENAI_API_KEY")
 LLM_GOOGLE_API_KEY = os.environ.get("LLM_GOOGLE_API_KEY")
 LLM_ANTHROPIC_API_KEY = os.environ.get("LLM_ANTHROPIC_API_KEY")
+
+# MCP OAuth Configuration
+MCP_AUTHORIZATION_BASE_URL = os.environ.get(
+    "MCP_AUTHORIZATION_BASE_URL", "http://localhost:8000"
+)
 
 # Chat Provider and Model
 LLM_CHAT_PROVIDER_NAME = os.environ.get("LLM_CHAT_PROVIDER_NAME", "openai").lower()

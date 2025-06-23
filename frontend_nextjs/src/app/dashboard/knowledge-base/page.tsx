@@ -1,19 +1,18 @@
 import React from "react";
-import Heading from "@/components/heading";
 import DbtModelsTable from "./dbt-models-table";
+import PageLayout from "@/components/layout/page-layout";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 
 export default function KnowledgeBasePage() {
   return (
-    <>
-      <div className="flex h-16 items-center border-b border-gray-200 px-4">
-        <Heading
-          title="Knowledge Base"
-          subtitle="Manage your dbt models to use with RAGStar AI."
-        />
-      </div>
-      <div className="p-4">
+    <PageLayout
+      title="Knowledge Base"
+      subtitle="Manage your dbt models to use with RAGStar AI."
+    >
+      <div className="space-y-6">
+        {/* <Breadcrumb items={[{ label: "Knowledge Base" }]} className="mb-4" /> */}
         <DbtModelsTable />
       </div>
-    </>
+    </PageLayout>
   );
 }

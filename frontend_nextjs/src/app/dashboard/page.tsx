@@ -1,6 +1,6 @@
 "use client";
 
-import Heading from "@/components/heading";
+import PageLayout from "@/components/layout/page-layout";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -30,6 +30,7 @@ import { CheckCircle2, Circle, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { fetcher } from "@/utils/fetcher";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 
 function OnboardingStep({
   isComplete,
@@ -124,19 +125,21 @@ export default function DashboardPage() {
     }
   };
 
-  return (
-    <>
-      <div className="flex h-16 items-center justify-between border-b border-gray-200 px-4">
-        <Heading
-          title="Dashboard"
-          subtitle="Here's an overview of your Ragstar setup."
-        />
-        <AddProjectModal>
-          <Button>Add dbt Project</Button>
-        </AddProjectModal>
-      </div>
+  const headerActions = (
+    <AddProjectModal>
+      <Button>Add dbt Project</Button>
+    </AddProjectModal>
+  );
 
-      <div className="p-4">
+  return (
+    <PageLayout
+      title="Dashboard"
+      subtitle="Here's an overview of your Ragstar setup."
+      actions={headerActions}
+    >
+      <div className="">
+        {/* <Breadcrumb items={[{ label: "Dashboard" }]} className="mb-4" /> */}
+
         <Card className="mb-4">
           <Accordion type="single" collapsible className="w-full">
             <AccordionItem value="item-1" className="border-none">
@@ -372,6 +375,6 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </div>
-    </>
+    </PageLayout>
   );
 }

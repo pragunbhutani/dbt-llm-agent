@@ -847,6 +847,15 @@ class SlackResponderAgent:
                 )
 
         except Conversation.DoesNotExist:
+            # Get enabled integrations from the OrganisationIntegration model
+            from apps.integrations.models import OrganisationIntegration
+
+            enabled_integrations = list(
+                OrganisationIntegration.objects.filter(
+                    organisation=self.org_settings.organisation, is_enabled=True
+                ).values_list("integration_key", flat=True)
+            )
+
             # Create new conversation
             conversation = Conversation.objects.create(
                 organisation=self.org_settings.organisation,
@@ -862,7 +871,7 @@ class SlackResponderAgent:
                 llm_provider=getattr(self.org_settings, "llm_anthropic_api_key", None)
                 and "anthropic"
                 or "openai",
-                enabled_integrations=self.org_settings.enabled_integrations or [],
+                enabled_integrations=enabled_integrations,
             )
 
             if self.verbose:

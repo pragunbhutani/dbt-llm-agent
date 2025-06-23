@@ -29,7 +29,7 @@ from django.conf import settings as django_settings  # To access Django global s
 from asgiref.sync import sync_to_async
 
 # LLM Service import (similar to QuestionAnswerer)
-from apps.llm_providers.services import default_chat_service, ChatService
+from apps.llm_providers.services import ChatService
 from apps.accounts.models import OrganisationSettings
 
 # Query Executor specific imports

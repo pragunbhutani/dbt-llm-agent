@@ -96,13 +96,6 @@ class OrganisationSettings(models.Model):
         related_name="settings",
     )
 
-    # Slack Integration Settings
-    # TODO: These fields should be encrypted.
-    slack_team_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
-    slack_bot_token = models.TextField(blank=True, null=True)
-    slack_signing_secret = models.TextField(blank=True, null=True)
-    slack_app_token = models.TextField(blank=True, null=True)
-
     # LLM Provider Settings
     llm_chat_provider = models.CharField(
         max_length=50,
@@ -128,27 +121,6 @@ class OrganisationSettings(models.Model):
     llm_openai_api_key = models.TextField(blank=True, null=True)
     llm_google_api_key = models.TextField(blank=True, null=True)
     llm_anthropic_api_key = models.TextField(blank=True, null=True)
-
-    # Snowflake Integration
-    snowflake_enabled = models.BooleanField(default=False)
-    snowflake_user = models.CharField(max_length=255, null=True, blank=True)
-    snowflake_password = models.CharField(max_length=255, null=True, blank=True)
-    snowflake_account = models.CharField(max_length=255, null=True, blank=True)
-    snowflake_warehouse = models.CharField(max_length=255, null=True, blank=True)
-    snowflake_database = models.CharField(max_length=255, null=True, blank=True)
-    snowflake_schema = models.CharField(max_length=255, null=True, blank=True)
-
-    # Metabase Integration
-    metabase_enabled = models.BooleanField(default=False)
-    metabase_url = models.URLField(null=True, blank=True)
-    metabase_api_key = models.CharField(max_length=255, null=True, blank=True)
-    metabase_database_id = models.IntegerField(default=1)
-
-    # Enabled Integrations
-    enabled_integrations = models.JSONField(
-        default=list,
-        help_text="List of enabled integration keys (e.g., ['snowflake', 'metabase'])",
-    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

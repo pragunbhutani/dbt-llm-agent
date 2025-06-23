@@ -29,12 +29,21 @@ class DashboardStatsAPIView(APIView):
         ).count()
         questions_count = Question.objects.filter(organisation=organisation).count()
 
-        # Check for slack integration
+        # Check for slack integration using new integration model
         slack_integrated = False
         try:
-            if organisation.settings and organisation.settings.slack_bot_token:
+            from apps.integrations.models import OrganisationIntegration
+
+            slack_integration = OrganisationIntegration.objects.filter(
+                organisation=organisation,
+                integration__key="slack",
+                is_enabled=True,
+                credentials__isnull=False,
+            ).first()
+
+            if slack_integration and slack_integration.credentials.get("bot_token"):
                 slack_integrated = True
-        except Organisation.settings.RelatedObjectDoesNotExist:
+        except Exception:
             slack_integrated = False
 
         onboarding_steps = {

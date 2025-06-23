@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
-import Heading from "@/components/heading";
+import PageLayout from "@/components/layout/page-layout";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -136,14 +137,12 @@ export default function SettingsPage() {
   }
 
   return (
-    <>
-      <div className="flex h-16 items-center border-b border-gray-200 px-4">
-        <Heading
-          title="Settings"
-          subtitle="Manage your workspace and LLM configurations."
-        />
-      </div>
-      <div className="p-4">
+    <PageLayout
+      title="Settings"
+      subtitle="Manage your workspace and LLM configurations."
+    >
+      <div className="">
+        {/* <Breadcrumb items={[{ label: "Settings" }]} className="mb-4" /> */}
         <Tabs defaultValue="llm">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="llm">LLM Configuration</TabsTrigger>
@@ -344,6 +343,6 @@ export default function SettingsPage() {
           </TabsContent>
         </Tabs>
       </div>
-    </>
+    </PageLayout>
   );
 }

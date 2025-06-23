@@ -315,3 +315,286 @@ def generate_conversation_analytics(self, org_id: int, days_back: int = 7):
     except Exception as exc:
         logger.exception(f"Error generating analytics: {exc}")
         return {"success": False, "error": str(exc)}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def run_query_executor_workflow(
+    self,
+    channel_id: str,
+    thread_ts: str,
+    user_id: str,
+    trigger_message_ts: str,
+    org_settings_id: int,
+    slack_bot_token: str,
+):
+    """
+    Celery task to run QueryExecutor workflow in the background.
+
+    Args:
+        channel_id: Slack channel ID
+        thread_ts: Slack thread timestamp
+        user_id: Slack user ID who triggered the shortcut
+        trigger_message_ts: Timestamp of the message the shortcut was triggered on
+        org_settings_id: Organization settings ID
+        slack_bot_token: Slack bot token for API calls
+    """
+
+    try:
+        logger.info(
+            f"Starting QueryExecutor workflow task for {channel_id}/{thread_ts}"
+        )
+
+        # Get organization settings
+        try:
+            org_settings = OrganisationSettings.objects.get(
+                organisation_id=org_settings_id
+            )
+        except OrganisationSettings.DoesNotExist:
+            logger.error(f"Organization settings not found: {org_settings_id}")
+            return {"success": False, "error": "Organization settings not found"}
+
+        # Create Slack client
+        slack_client = AsyncWebClient(token=slack_bot_token)
+
+        # Import and create QueryExecutor workflow
+        from apps.workflows.query_executor.workflow import QueryExecutorWorkflow
+
+        async def run_workflow():
+            try:
+                workflow = QueryExecutorWorkflow(
+                    org_settings=org_settings, slack_client=slack_client
+                )
+
+                await workflow.run_workflow(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                    trigger_message_ts=trigger_message_ts,
+                )
+
+                return {"success": True}
+
+            except Exception as e:
+                logger.error(f"Error in QueryExecutor workflow: {e}", exc_info=True)
+
+                # Send error message to user
+                try:
+                    await slack_client.chat_postMessage(
+                        channel=channel_id,
+                        thread_ts=thread_ts,
+                        text=f"<@{user_id}> Sorry, an unexpected error occurred while processing the query executor: {e}",
+                    )
+                except Exception as post_error:
+                    logger.error(f"Failed to post error message to Slack: {post_error}")
+
+                raise e
+
+        # Execute the async workflow
+        result = asyncio.run(run_workflow())
+
+        logger.info(
+            f"QueryExecutor workflow completed successfully for {channel_id}/{thread_ts}"
+        )
+
+        return {
+            "success": True,
+            "result": result,
+            "completed_at": timezone.now().isoformat(),
+        }
+
+    except Exception as exc:
+        logger.exception(f"Error in QueryExecutor workflow task: {exc}")
+
+        # Retry on transient errors
+        if self.request.retries < self.max_retries:
+            logger.info(
+                f"Retrying QueryExecutor workflow task (attempt {self.request.retries + 1})"
+            )
+            raise self.retry(exc=exc)
+
+        # Send error message to user after all retries exhausted
+        try:
+            asyncio.run(
+                send_error_message_to_slack(
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                    user_id=user_id,
+                    slack_bot_token=slack_bot_token,
+                    error_message="I'm sorry, I encountered a persistent issue while processing the query executor. Please try again later or contact support.",
+                )
+            )
+        except Exception as slack_error:
+            logger.error(f"Failed to send error message to Slack: {slack_error}")
+
+        return {"success": False, "error": str(exc), "retries_exhausted": True}
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def run_knowledge_extractor_workflow(
+    self,
+    channel_id: str,
+    thread_ts: str,
+    user_id: str,
+    org_settings_id: int,
+    slack_bot_token: str,
+):
+    """
+    Celery task to run KnowledgeExtractor workflow in the background.
+
+    Args:
+        channel_id: Slack channel ID
+        thread_ts: Slack thread timestamp
+        user_id: Slack user ID who triggered the shortcut
+        org_settings_id: Organization settings ID
+        slack_bot_token: Slack bot token for API calls
+    """
+
+    try:
+        logger.info(
+            f"Starting KnowledgeExtractor workflow task for {channel_id}/{thread_ts}"
+        )
+
+        # Get organization settings
+        try:
+            org_settings = OrganisationSettings.objects.get(
+                organisation_id=org_settings_id
+            )
+        except OrganisationSettings.DoesNotExist:
+            logger.error(f"Organization settings not found: {org_settings_id}")
+            return {"success": False, "error": "Organization settings not found"}
+
+        # Create Slack client
+        slack_client = AsyncWebClient(token=slack_bot_token)
+
+        # Import required classes
+        from apps.workflows.knowledge_extractor.workflow import (
+            KnowledgeExtractorWorkflow,
+        )
+        from apps.llm_providers.services import ChatService
+
+        async def run_workflow():
+            try:
+                # Initialize LLM service
+                llm_service = ChatService(org_settings=org_settings)
+                llm_client = llm_service.get_client()
+
+                if not llm_client:
+                    error_msg = "LLM client not available. Check LLM provider settings."
+                    logger.error(f"KnowledgeExtractor workflow: {error_msg}")
+                    await slack_client.chat_postMessage(
+                        channel=user_id,  # DM the user who invoked
+                        text=f"Sorry <@{user_id}>, I can't learn from the thread right now because the Language Model service isn't configured correctly. Please contact an administrator.",
+                    )
+                    return {"success": False, "error": error_msg}
+
+                # Get bot user ID for filtering
+                bot_user_id_for_filtering = None
+                try:
+                    auth_test_response = await asyncio.wait_for(
+                        slack_client.auth_test(), timeout=5.0
+                    )
+                    if auth_test_response.get("ok"):
+                        bot_user_id_for_filtering = auth_test_response.get("user_id")
+                        logger.info(
+                            f"Fetched bot user ID for filtering: {bot_user_id_for_filtering}"
+                        )
+                except Exception as e:
+                    logger.warning(f"Failed to get bot user ID for filtering: {e}")
+
+                # Fetch thread messages
+                thread_replies_response = await slack_client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                )
+
+                if not (
+                    thread_replies_response.get("ok")
+                    and thread_replies_response.get("messages")
+                ):
+                    error_msg = f"Failed to fetch thread messages: {thread_replies_response.get('error')}"
+                    logger.error(error_msg)
+                    await slack_client.chat_postMessage(
+                        channel=user_id,  # DM the user
+                        text=f"Sorry <@{user_id}>, I couldn't fetch the thread messages to learn from.",
+                    )
+                    return {"success": False, "error": error_msg}
+
+                thread_messages = thread_replies_response["messages"]
+                logger.info(
+                    f"Fetched {len(thread_messages)} messages from thread {channel_id}/{thread_ts}"
+                )
+
+                # Run knowledge extraction workflow
+                knowledge_workflow = KnowledgeExtractorWorkflow(
+                    llm_client=llm_client,
+                    bot_user_id_to_ignore=bot_user_id_for_filtering,
+                )
+
+                extracted_data = await knowledge_workflow.extract_learnings_from_thread(
+                    thread_messages=thread_messages,
+                    channel_id=channel_id,
+                    thread_ts=thread_ts,
+                )
+
+                # Send success message to user
+                await slack_client.chat_postMessage(
+                    channel=user_id,  # DM the user
+                    text=f"<@{user_id}> I've successfully analyzed the thread and extracted valuable insights! The learnings have been added to the knowledge base.",
+                )
+
+                return {"success": True, "extracted_data": extracted_data}
+
+            except Exception as e:
+                logger.error(
+                    f"Error in KnowledgeExtractor workflow: {e}", exc_info=True
+                )
+
+                # Send error message to user
+                try:
+                    await slack_client.chat_postMessage(
+                        channel=user_id,  # DM the user
+                        text=f"Sorry <@{user_id}>, an unexpected error occurred while learning from the thread: {e}",
+                    )
+                except Exception as post_error:
+                    logger.error(f"Failed to post error message to Slack: {post_error}")
+
+                raise e
+
+        # Execute the async workflow
+        result = asyncio.run(run_workflow())
+
+        logger.info(
+            f"KnowledgeExtractor workflow completed successfully for {channel_id}/{thread_ts}"
+        )
+
+        return {
+            "success": True,
+            "result": result,
+            "completed_at": timezone.now().isoformat(),
+        }
+
+    except Exception as exc:
+        logger.exception(f"Error in KnowledgeExtractor workflow task: {exc}")
+
+        # Retry on transient errors
+        if self.request.retries < self.max_retries:
+            logger.info(
+                f"Retrying KnowledgeExtractor workflow task (attempt {self.request.retries + 1})"
+            )
+            raise self.retry(exc=exc)
+
+        # Send error message to user after all retries exhausted
+        try:
+            asyncio.run(
+                send_error_message_to_slack(
+                    channel_id=user_id,  # Send as DM since this is what the original did
+                    thread_ts=None,  # DM doesn't need thread_ts
+                    user_id=user_id,
+                    slack_bot_token=slack_bot_token,
+                    error_message="I'm sorry, I encountered a persistent issue while learning from the thread. Please try again later or contact support.",
+                )
+            )
+        except Exception as slack_error:
+            logger.error(f"Failed to send error message to Slack: {slack_error}")
+
+        return {"success": False, "error": str(exc), "retries_exhausted": True}
