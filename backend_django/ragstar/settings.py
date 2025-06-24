@@ -415,6 +415,10 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",  # Alternative localhost
 ]
 
+# Add APP_HOST-based origin if APP_HOST is set
+if APP_HOST:
+    CORS_ALLOWED_ORIGINS.append(f"http://{APP_HOST}:3000")
+
 # Add NEXTAUTH_URL to CORS origins if it exists
 NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL")
 if NEXTAUTH_URL:
@@ -430,6 +434,10 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+# Add APP_HOST-based origin if APP_HOST is set
+if APP_HOST:
+    CSRF_TRUSTED_ORIGINS.append(f"http://{APP_HOST}:3000")
 
 # Add NEXTAUTH_URL to CSRF trusted origins if it exists
 if NEXTAUTH_URL:
