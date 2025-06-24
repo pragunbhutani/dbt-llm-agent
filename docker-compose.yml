@@ -109,9 +109,18 @@ services:
     ports:
       - "${FRONTEND_PORT:-3000}:3000" # Expose Next.js app port (host:container)
     volumes:
-      - ./frontend_nextjs:/app # Mount local code for development
-      - /app/node_modules # Keep container node_modules
-      - /app/.next # Keep container .next folder
+      # Mount source code for development
+      - ./frontend_nextjs/src:/app/src
+      - ./frontend_nextjs/public:/app/public
+      # Mount config files individually
+      - ./frontend_nextjs/tsconfig.json:/app/tsconfig.json:ro
+      - ./frontend_nextjs/next.config.ts:/app/next.config.ts:ro
+      - ./frontend_nextjs/components.json:/app/components.json:ro
+      - ./frontend_nextjs/postcss.config.mjs:/app/postcss.config.mjs:ro
+      - ./frontend_nextjs/eslint.config.mjs:/app/eslint.config.mjs:ro
+      # Preserve container's node_modules and .next for proper module resolution
+      - frontend_node_modules:/app/node_modules
+      - frontend_next_cache:/app/.next
     env_file:
       - .env
     environment:
@@ -123,4 +132,8 @@ services:
 
 volumes:
   postgres_data:
+    driver: local
+  frontend_node_modules:
+    driver: local
+  frontend_next_cache:
     driver: local

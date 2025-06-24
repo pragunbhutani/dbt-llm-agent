@@ -18,9 +18,17 @@ RUN pnpm install --frozen-lockfile
 # This stage is for local development. It uses the installed dependencies
 # and starts the Next.js development server.
 FROM dependencies AS development
+# Copy the TypeScript configuration and other config files first
+COPY tsconfig.json next.config.ts components.json ./
+COPY postcss.config.mjs eslint.config.mjs ./
 # Copy the rest of the application source code.
 # While docker-compose will mount the local directory, this makes the image runnable on its own.
 COPY . .
+# Ensure the .next directory exists and has proper permissions
+RUN mkdir -p .next && chown -R node:node .next
+# Set proper ownership for the app directory
+RUN chown -R node:node /app
+USER node
 # The command to start the dev server with hot-reloading.
 CMD ["pnpm", "dev"]
 
