@@ -107,33 +107,20 @@ services:
       target: development
     container_name: ragstar_frontend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000" # Expose Next.js app port (host:container)
+      - "${FRONTEND_PORT:-3000}:3000"
     volumes:
-      # Mount source code for development
-      - ./frontend_nextjs/src:/app/src
-      - ./frontend_nextjs/public:/app/public
-      # Mount config files individually
-      - ./frontend_nextjs/tsconfig.json:/app/tsconfig.json:ro
-      - ./frontend_nextjs/next.config.ts:/app/next.config.ts:ro
-      - ./frontend_nextjs/components.json:/app/components.json:ro
-      - ./frontend_nextjs/postcss.config.mjs:/app/postcss.config.mjs:ro
-      - ./frontend_nextjs/eslint.config.mjs:/app/eslint.config.mjs:ro
-      # Preserve container's node_modules and .next for proper module resolution
-      - frontend_node_modules:/app/node_modules
-      - frontend_next_cache:/app/.next
+      - ./frontend_nextjs:/app
+      - /app/node_modules
+      - /app/.next
     env_file:
       - .env
     environment:
-      NODE_ENV: development # Explicitly set development mode for Next.js
-      INTERNAL_API_URL: http://backend-django:8000 # Internal Docker network URL
+      NODE_ENV: development
+      INTERNAL_API_URL: http://backend-django:8000
     depends_on:
       - backend-django
     restart: unless-stopped
 
 volumes:
   postgres_data:
-    driver: local
-  frontend_node_modules:
-    driver: local
-  frontend_next_cache:
     driver: local
