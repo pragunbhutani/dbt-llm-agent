@@ -66,6 +66,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "rest_framework_simplejwt.token_blacklist",
     "pgvector.django",
+    "django_extensions",
     # "django_cryptography",
     # Use full AppConfig paths
     "apps.accounts.apps.AccountsConfig",
@@ -414,6 +415,11 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:3000",  # Alternative localhost
 ]
 
+# Add NEXTAUTH_URL to CORS origins if it exists
+NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL")
+if NEXTAUTH_URL:
+    CORS_ALLOWED_ORIGINS.append(NEXTAUTH_URL)
+
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.ngrok-free\.app$",
     r"^https://.*\.vercel\.app$",  # For Vercel deployments
@@ -424,6 +430,10 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
+
+# Add NEXTAUTH_URL to CSRF trusted origins if it exists
+if NEXTAUTH_URL:
+    CSRF_TRUSTED_ORIGINS.append(NEXTAUTH_URL)
 
 # CORS Security Settings
 CORS_ALLOW_CREDENTIALS = True

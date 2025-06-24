@@ -53,6 +53,7 @@ dependencies = [
     "aiofiles>=23.0.0",
     "httpx>=0.24.0",
     "fastmcp>=2.9.0",
+    "django-extensions>=4.1",
 ]
 
 [project.scripts]
