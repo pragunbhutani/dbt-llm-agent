@@ -202,6 +202,14 @@ class Conversation(OrganisationScopedModelMixin, models.Model):
             models.Index(fields=["organisation", "started_at"]),
             models.Index(fields=["status"]),
             models.Index(fields=["user_id"]),
+            models.Index(fields=["organisation", "external_id"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organisation", "external_id"],
+                condition=models.Q(external_id__isnull=False),
+                name="unique_conversation_per_external_id",
+            ),
         ]
         verbose_name = "Conversation"
         verbose_name_plural = "Conversations"

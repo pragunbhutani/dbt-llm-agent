@@ -277,8 +277,14 @@ class SlackResponderAgent:
                         m.get("name") for m in models_used if isinstance(m, dict)
                     ]
 
+                    # Only include "Models used:" if there are actually models
+                    if model_names:
+                        content = f"Question Answerer completed. Models used: {', '.join(model_names)}"
+                    else:
+                        content = "Question Answerer completed."
+
                     await sync_to_async(self.conversation_logger.log_system_message)(
-                        content=f"Question Answerer completed. Models used: {', '.join(model_names)}",
+                        content=content,
                         metadata={
                             "action": "qa_completion",
                             "models_used": model_names,
@@ -358,7 +364,12 @@ class SlackResponderAgent:
                 return {
                     "success": True,
                     "is_valid": result.get("is_valid"),
-                    "verified_sql": result.get("corrected_sql_query"),
+                    # Even if the verifier couldn't mark the query as valid, we still pass back
+                    # the best version of the query we have (corrected or original). This allows
+                    # downstream logic to gracefully degrade by still showing users a candidate
+                    # query rather than hiding it entirely.
+                    "verified_sql": result.get("corrected_sql_query")
+                    or result.get("original_sql_query"),
                     "error": result.get("execution_error"),
                     "explanation": result.get("debug_explanation"),
                 }
@@ -684,25 +695,27 @@ class SlackResponderAgent:
 
         elif last_message.name == "verify_sql_query":
             if isinstance(tool_content, dict):
-                if tool_content.get("error"):
-                    updates["error_message"] = (
-                        f"SQL verification error: {tool_content.get('error')}"
-                    )
-                    logger.error(
-                        f"SQL verification failed: {tool_content.get('error')}"
-                    )
-                elif tool_content.get("success"):
+                # Treat verification errors as non-fatal so we can still provide maximum value.
+                # We only mark the workflow as errored if the verifier call itself failed (success == False).
+                if tool_content.get("success"):
                     updates["sql_is_verified"] = tool_content.get("is_valid", False)
                     updates["verified_sql_query"] = tool_content.get("verified_sql")
                     updates["sql_verification_error"] = tool_content.get("error")
                     updates["sql_verification_explanation"] = tool_content.get(
                         "explanation"
                     )
-
                     if self.verbose:
                         logger.info(
                             f"SQL verification completed: {updates['sql_is_verified']}"
                         )
+                else:
+                    # The verifier tool invocation itself failed; propagate as an error.
+                    updates["error_message"] = (
+                        f"SQL verification failed to run: {tool_content.get('error', 'Unknown error')}"
+                    )
+                    logger.error(
+                        f"SQL verification tool invocation failed: {tool_content.get('error')}"
+                    )
 
         elif last_message.name in [
             "post_final_response_with_snippet",
@@ -833,53 +846,94 @@ class SlackResponderAgent:
     ) -> Conversation:
         """Get or create a conversation for this Slack thread."""
         try:
-            # Try to get existing conversation
-            conversation = Conversation.objects.get(
+            # Try to get existing conversation using get_or_create to avoid duplicates
+            conversation, created = Conversation.objects.get_or_create(
                 organisation=self.org_settings.organisation,
                 external_id=thread_ts,
-                channel_id=channel_id,
-                status__in=[ConversationStatus.ACTIVE, ConversationStatus.COMPLETED],
+                defaults={
+                    "channel": "slack",
+                    "channel_type": "slack",
+                    "channel_id": channel_id,
+                    "user_id": user_id,
+                    "user_external_id": user_id,
+                    "status": ConversationStatus.ACTIVE,
+                    "trigger": ConversationTrigger.SLACK_MENTION,
+                    "initial_question": question,
+                    "llm_provider": getattr(
+                        self.org_settings, "llm_anthropic_api_key", None
+                    )
+                    and "anthropic"
+                    or "openai",
+                    "enabled_integrations": self._get_enabled_integrations(),
+                },
             )
 
-            if self.verbose:
-                logger.info(
-                    f"Found existing conversation {conversation.id} for thread {thread_ts}"
-                )
+            if created:
+                if self.verbose:
+                    logger.info(
+                        f"Created new conversation {conversation.id} for thread {thread_ts}"
+                    )
+            else:
+                if self.verbose:
+                    logger.info(
+                        f"Found existing conversation {conversation.id} for thread {thread_ts}"
+                    )
 
-        except Conversation.DoesNotExist:
-            # Get enabled integrations from the OrganisationIntegration model
-            from apps.integrations.models import OrganisationIntegration
-
-            enabled_integrations = list(
-                OrganisationIntegration.objects.filter(
-                    organisation=self.org_settings.organisation, is_enabled=True
-                ).values_list("integration_key", flat=True)
+        except Conversation.MultipleObjectsReturned:
+            # Handle case where duplicates still exist - get the first one
+            logger.warning(
+                f"Multiple conversations found for thread {thread_ts}, using the first one"
             )
-
-            # Create new conversation
-            conversation = Conversation.objects.create(
+            conversation = Conversation.objects.filter(
                 organisation=self.org_settings.organisation,
                 external_id=thread_ts,
-                channel="slack",
-                channel_type="slack",
-                channel_id=channel_id,
-                user_id=user_id,
-                user_external_id=user_id,
-                status=ConversationStatus.ACTIVE,
-                trigger=ConversationTrigger.SLACK_MENTION,
-                initial_question=question,
-                llm_provider=getattr(self.org_settings, "llm_anthropic_api_key", None)
-                and "anthropic"
-                or "openai",
-                enabled_integrations=enabled_integrations,
-            )
+            ).first()
 
-            if self.verbose:
-                logger.info(
-                    f"Created new conversation {conversation.id} for thread {thread_ts}"
+        except Exception as e:
+            logger.error(f"Error getting/creating conversation: {e}")
+            # Fallback: try to get any existing conversation for this thread
+            conversation = Conversation.objects.filter(
+                organisation=self.org_settings.organisation,
+                external_id=thread_ts,
+            ).first()
+
+            if not conversation:
+                # Fallback: create new conversation if none exists
+                enabled_integrations = self._get_enabled_integrations()
+                conversation = Conversation.objects.create(
+                    organisation=self.org_settings.organisation,
+                    external_id=thread_ts,
+                    channel="slack",
+                    channel_type="slack",
+                    channel_id=channel_id,
+                    user_id=user_id,
+                    user_external_id=user_id,
+                    status=ConversationStatus.ACTIVE,
+                    trigger=ConversationTrigger.SLACK_MENTION,
+                    initial_question=question,
+                    llm_provider=getattr(
+                        self.org_settings, "llm_anthropic_api_key", None
+                    )
+                    and "anthropic"
+                    or "openai",
+                    enabled_integrations=enabled_integrations,
                 )
+                if self.verbose:
+                    logger.info(
+                        f"Created fallback conversation {conversation.id} for thread {thread_ts}"
+                    )
 
         return conversation
+
+    def _get_enabled_integrations(self):
+        """Get list of enabled integrations for this organization."""
+        from apps.integrations.models import OrganisationIntegration
+
+        return list(
+            OrganisationIntegration.objects.filter(
+                organisation=self.org_settings.organisation, is_enabled=True
+            ).values_list("integration_key", flat=True)
+        )
 
     # --- Main Workflow Runner ---
     async def run_slack_workflow(

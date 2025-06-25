@@ -664,14 +664,12 @@ class QueryExecutorWorkflow:
             )
             return {"values": distinct_values}
 
-        # self.slack_tools was used before, let's ensure consistency
-        # The tools for ToolNode are those callable by the LLM.
-        self.debug_llm_tools = [  # These are for the debugging LLM
-            describe_table_tool,
-            list_column_values_tool,
-        ]
-        # If post_message_to_thread and post_csv_to_thread can be called by an LLM, add them.
-        # For now, they seem to be called directly by nodes.
+        # Only expose Snowflake-dependent debugging tools when credentials are configured.
+        if self.snowflake_creds:
+            self.debug_llm_tools = [describe_table_tool, list_column_values_tool]
+        else:
+            self.debug_llm_tools = []
+
         # self.all_defined_tools combines all tools that might be registered with a ToolNode
         self.all_defined_tools = self.debug_llm_tools  # + any other LLM-callable tools
 

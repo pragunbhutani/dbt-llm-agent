@@ -107,7 +107,7 @@ export default function IntegrationsPage() {
 
     try {
       const response = await fetch(
-        `/api/integrations/organisation-integrations/${integrationId}/toggle_enable/`,
+        `${process.env.NEXT_PUBLIC_API_URL}/api/integrations/organisation-integrations/${integrationId}/toggle_enable/`,
         {
           method: "POST",
           headers: {

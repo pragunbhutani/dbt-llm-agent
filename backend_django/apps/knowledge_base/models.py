@@ -15,7 +15,7 @@ class Model(OrganisationScopedModelMixin, models.Model):
     dbt_project = models.ForeignKey(
         DbtProject, on_delete=models.CASCADE, related_name="models", null=True
     )
-    name = models.CharField(max_length=255, unique=True, null=False)
+    name = models.CharField(max_length=255, null=False)
     path = models.CharField(max_length=1024, null=False)
     schema_name = models.CharField(
         max_length=255, null=True, blank=True
@@ -46,9 +46,7 @@ class Model(OrganisationScopedModelMixin, models.Model):
         null=True, blank=True, help_text="LLM-generated description of the model"
     )
     interpretation_details = models.JSONField(null=True, blank=True)
-    unique_id = models.CharField(
-        max_length=255, unique=True, null=True, blank=True
-    )  # Made nullable for now - should data_sources enforce this on creation?
+    unique_id = models.CharField(max_length=255, null=True, blank=True)
 
     def get_text_representation(self, include_documentation: bool = False) -> str:
         """Get a text representation of the model for embedding.
@@ -112,6 +110,17 @@ class Model(OrganisationScopedModelMixin, models.Model):
         db_table = "models"  # Match existing table name
         verbose_name = "DBT Model"
         verbose_name_plural = "DBT Models"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organisation", "dbt_project", "name"],
+                name="unique_model_per_org_project",
+            ),
+            models.UniqueConstraint(
+                fields=["organisation", "unique_id"],
+                name="unique_model_id_per_org",
+                condition=models.Q(unique_id__isnull=False),
+            ),
+        ]
 
 
 # Note: Removed Question, QuestionModel, ModelEmbedding classes from here.

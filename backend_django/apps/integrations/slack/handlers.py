@@ -203,7 +203,7 @@ def _register_event_handlers(app: App):
                 )
 
             # 5. Create conversation record
-            conversation = create_conversation_record(
+            conversation = get_or_create_conversation_record(
                 org_settings=org_settings,
                 user_id=user_id,
                 channel_id=channel_id,
@@ -429,8 +429,8 @@ def _register_event_handlers(app: App):
                 )
                 return
 
-            # Create conversation record
-            conversation = create_conversation_record(
+            # Get or create conversation record
+            conversation = get_or_create_conversation_record(
                 org_settings=org_settings,
                 user_id=user_id,
                 channel_id=channel_id,
@@ -535,45 +535,43 @@ def get_org_settings_for_team(team_id: str):
         return None
 
 
-def create_conversation_record(
+def get_or_create_conversation_record(
     org_settings, user_id: str, channel_id: str, thread_ts: str, question: str
 ) -> Conversation:
-    """Create a conversation record in the database."""
+    """Get or create a conversation record in the database for a Slack thread."""
     try:
-        conversation = Conversation.objects.create(
+        # Try to get existing conversation first
+        conversation, created = Conversation.objects.get_or_create(
             organisation=org_settings.organisation,
-            initial_question=question,
-            channel="slack",
-            user_id=user_id,
-            channel_id=channel_id,
-            trigger=ConversationTrigger.SLACK_MENTION,
-            conversation_context={
-                "slack_user_id": user_id,
-                "slack_channel_id": channel_id,
-                "slack_thread_ts": thread_ts,
-                "platform": "slack",
+            external_id=thread_ts,  # Use thread_ts as external_id for proper threading
+            defaults={
+                "initial_question": question,
+                "channel": "slack",
+                "user_id": user_id,
+                "channel_id": channel_id,
+                "trigger": ConversationTrigger.SLACK_MENTION,
+                "conversation_context": {
+                    "slack_user_id": user_id,
+                    "slack_channel_id": channel_id,
+                    "slack_thread_ts": thread_ts,
+                    "platform": "slack",
+                },
             },
         )
 
-        # Create the initial conversation part for the user's question
-        ConversationPart.objects.create(
-            conversation=conversation,
-            sequence_number=1,
-            actor="user",
-            message_type="text",
-            content=question,
-            metadata={
-                "slack_user_id": user_id,
-                "slack_channel_id": channel_id,
-                "slack_thread_ts": thread_ts,
-            },
-        )
+        if created:
+            logger.info(
+                f"Created new conversation record: {conversation.id} for thread {thread_ts}"
+            )
+        else:
+            logger.info(
+                f"Found existing conversation record: {conversation.id} for thread {thread_ts}"
+            )
 
-        logger.info(f"Created conversation record: {conversation.id}")
         return conversation
 
     except Exception as e:
-        logger.error(f"Error creating conversation record: {e}")
+        logger.error(f"Error getting/creating conversation record: {e}")
         # Create a minimal conversation as fallback
         return Conversation.objects.create(
             organisation=org_settings.organisation,

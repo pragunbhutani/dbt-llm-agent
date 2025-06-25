@@ -125,7 +125,6 @@ class SQLVerifierWorkflow:
 
         self.memory = memory
         self.default_max_debug_loops = max_debug_loops
-        self._define_tools()  # Define tools upon initialization
 
         try:
             self.snowflake_creds = (
@@ -149,6 +148,8 @@ class SQLVerifierWorkflow:
             )
             self.snowflake_creds = None
             self.warehouse_type = None
+
+        self._define_tools()  # Define tools after credentials are initialized
 
         # No specific tools to define for external LLM calls yet, debugging is an internal LLM call node.
         # self.graph_app = self._build_graph() # Will be uncommented once nodes are defined
@@ -398,74 +399,72 @@ class SQLVerifierWorkflow:
     def _define_tools(self):
         """Defines the tools available to the debugging agent."""
 
-        @tool
-        async def describe_table_tool(table_name: str) -> Dict[str, Any]:
-            """Use this tool to get the schema description for a specific table.
-            Provides details about columns, data types, and constraints for the given table_name.
-            Input must be a single string: the fully qualified table name (e.g., 'schema.table_name' or 'database.schema.table_name').
-            Do not use this for CTEs (Common Table Expressions) or aliases; only for actual database tables.
-            """
-            if not isinstance(table_name, str) or not table_name.strip():
-                return {
-                    "error": "Invalid table_name provided. Must be a non-empty string."
-                }
+        self.tools = []
 
-            logger.info(
-                f"Agent tool: describe_table_tool called for table: {table_name}"
-            )
-            schema_info = await self._fetch_table_schema(table_name)
-            if schema_info:
-                return schema_info
-            else:
+        # Only expose Snowflake-dependent tools when credentials are available. This prevents
+        # the agent from hallucinating calls in organisations that have not configured a
+        # warehouse connection.
+        if self.snowflake_creds:
+
+            @tool
+            async def describe_table_tool(table_name: str) -> Dict[str, Any]:
+                """Get the schema description for a specific table.
+                Input must be a fully-qualified table name.
+                """
+                if not isinstance(table_name, str) or not table_name.strip():
+                    return {
+                        "error": "Invalid table_name provided. Must be a non-empty string."
+                    }
+
+                logger.info(
+                    f"Agent tool: describe_table_tool called for table: {table_name}"
+                )
+                schema_info = await self._fetch_table_schema(table_name)
+                if schema_info:
+                    return schema_info
                 return {
                     "error": f"Could not fetch schema for table '{table_name}'. It might not exist or you may lack permissions."
                 }
 
-        @tool
-        async def list_column_values_tool(
-            table_name: str, column_name: str, limit: Optional[int] = 10
-        ) -> Dict[str, Any]:
-            """Use this tool to get a list of distinct values for a specific column in a given table.
-            This is useful for understanding the typical data in a column, especially for categorical or ID fields.
-            Inputs:
-            - table_name: The fully qualified name of the table (e.g., 'schema.table_name').
-            - column_name: The name of the column to fetch distinct values from.
-            - limit (optional, default 10): The maximum number of distinct values to return.
-            Do not use this for CTEs or aliases; only for actual database tables.
-            """
-            if not isinstance(table_name, str) or not table_name.strip():
-                return {
-                    "error": "Invalid table_name provided. Must be a non-empty string."
-                }
-            if not isinstance(column_name, str) or not column_name.strip():
-                return {
-                    "error": "Invalid column_name provided. Must be a non-empty string."
-                }
-            effective_limit = limit if limit is not None and limit > 0 else 10
+            @tool
+            async def list_column_values_tool(
+                table_name: str, column_name: str, limit: Optional[int] = 10
+            ) -> Dict[str, Any]:
+                """Return distinct values for a column. Useful for debugging joins and filters."""
 
-            logger.info(
-                f"Agent tool: list_column_values_tool called for {table_name}.{column_name} with limit {effective_limit}"
-            )
-            values, error = await self._fetch_column_values(
-                table_name, column_name, limit=effective_limit
-            )
-            if error:
-                return {
-                    "error": f"Error fetching column values for {table_name}.{column_name}: {error}"
-                }
-            elif values is not None:
-                return {
-                    "table_name": table_name,
-                    "column_name": column_name,
-                    "distinct_values": values,
-                }
-            else:
+                if not isinstance(table_name, str) or not table_name.strip():
+                    return {
+                        "error": "Invalid table_name provided. Must be a non-empty string."
+                    }
+                if not isinstance(column_name, str) or not column_name.strip():
+                    return {
+                        "error": "Invalid column_name provided. Must be a non-empty string."
+                    }
+
+                effective_limit = limit if limit is not None and limit > 0 else 10
+                logger.info(
+                    f"Agent tool: list_column_values_tool called for {table_name}.{column_name} with limit {effective_limit}"
+                )
+                values, error = await self._fetch_column_values(
+                    table_name, column_name, limit=effective_limit
+                )
+                if error:
+                    return {
+                        "error": f"Error fetching column values for {table_name}.{column_name}: {error}"
+                    }
+                if values is not None:
+                    return {
+                        "table_name": table_name,
+                        "column_name": column_name,
+                        "distinct_values": values,
+                    }
                 return {
                     "error": f"No distinct values returned or an unknown error occurred for {table_name}.{column_name}"
                 }
 
-        self.tools = [describe_table_tool, list_column_values_tool]
-        # Bind the LLM to use these tools
+            self.tools.extend([describe_table_tool, list_column_values_tool])
+
+        # Bind tools (empty list is fine – LLM just gets no tool schema)
         if self.llm:
             self.llm_with_tools = self.llm.bind_tools(self.tools)
         else:
@@ -1416,32 +1415,38 @@ class SQLVerifierWorkflow:
                 agent_tool_calls=[],
             )
 
-        # Check for Snowflake credentials if warehouse is Snowflake
+        # Handle missing credentials gracefully by falling back to offline verification.
         if not self.snowflake_creds and warehouse_type.lower() == "snowflake":
-            logger.error(
-                "SQLVerifierWorkflow: Snowflake credentials not available. Cannot execute/verify Snowflake query."
+            logger.warning(
+                "SQLVerifierWorkflow: Snowflake credentials not available – performing offline (non-executed) verification."
             )
-            return SQLVerifierState(
+
+            offline_state = SQLVerifierState(
                 original_sql_query=sql_query,
                 current_sql_query=sql_query,
                 warehouse_type=warehouse_type,
-                is_valid=False,
-                execution_error="Snowflake credentials not configured.",
-                corrected_sql_query=None,
+                is_valid=False,  # Cannot guarantee validity without execution
+                execution_error="Query was not executed – warehouse connection not configured.",
+                corrected_sql_query=sql_query,  # No correction attempted in offline mode
                 debug_attempts=0,
-                max_debug_attempts=effective_max_debug_attempts,
+                max_debug_attempts=0,
                 dbt_models_info=dbt_models_info,
                 agent_described_tables_info={},
                 agent_listed_column_values={},
-                debug_explanation="Snowflake credentials not configured.",
+                debug_explanation="Performed static/offline verification only.",
                 debugging_log=[
-                    "Attempted to run workflow without Snowflake credentials for a Snowflake query."
+                    "Offline verification: Snowflake credentials unavailable; query not executed."
                 ],
-                is_style_compliant=True,  # Assume compliant as style check is removed
-                style_violations=[],  # No violations as style check is removed
+                is_style_compliant=True,
+                style_violations=[],
                 messages=[],
                 agent_tool_calls=[],
             )
+
+            # Include an explicit flag so callers know the query wasn't run.
+            offline_state["was_executed"] = False  # type: ignore
+
+            return offline_state
 
         # Ensure the graph is built
         if not hasattr(self, "graph_app") or self.graph_app is None:

@@ -419,10 +419,10 @@ CORS_ALLOWED_ORIGINS = [
 if APP_HOST:
     CORS_ALLOWED_ORIGINS.append(f"http://{APP_HOST}:3000")
 
-# Add NEXTAUTH_URL to CORS origins if it exists
+# Add NEXTAUTH_URL to CORS origins if it exists (strip trailing slash)
 NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL")
 if NEXTAUTH_URL:
-    CORS_ALLOWED_ORIGINS.append(NEXTAUTH_URL)
+    CORS_ALLOWED_ORIGINS.append(NEXTAUTH_URL.rstrip("/"))
 
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https://.*\.ngrok-free\.app$",
@@ -439,9 +439,9 @@ CSRF_TRUSTED_ORIGINS = [
 if APP_HOST:
     CSRF_TRUSTED_ORIGINS.append(f"http://{APP_HOST}:3000")
 
-# Add NEXTAUTH_URL to CSRF trusted origins if it exists
+# Add NEXTAUTH_URL to CSRF trusted origins if it exists (strip trailing slash)
 if NEXTAUTH_URL:
-    CSRF_TRUSTED_ORIGINS.append(NEXTAUTH_URL)
+    CSRF_TRUSTED_ORIGINS.append(NEXTAUTH_URL.rstrip("/"))
 
 # CORS Security Settings
 CORS_ALLOW_CREDENTIALS = True

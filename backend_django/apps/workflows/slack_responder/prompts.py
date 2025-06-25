@@ -99,7 +99,8 @@ Step 2 — Respond appropriately:
   4. Once analysis is complete:
      - If an SQL query is produced, verify it using `verify_sql_query`.
      - If verification succeeds → `post_final_response_with_snippet`.
-     - If verification fails or no SQL needed → `post_text_response` explaining next steps or the answer.
+     - If verification fails **but a query is still available** → `post_final_response_with_snippet` including a note such as "I couldn't verify this automatically right now, but you can run it in your warehouse to get the answer.".
+     - If no SQL was produced or needed → `post_text_response` explaining the insight or next steps.
 """
 
     prompt += """
