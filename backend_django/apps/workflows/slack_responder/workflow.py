@@ -1083,17 +1083,17 @@ class SlackResponderAgent:
             state.get("sql_verification_error") or "verification issues"
         )
 
-        # Build initial comment
-        initial_comment_parts: List[str] = [
+        # Build analysis text (will be posted as a normal message)
+        analysis_parts: List[str] = [
             "I couldn't verify this query automatically, but it should help answer your question.",
         ]
 
         qa_answer = state.get("qa_final_answer")
         if qa_answer:
-            initial_comment_parts.append("\n\n" + qa_answer)
+            analysis_parts.append("\n\n" + qa_answer)
 
-        initial_comment_parts.append(
-            f"\n\n⚠️ *Note:* The SQL query below could not be verified due to: {verification_error}. Please review carefully before using."
+        analysis_parts.append(
+            f"\n\n⚠️ *Note:* The SQL query could not be verified due to: {verification_error}. Please review carefully before using."
         )
 
         qa_models = state.get("qa_models") or []
@@ -1102,11 +1102,11 @@ class SlackResponderAgent:
                 m.get("name", "Unknown") for m in qa_models if isinstance(m, dict)
             ]
             if model_names:
-                initial_comment_parts.append(
+                analysis_parts.append(
                     f"\n\n📊 *Analysis based on models:* {', '.join(model_names)}"
                 )
 
-        initial_comment = "".join(initial_comment_parts)
+        analysis_text = "".join(analysis_parts)
 
         sql_content = f"""-- Generated SQL Query (UNVERIFIED)
 -- ⚠️ WARNING: This query could not be verified automatically.
@@ -1116,10 +1116,18 @@ class SlackResponderAgent:
 """
 
         try:
+            # 1) post analysis text
+            await self.slack_client.chat_postMessage(
+                channel=self.current_channel_id,
+                thread_ts=self.current_thread_ts,
+                text=analysis_text,
+            )
+
+            # 2) upload SQL file with a very short comment to avoid 414
             await self.slack_client.files_upload_v2(
                 channel=self.current_channel_id,
                 thread_ts=self.current_thread_ts,
-                initial_comment=initial_comment,
+                initial_comment="Here is the SQL query (unverified).",
                 content=sql_content,
                 filename="unverified_query.sql",
                 title="SQL Query (Unverified)",
@@ -1127,7 +1135,7 @@ class SlackResponderAgent:
 
             if self.conversation_logger:
                 await sync_to_async(self.conversation_logger.log_agent_response)(
-                    content=initial_comment + "\n\nUnverified SQL uploaded as file.",
+                    content=analysis_text + "\n\nUnverified SQL uploaded as file.",
                     metadata={
                         "action": "auto_post_unverified_sql",
                         "verification_failed": True,
@@ -1136,14 +1144,34 @@ class SlackResponderAgent:
                 )
 
             if self.verbose:
-                logger.info("auto_post_unverified_sql_node: File uploaded successfully")
+                logger.info(
+                    "auto_post_unverified_sql_node: Analysis + file posted successfully"
+                )
 
             return {"response_sent": True}
         except Exception as e:
             logger.exception(
-                f"auto_post_unverified_sql_node: failed to upload file: {e}"
+                f"auto_post_unverified_sql_node: failed delivering messages: {e}"
             )
-            return {"error_message": str(e)}
+            # Attempt fallback: upload trimmed SQL as code block
+            try:
+                fallback_text = (
+                    analysis_text
+                    + "\n\n```sql\n"
+                    + sql_query[:3000]
+                    + ("\n...```" if len(sql_query) > 3000 else "\n```")
+                )
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=fallback_text,
+                )
+                return {"response_sent": True}
+            except Exception as ee:
+                logger.exception(
+                    f"auto_post_unverified_sql_node: secondary fallback failed: {ee}"
+                )
+                return {"error_message": str(ee)}
 
     @sync_to_async
     def _get_or_create_conversation(
