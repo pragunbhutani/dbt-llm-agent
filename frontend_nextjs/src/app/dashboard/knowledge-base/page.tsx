@@ -1,7 +1,7 @@
 import React from "react";
 import DbtModelsTable from "./dbt-models-table";
 import PageLayout from "@/components/layout/page-layout";
-import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { SuspenseWrapper } from "@/components/suspense-wrapper";
 
 export default function KnowledgeBasePage() {
   return (
@@ -9,10 +9,9 @@ export default function KnowledgeBasePage() {
       title="Knowledge Base"
       subtitle="Manage your dbt models to use with RAGStar AI."
     >
-      <div className="space-y-6">
-        {/* <Breadcrumb items={[{ label: "Knowledge Base" }]} className="mb-4" /> */}
+      <SuspenseWrapper loadingText="Loading dbt models...">
         <DbtModelsTable />
-      </div>
+      </SuspenseWrapper>
     </PageLayout>
   );
 }

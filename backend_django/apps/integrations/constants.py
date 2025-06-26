@@ -133,33 +133,6 @@ AVAILABLE_INTEGRATIONS: Dict[str, IntegrationDefinition] = {
         documentation_url="https://modelcontextprotocol.io/",
         is_active=True,
     ),
-    "claude_mcp": IntegrationDefinition(
-        key="claude_mcp",
-        name="Claude.ai MCP Client",
-        description="Connect Claude.ai as an MCP client to access ragstar data and tools.",
-        integration_type=IntegrationType.OUTBOUND,
-        configuration_schema={
-            "type": "object",
-            "properties": {
-                "server_url": {"type": "string", "title": "MCP Server URL"},
-                "auth_provider": {
-                    "type": "string",
-                    "title": "Auth Provider",
-                    "enum": ["claude"],
-                    "default": "claude",
-                },
-                "linked_at": {
-                    "type": "string",
-                    "title": "Linked At",
-                    "format": "date-time",
-                },
-            },
-            "required": ["server_url", "auth_provider"],
-        },
-        icon_url="https://claude.ai/favicon.ico",
-        documentation_url="https://docs.anthropic.com/en/docs/build-with-claude/computer-use",
-        is_active=True,
-    ),
 }
 
 

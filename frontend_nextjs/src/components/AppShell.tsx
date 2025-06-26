@@ -3,12 +3,15 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useSession, signOut } from "next-auth/react";
 import {
   Dialog,
   DialogBackdrop,
   DialogPanel,
   Menu,
   MenuButton,
+  MenuItem,
+  MenuItems,
   TransitionChild,
 } from "@headlessui/react";
 import {
@@ -19,6 +22,7 @@ import {
   ChatBubbleLeftRightIcon,
   AcademicCapIcon,
   WrenchScrewdriverIcon,
+  ArrowLeftStartOnRectangleIcon,
 } from "@heroicons/react/24/outline";
 
 const navigation = [
@@ -49,9 +53,30 @@ function classNames(...classes: string[]) {
   return classes.filter(Boolean).join(" ");
 }
 
+function getUserInitials(user: {
+  name?: string | null;
+  email?: string | null;
+}): string {
+  if (user.name) {
+    return user.name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .substring(0, 2)
+      .toUpperCase();
+  }
+
+  if (user.email) {
+    return user.email.substring(0, 2).toUpperCase();
+  }
+
+  return "U";
+}
+
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const pathname = usePathname();
+  const { data: session } = useSession();
 
   return (
     <div className="h-screen flex bg-gray-50">
@@ -168,9 +193,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 <Menu as="div" className="relative">
                   <MenuButton className="flex w-full items-center justify-center rounded-md py-3 text-sm/6 font-semibold text-gray-900 hover:bg-gray-50">
                     <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-sm font-medium text-white">
-                      PB
+                      {session?.user ? getUserInitials(session.user) : "U"}
                     </span>
                   </MenuButton>
+                  <MenuItems className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 w-48 origin-bottom-right rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+                    <MenuItem>
+                      <button
+                        onClick={() => signOut({ callbackUrl: "/signin" })}
+                        className="flex w-full items-center px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                      >
+                        <ArrowLeftStartOnRectangleIcon className="mr-3 h-4 w-4" />
+                        Sign out
+                      </button>
+                    </MenuItem>
+                  </MenuItems>
                 </Menu>
               </li>
             </ul>

@@ -17,8 +17,10 @@ export default function DbtModelsTable() {
     data: models,
     error,
     mutate,
-  } = useSWR<DbtModel[]>(apiURL, (url: string) =>
-    fetcher(url, session?.accessToken)
+  } = useSWR<DbtModel[]>(
+    apiURL,
+    (url: string) => fetcher(url, session?.accessToken),
+    { suspense: true }
   );
 
   const handleToggleAnswering = async (
@@ -150,8 +152,9 @@ export default function DbtModelsTable() {
     }
   };
 
+  // Remove loading checks since we're using suspense
   if (error) return <div>Failed to load models</div>;
-  if (!models) return <div>Loading...</div>;
+  if (!models) return <div>No data available</div>;
 
   const columns = getColumns({ handleToggleAnswering, handleRefreshModel });
   const initialColumnVisibility = {

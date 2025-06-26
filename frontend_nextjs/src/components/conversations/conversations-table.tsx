@@ -18,8 +18,10 @@ export default function ConversationsTable() {
     data: conversations,
     error,
     mutate,
-  } = useSWR<ConversationListItem[]>(apiURL, (url: string) =>
-    fetcher(url, session?.accessToken)
+  } = useSWR<ConversationListItem[]>(
+    apiURL,
+    (url: string) => fetcher(url, session?.accessToken),
+    { suspense: true }
   );
 
   const handleDeleteConversation = async (conversationId: number) => {
@@ -113,7 +115,7 @@ export default function ConversationsTable() {
   };
 
   if (error) return <div>Failed to load conversations</div>;
-  if (!conversations) return <div>Loading...</div>;
+  if (!conversations) return <div>No conversations available</div>;
 
   const columns = getColumns({ handleDeleteConversation });
   const initialColumnVisibility = {

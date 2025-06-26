@@ -12,9 +12,11 @@ import django
 from django.core.asgi import get_asgi_application
 from starlette.applications import Starlette
 from starlette.routing import Lifespan, Mount
+from starlette.responses import JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware  # If you need CORS
 from typing import Optional
+from contextlib import asynccontextmanager
 from django.conf import settings
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "ragstar.settings")
@@ -39,6 +41,45 @@ django_asgi_app = get_asgi_application()
 
 # Store the pool globally or in a way that shutdown_event can access it
 _global_checkpointer_pool: Optional[AsyncConnectionPool] = None
+
+
+@asynccontextmanager
+async def lifespan(app: Starlette):
+    """
+    Application lifespan context manager.
+    Handles startup and shutdown events for the application.
+    """
+    # Startup logic
+    print("INFO: ASGI application startup...")
+    await run_checkpointer_setup()
+    print("INFO: ASGI startup tasks complete.")
+
+    yield  # Application is now running
+
+    # Shutdown logic
+    print("INFO: ASGI application shutdown...")
+    global _global_checkpointer_pool
+    if _global_checkpointer_pool and not _global_checkpointer_pool.closed:
+        print(
+            f"INFO: Closing checkpointer pool {_global_checkpointer_pool.name} on application shutdown."
+        )
+        try:
+            await _global_checkpointer_pool.close()
+            print(f"INFO: Pool {_global_checkpointer_pool.name} closed successfully.")
+        except Exception as e:
+            print(f"ERROR: Failed to close pool {_global_checkpointer_pool.name}: {e}")
+            import traceback
+
+            traceback.print_exc()
+    elif _global_checkpointer_pool and _global_checkpointer_pool.closed:
+        print(
+            f"INFO: Checkpointer pool {_global_checkpointer_pool.name} was already closed."
+        )
+    else:
+        print("INFO: No global checkpointer pool to close or pool not initialized.")
+
+    # Add any cleanup tasks here if needed
+    print("INFO: ASGI shutdown tasks complete.")
 
 
 async def run_checkpointer_setup():
@@ -97,38 +138,6 @@ async def run_checkpointer_setup():
         print("INFO: LangGraph components not available, skipping checkpointer setup.")
 
 
-async def startup_event():
-    print("INFO: ASGI application startup...")
-    await run_checkpointer_setup()
-    print("INFO: ASGI startup tasks complete.")
-
-
-async def shutdown_event():
-    print("INFO: ASGI application shutdown...")
-    global _global_checkpointer_pool
-    if _global_checkpointer_pool and not _global_checkpointer_pool.closed:
-        print(
-            f"INFO: Closing checkpointer pool {_global_checkpointer_pool.name} on application shutdown."
-        )
-        try:
-            await _global_checkpointer_pool.close()
-            print(f"INFO: Pool {_global_checkpointer_pool.name} closed successfully.")
-        except Exception as e:
-            print(f"ERROR: Failed to close pool {_global_checkpointer_pool.name}: {e}")
-            import traceback
-
-            traceback.print_exc()
-    elif _global_checkpointer_pool and _global_checkpointer_pool.closed:
-        print(
-            f"INFO: Checkpointer pool {_global_checkpointer_pool.name} was already closed."
-        )
-    else:
-        print("INFO: No global checkpointer pool to close or pool not initialized.")
-
-    # Add any cleanup tasks here if needed
-    print("INFO: ASGI shutdown tasks complete.")
-
-
 # Define middleware (optional, example for CORS)
 middleware = [
     Middleware(
@@ -141,11 +150,12 @@ from apps.mcp_server.main import app as mcp_app
 
 # Create the Starlette application with MCP server mounted
 application = Starlette(
-    on_startup=[startup_event],
-    on_shutdown=[shutdown_event],
-    middleware=middleware,  # Add middleware if you have any
+    lifespan=lifespan,
+    middleware=middleware,
     routes=[
-        Mount("/api/mcp", app=mcp_app),  # Mount MCP server at /api/mcp
-        Mount("/", app=django_asgi_app),  # Mount Django app at root
+        # Add a trailing slash to the MCP mount to see if it affects routing priority.
+        Mount("/mcp/", app=mcp_app),
+        # Mount the Django app at the root as the fallback.
+        Mount("/", app=django_asgi_app),
     ],
 )

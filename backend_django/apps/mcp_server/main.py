@@ -124,7 +124,9 @@ async def get_model_details(model_name: str, project_name: str = None) -> str:
 
 
 # Mount MCP server to FastAPI using FastMCP's http_app method
-app.mount("/mcp", mcp_server.http_app())
+# Note: The MCP server is mounted at the root of this FastAPI app
+# since the ASGI configuration already mounts this app at /mcp
+app.mount("/", mcp_server.http_app())
 
 # Note: OAuth 2.1 authorization endpoints are handled separately by Django
 # This FastAPI app focuses on the MCP protocol endpoints
