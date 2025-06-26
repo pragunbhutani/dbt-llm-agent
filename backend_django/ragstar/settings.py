@@ -19,6 +19,7 @@ from datetime import timedelta
 import logging
 import pytz
 from datetime import datetime
+from urllib.parse import urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -46,8 +47,18 @@ ALLOWED_HOSTS = [
     "frontend-nextjs",
 ]
 
-# Add APP_HOST from environment variables
+# Add APP_HOST from environment variables (or derive from NEXTAUTH_URL)
 APP_HOST = os.environ.get("APP_HOST")
+
+if not APP_HOST:
+    NEXTAUTH_URL_ENV = os.environ.get("NEXTAUTH_URL")
+    if NEXTAUTH_URL_ENV:
+        try:
+            parsed_url = urlparse(NEXTAUTH_URL_ENV)
+            APP_HOST = parsed_url.hostname
+        except Exception:
+            APP_HOST = None
+
 if APP_HOST:
     ALLOWED_HOSTS.append(APP_HOST)
 

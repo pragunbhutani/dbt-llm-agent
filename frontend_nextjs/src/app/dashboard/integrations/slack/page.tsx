@@ -115,7 +115,6 @@ export default function SlackIntegrationPage() {
               "Saves this message as a SQL query in Metabase and posts a link to it.",
           },
         ],
-        slash_commands: [],
       },
       oauth_config: {
         scopes: {
