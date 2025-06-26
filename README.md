@@ -71,20 +71,6 @@ Only a handful of variables are truly **required** for a local/dev install. The 
 
 ### 3.3 Postgres (defaults shown)
 
-<<<<<<< fix/better-query-debugging
-If you're happy with the Docker-Compose postgres container you can ignore these — they already default to sensible values.
-=======
-10. **Initialize your project (for `dbt` core):**
-    If you use `dbt` core you might need to set up adapters first.  Sample below for PostgreSQL.
-
-    ```bash
-    uv pip install dbt-core dbt-postgres
-    uv run python manage.py init_project --method core
-    ```
-
-11. **Run the Development Server:**
->>>>>>> main
-
 ```
 POSTGRES_DB=ragstar
 POSTGRES_USER=user
