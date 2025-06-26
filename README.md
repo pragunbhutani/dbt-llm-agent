@@ -104,7 +104,7 @@ EXTERNAL_POSTGRES_URL=postgresql://user:pw@host:5432/dbname
 INTERNAL_API_URL=http://backend-django:8000   # only used by server-side Next.js requests
 ```
 
----.
+---
 
 ## 4. First-run onboarding
 
