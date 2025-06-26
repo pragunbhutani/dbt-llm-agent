@@ -1090,7 +1090,12 @@ class SlackResponderAgent:
 
         qa_answer = state.get("qa_final_answer")
         if qa_answer:
-            analysis_parts.append("\n\n" + qa_answer)
+            # Remove any SQL fenced blocks so we don't duplicate the query text
+            stripped_answer = re.sub(
+                r"```sql[\s\S]+?```", "", qa_answer, flags=re.IGNORECASE
+            ).strip()
+            if stripped_answer:
+                analysis_parts.append("\n\n" + stripped_answer)
 
         analysis_parts.append(
             f"\n\n⚠️ *Note:* The SQL query could not be verified due to: {verification_error}. Please review carefully before using."
