@@ -1,3 +1,5 @@
+import { signOut } from "next-auth/react";
+
 export const fetcher = async (
   url: string,
   token: string | undefined,
@@ -19,6 +21,15 @@ export const fetcher = async (
   });
 
   if (!res.ok) {
+    // Handle authentication errors by redirecting to signin
+    if (res.status === 401) {
+      // Token is invalid/expired, trigger sign out
+      signOut({ callbackUrl: "/signin" });
+      const error = new Error("Authentication failed - redirecting to signin");
+      (error as any).status = 401;
+      throw error;
+    }
+
     const error = new Error("An error occurred while fetching the data.");
     // Attach extra info to the error object.
     const errorInfo = await res.json().catch(() => ({})); // Handle cases where error is not JSON

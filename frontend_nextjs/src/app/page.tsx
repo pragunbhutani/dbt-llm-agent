@@ -1,21 +1,22 @@
 "use client";
 
 import { useEffect } from "react";
-import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { useAuth } from "@/lib/useAuth";
 import Link from "next/link";
 
 export default function Home() {
-  const { data: session, status } = useSession();
+  const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
-    if (status === "authenticated") {
+    // Only redirect if authenticated and no errors
+    if (isAuthenticated) {
       router.push("/dashboard");
     }
-  }, [status, router]);
+  }, [isAuthenticated, router]);
 
-  if (status === "loading") {
+  if (isLoading) {
     return (
       <main className="flex min-h-screen flex-col items-center justify-center p-24">
         <h1 className="text-4xl font-bold">Welcome to Ragstar</h1>
@@ -24,7 +25,7 @@ export default function Home() {
     );
   }
 
-  if (status === "authenticated") {
+  if (isAuthenticated) {
     return null; // Will redirect to dashboard
   }
 

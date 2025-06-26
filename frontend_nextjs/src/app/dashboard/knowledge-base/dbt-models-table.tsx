@@ -1,25 +1,24 @@
 "use client";
 
-import { DataTable } from "@/components/data-table/data-table";
-import { getColumns, DbtModel } from "./columns";
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
-import { fetcher } from "@/utils/fetcher";
 import { useState } from "react";
 import { toast } from "sonner";
+import { useAuth } from "@/lib/useAuth";
+import { fetcher } from "@/utils/fetcher";
+import { DataTable } from "@/components/data-table/data-table";
+import { getColumns, DbtModel } from "./columns";
 
 export default function DbtModelsTable() {
-  const { data: session } = useSession();
+  const { accessToken, isAuthenticated } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
 
-  const apiURL = session?.accessToken ? `/api/knowledge_base/models/` : null;
   const {
     data: models,
     error,
     mutate,
   } = useSWR<DbtModel[]>(
-    apiURL,
-    (url: string) => fetcher(url, session?.accessToken),
+    isAuthenticated && accessToken ? "/api/knowledge_base/models/" : null,
+    (url: string) => fetcher(url, accessToken),
     { suspense: true }
   );
 
@@ -27,126 +26,100 @@ export default function DbtModelsTable() {
     modelId: string,
     currentStatus: DbtModel["answering_status"]
   ) => {
-    if (!session?.accessToken || !models) return;
+    if (!accessToken || !models) return;
 
     const originalModels = models;
-
-    // Optimistic UI update
-    mutate(
-      models.map((model) => {
-        if (model.id !== modelId) return model;
-        // If it's 'No', we assume it will be 'Training'. If 'Yes', it becomes 'No'.
-        const newStatus = currentStatus === "No" ? "Training" : "No";
-        return { ...model, answering_status: newStatus };
-      }),
-      false // do not revalidate immediately
+    const updatedModels = models.map((model) =>
+      model.id === modelId
+        ? { ...model, answering_status: "Training" as const }
+        : model
     );
 
     try {
+      // Optimistically update the UI
+      mutate(updatedModels, false);
+
       await fetcher(
         `/api/knowledge_base/models/${modelId}/toggle-answering-status/`,
-        session.accessToken,
+        accessToken,
         { method: "POST" }
       );
-      // Re-fetch data from the API to get the final state
+
+      // Refresh to get the actual status from server
       mutate();
+      toast.success("Model status updated successfully");
     } catch (error) {
-      console.error("Failed to toggle answering status", error);
       // Revert on error
       mutate(originalModels, false);
+      toast.error("Failed to update model status");
+      console.error("Error toggling answering status:", error);
     }
   };
 
   const handleRefreshModel = async (modelId: string) => {
-    if (!session?.accessToken || !models) return;
+    if (!accessToken || !models) return;
 
     const originalModels = models;
-
-    // Optimistic UI update - set to Training
-    mutate(
-      models.map((model) => {
-        if (model.id !== modelId) return model;
-        return { ...model, answering_status: "Training" as const };
-      }),
-      false // do not revalidate immediately
+    const updatedModels = models.map((model) =>
+      model.id === modelId
+        ? { ...model, answering_status: "Training" as const }
+        : model
     );
 
     try {
+      // Optimistically update the UI
+      mutate(updatedModels, false);
+
       await fetcher(
         `/api/knowledge_base/models/${modelId}/refresh/`,
-        session.accessToken,
+        accessToken,
         { method: "POST" }
       );
-      toast.success("Model refresh started");
-      // Re-fetch data from the API to get the final state
+
+      // Refresh to get the actual status from server
       mutate();
+      toast.success("Model refreshed successfully");
     } catch (error) {
-      console.error("Failed to refresh model", error);
-      toast.error("Failed to refresh model. Please try again.");
       // Revert on error
       mutate(originalModels, false);
+      toast.error("Failed to refresh model");
+      console.error("Error refreshing model:", error);
     }
   };
 
-  const handleBulkAction = async (
-    action: "enable" | "disable" | "refresh",
-    selectedRows: DbtModel[]
-  ) => {
-    if (!session?.accessToken || !models || isProcessing) return;
+  const handleBulkAction = async (action: string, selectedRows: DbtModel[]) => {
+    if (!accessToken || !models || isProcessing) return;
 
     const selectedModelIds = selectedRows.map((row) => row.id);
-
-    if (selectedModelIds.length === 0) {
-      toast.error("Please select at least one model to perform bulk actions.");
-      return;
-    }
-
     setIsProcessing(true);
-    const originalModels = models;
-
-    // Optimistic UI update for bulk action
-    if (action === "enable" || action === "refresh") {
-      mutate(
-        models.map((model) => {
-          if (!selectedModelIds.includes(model.id)) return model;
-          // Set to Training for models being enabled or refreshed
-          return { ...model, answering_status: "Training" as const };
-        }),
-        false
-      );
-    }
 
     try {
-      let endpoint: string;
-      let body: any;
-      let successMessage: string;
+      let endpoint = "";
+      let body = {};
 
-      if (action === "refresh") {
-        endpoint = `/api/knowledge_base/models/bulk-refresh/`;
-        body = { model_ids: selectedModelIds };
-        successMessage = `Refreshed ${selectedModelIds.length} models`;
-      } else {
-        endpoint = `/api/knowledge_base/models/bulk-toggle-answering-status/`;
-        body = { model_ids: selectedModelIds, enable: action === "enable" };
-        successMessage = `${action === "enable" ? "Enabled" : "Disabled"} ${
-          selectedModelIds.length
-        } models for answering`;
+      if (action === "enable" || action === "disable") {
+        endpoint = "/api/knowledge_base/models/bulk-toggle-answering/";
+        body = {
+          model_ids: selectedModelIds,
+          enable: action === "enable",
+        };
+      } else if (action === "refresh") {
+        endpoint = "/api/knowledge_base/models/bulk-refresh/";
+        body = {
+          model_ids: selectedModelIds,
+        };
       }
 
-      const response = await fetcher(endpoint, session.accessToken, {
+      const response = await fetcher(endpoint, accessToken, {
         method: "POST",
         body,
       });
 
-      toast.success(response?.status || successMessage);
-
-      // Re-fetch data from the API to get the final state
       mutate();
+      toast.success(`${action} action completed successfully`);
     } catch (error) {
-      console.error("Failed to perform bulk action", error);
-      toast.error("Failed to update models. Please try again.");
-      // Revert on error
-      mutate(originalModels, false);
+      toast.error(`Failed to ${action} selected models`);
+      console.error(`Error during bulk ${action}:`, error);
     } finally {
       setIsProcessing(false);
     }

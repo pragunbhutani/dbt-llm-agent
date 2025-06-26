@@ -1,16 +1,18 @@
 "use client";
 
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
+import { useAuth } from "@/lib/useAuth";
 import { fetcher } from "@/utils/fetcher";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function DashboardStats() {
-  const { data: session } = useSession();
+  const { accessToken, isAuthenticated } = useAuth();
 
   const { data: statsData } = useSWR(
-    session?.accessToken ? "/api/data_sources/dashboard-stats/" : null,
-    (url: string) => fetcher(url, session?.accessToken),
+    isAuthenticated && accessToken
+      ? "/api/data_sources/dashboard-stats/"
+      : null,
+    (url: string) => fetcher(url, accessToken),
     { suspense: true }
   );
 

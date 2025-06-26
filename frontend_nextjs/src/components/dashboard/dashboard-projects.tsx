@@ -1,146 +1,93 @@
 "use client";
 
-import { useState } from "react";
 import useSWR from "swr";
-import { useSession } from "next-auth/react";
+import Link from "next/link";
+import { useAuth } from "@/lib/useAuth";
 import { fetcher } from "@/utils/fetcher";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2 } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
+
+interface DbtProject {
+  id: number;
+  name: string;
+  account_id: number;
+  project_id: number;
+  created_at: string;
+  updated_at: string;
+}
 
 export function DashboardProjects() {
-  const { data: session } = useSession();
-  const [actioningProject, setActioningProject] = useState<{
-    id: string;
-    action: "refresh" | "delete";
-  } | null>(null);
+  const { accessToken, isAuthenticated } = useAuth();
 
-  const { data: projectsData, mutate: mutateProjects } = useSWR(
-    session?.accessToken ? "/api/data_sources/projects/" : null,
-    (url: string) => fetcher(url, session?.accessToken),
+  const { data: projects } = useSWR<DbtProject[]>(
+    isAuthenticated && accessToken ? "/api/data_sources/projects/" : null,
+    (url: string) => fetcher(url, accessToken),
     { suspense: true }
   );
 
-  const projects = projectsData || [];
-
-  const handleRefresh = async (projectId: string) => {
-    if (!session?.accessToken) return;
-    setActioningProject({ id: projectId, action: "refresh" });
-    try {
-      await fetcher(
-        `/api/data_sources/projects/${projectId}/refresh/`,
-        session.accessToken,
-        { method: "POST" }
-      );
-      mutateProjects();
-    } catch (error) {
-      console.error("Failed to refresh project", error);
-      // TODO: Add user-facing error feedback
-    } finally {
-      setActioningProject(null);
-    }
-  };
-
-  const handleDelete = async (projectId: string) => {
-    if (!session?.accessToken) return;
-    setActioningProject({ id: projectId, action: "delete" });
-    try {
-      await fetcher(
-        `/api/data_sources/projects/${projectId}/`,
-        session.accessToken,
-        { method: "DELETE" }
-      );
-      await mutateProjects();
-    } catch (error) {
-      console.error("Failed to delete project", error);
-      // TODO: Add user-facing error feedback
-    } finally {
-      setActioningProject(null);
-    }
-  };
+  if (!projects || projects.length === 0) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>dbt Projects</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-6">
+            <p className="text-gray-500 mb-4">No dbt projects connected yet.</p>
+            <p className="text-sm text-gray-400">
+              Connect your first dbt project to get started with AI-powered data
+              analysis.
+            </p>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Connected dbt Projects</CardTitle>
-        <CardDescription>
-          Manage your connected dbt projects and their status.
-        </CardDescription>
+        <div className="flex items-center justify-between">
+          <CardTitle>dbt Projects</CardTitle>
+          <Badge variant="secondary">{projects.length} connected</Badge>
+        </div>
       </CardHeader>
       <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Project Name</TableHead>
-              <TableHead>Connection Type</TableHead>
-              <TableHead>Models Synced</TableHead>
-              <TableHead>Last Refreshed</TableHead>
-              <TableHead>Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {projects.length > 0 ? (
-              projects.map((project: any) => (
-                <TableRow key={project.id}>
-                  <TableCell className="font-medium">{project.name}</TableCell>
-                  <TableCell>{project.connection_type}</TableCell>
-                  <TableCell>N/A</TableCell>
-                  <TableCell>
-                    {new Date(project.updated_at).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex space-x-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleRefresh(project.id)}
-                        disabled={actioningProject?.id === project.id}
-                      >
-                        {actioningProject?.id === project.id &&
-                        actioningProject?.action === "refresh" ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : null}
-                        Refresh
-                      </Button>
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        onClick={() => handleDelete(project.id)}
-                        disabled={actioningProject?.id === project.id}
-                      >
-                        {actioningProject?.id === project.id &&
-                        actioningProject?.action === "delete" ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : null}
-                        Delete
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center">
-                  No dbt projects found.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
+        <div className="space-y-3">
+          {projects.map((project) => (
+            <div
+              key={project.id}
+              className="flex items-center justify-between p-3 border rounded-lg"
+            >
+              <div>
+                <h4 className="font-medium">{project.name}</h4>
+                <p className="text-sm text-gray-500">
+                  Account ID: {project.account_id} • Project ID:{" "}
+                  {project.project_id}
+                </p>
+                <p className="text-xs text-gray-400">
+                  Created: {new Date(project.created_at).toLocaleDateString()}
+                </p>
+              </div>
+              <div className="flex items-center space-x-2">
+                <Badge variant="outline" className="text-green-600">
+                  Active
+                </Badge>
+                <Button variant="ghost" size="sm" asChild>
+                  <Link
+                    href={`/dashboard/knowledge-base`}
+                    className="flex items-center space-x-1"
+                  >
+                    <span>View Models</span>
+                    <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
