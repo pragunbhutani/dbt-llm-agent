@@ -9,7 +9,7 @@
 
 ---
 
-## 1 What is Ragstar?
+## 1. What is Ragstar?
 
 Ragstar connects to your **dbt** project, builds a knowledge base from models & documentation, and lets everyone ask data-related questions in plain English via a beautiful web dashboard or Slack. Under the hood Ragstar combines:
 
@@ -17,9 +17,23 @@ Ragstar connects to your **dbt** project, builds a knowledge base from models & 
 - Embeddings + LLMs (OpenAI, Anthropic, etc.) for reasoning
 - A modern **Next.js** frontend & **Django** backend
 
+### Screenshots
+
+#### Dashboard
+
+![Dashboard](docs/dashboard.png)
+
+#### Integrations
+
+![Integrations](docs/integrations.png)
+
+#### Settings
+
+![Settings](docs/settings.png)
+
 ---
 
-## 2 Quick start (🚀 2 commands)
+## 2. Quick start (🚀 2 commands)
 
 ```bash
 # ① clone & prepare env file
@@ -49,11 +63,11 @@ $ docker compose exec backend-django \
 
 ---
 
-## 3 Environment variables
+## 3. Environment variables
 
 Only a handful of variables are truly **required** for a local/dev install. The rest are advanced overrides.
 
-### 3.1 Required
+### 3.1. Required
 
 | Var                   | Example                   | Purpose                               |
 | --------------------- | ------------------------- | ------------------------------------- |
@@ -61,7 +75,7 @@ Only a handful of variables are truly **required** for a local/dev install. The 
 | `NEXTAUTH_URL`        | `http://localhost:3000`   | Public URL of the frontend            |
 | `NEXT_PUBLIC_API_URL` | `http://localhost:8000`   | Public URL of the Django API          |
 
-### 3.2 Optional but common
+### 3.2. Optional but common
 
 | Var        | Example                            | When you need it                                                                                                                 |
 | ---------- | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
@@ -69,7 +83,7 @@ Only a handful of variables are truly **required** for a local/dev install. The 
 
 > Legacy vars like `APP_PORT`, `FRONTEND_PORT`, etc. are now only used by **docker-compose.yml** for host-port mapping. The application itself does not read them.
 
-### 3.3 Postgres (defaults shown)
+### 3.3. Postgres (defaults shown)
 
 ```
 POSTGRES_DB=ragstar
@@ -84,7 +98,7 @@ POSTGRES_PORT=5432
 EXTERNAL_POSTGRES_URL=postgresql://user:pw@host:5432/dbname
 ```
 
-### 3.4 Other useful vars
+### 3.4. Other useful vars
 
 ```
 INTERNAL_API_URL=http://backend-django:8000   # only used by server-side Next.js requests
@@ -92,7 +106,7 @@ INTERNAL_API_URL=http://backend-django:8000   # only used by server-side Next.js
 
 ---
 
-## 4 First-run onboarding
+## 4. First-run onboarding
 
 After logging into the dashboard you'll be guided through these steps:
 
@@ -128,7 +142,7 @@ docker compose down -v       # destroy DB
 
 ---
 
-## 6 Local dev without Docker (advanced)
+## 6. Local dev without Docker (advanced)
 
 1. Install **Python 3.10+**, **Node 18+**, **uv**, **pnpm**, and Postgres16+ with `pgvector`.
 2. `uv venv && source .venv/bin/activate && uv pip install -e backend_django/`
@@ -142,12 +156,12 @@ Docker is strongly recommended unless you're hacking on the codebase itself.
 
 ---
 
-## 7 Contributing
+## 7. Contributing
 
 We 💛 community PRs. Please file an issue first for major changes. Make sure `ruff`, `black`, `mypy`, and `eslint` pass before opening a pull request.
 
 ---
 
-## 8 License
+## 8. License
 
 Ragstar is released under the MIT License — see [LICENSE](./LICENSE).
