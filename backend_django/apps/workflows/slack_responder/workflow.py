@@ -640,6 +640,9 @@ class SlackResponderAgent:
         workflow.add_node("handle_direct_response", self.handle_direct_response_node)
         workflow.add_node("record_interaction", self.record_interaction_node)
         workflow.add_node("error_handler", self.error_handler_node)
+        workflow.add_node(
+            "auto_post_unverified_sql", self.auto_post_unverified_sql_node
+        )
 
         # Edges
         workflow.set_entry_point("agent")
@@ -659,12 +662,14 @@ class SlackResponderAgent:
                 "agent": "agent",
                 "record_interaction": "record_interaction",
                 "error_handler": "error_handler",
+                "auto_post_unverified_sql": "auto_post_unverified_sql",
                 END: END,
             },
         )
         workflow.add_edge("handle_direct_response", "record_interaction")
         workflow.add_edge("record_interaction", END)
         workflow.add_edge("error_handler", END)
+        workflow.add_edge("auto_post_unverified_sql", "record_interaction")
 
         # Compile with memory if available
         compile_kwargs = {}
@@ -683,6 +688,18 @@ class SlackResponderAgent:
             if self.verbose:
                 logger.info("Response sent, routing to record_interaction")
             return "record_interaction"
+
+        # NEW: Verification failed but we still have SQL – auto-post it as file.
+        if (
+            state.get("sql_is_verified") is False
+            and state.get("qa_sql_query")
+            and not state.get("response_sent")
+        ):
+            if self.verbose:
+                logger.info(
+                    "SQL verification failed – routing to auto_post_unverified_sql node"
+                )
+            return "auto_post_unverified_sql"
 
         # If there's an error, handle it
         if state.get("error_message"):
@@ -920,6 +937,57 @@ class SlackResponderAgent:
                     )
                 return {}
 
+            # -------------------------------------------------------------
+            # NEW: If the direct response contains a ```sql code block, we
+            # bypass a plain chat_postMessage and instead upload the SQL as
+            # a file so Slack renders it properly. This is a final guardrail
+            # in case the agent forgot to call post_analysis_with_unverified_sql.
+            # -------------------------------------------------------------
+            sql_block_match = re.search(
+                r"```sql\s*([\s\S]+?)```", response_text, re.IGNORECASE
+            )
+            if sql_block_match:
+                sql_query = sql_block_match.group(1).strip()
+
+                # Remove the code block from the text to craft a cleaner comment
+                initial_comment = re.sub(
+                    r"```sql[\s\S]+?```", "", response_text, flags=re.IGNORECASE
+                ).strip()
+                if not initial_comment:
+                    initial_comment = "Here's the SQL query I generated (unverified)."
+
+                try:
+                    # Log to conversation
+                    if self.conversation_logger:
+                        await sync_to_async(
+                            self.conversation_logger.log_agent_response
+                        )(
+                            content=f"{initial_comment}\n\nUnverified SQL uploaded as file.",
+                            metadata={
+                                "action": "fallback_sql_file_upload",
+                                "channel": "slack",
+                            },
+                        )
+
+                    await self.slack_client.files_upload_v2(
+                        channel=self.current_channel_id,
+                        thread_ts=self.current_thread_ts,
+                        initial_comment=initial_comment,
+                        content=sql_query,
+                        filename="query.sql",
+                        title="SQL Query",
+                    )
+
+                    if self.verbose:
+                        logger.info(
+                            "Fallback file upload posted instead of raw code block"
+                        )
+
+                    return {"response_sent": True}
+                except Exception as e:
+                    logger.exception(f"Error uploading SQL file fallback: {e}")
+                    # fall through to normal posting below
+
             if self.verbose:
                 logger.info(
                     f"Found direct AI response, posting to Slack: {response_text[:100]}..."
@@ -995,6 +1063,87 @@ class SlackResponderAgent:
         except Exception as e:
             logger.exception(f"Failed to record conversation completion: {e}")
             return {"error_message": f"Failed to record interaction: {str(e)}"}
+
+    # -------------------------------------------------------------
+    # NEW NODE: auto_post_unverified_sql_node
+    # -------------------------------------------------------------
+    async def auto_post_unverified_sql_node(
+        self, state: SlackResponderState
+    ) -> Dict[str, Any]:
+        """Automatically posts analysis + unverified SQL as a file when the agent failed to do so."""
+
+        if self.verbose:
+            logger.info(">>> Entering auto_post_unverified_sql_node")
+
+        sql_query: str = state.get("qa_sql_query", "") or ""
+        if not sql_query:
+            return {"error_message": "No SQL query available for auto post."}
+
+        verification_error = (
+            state.get("sql_verification_error") or "verification issues"
+        )
+
+        # Build initial comment
+        initial_comment_parts: List[str] = [
+            "I couldn't verify this query automatically, but it should help answer your question.",
+        ]
+
+        qa_answer = state.get("qa_final_answer")
+        if qa_answer:
+            initial_comment_parts.append("\n\n" + qa_answer)
+
+        initial_comment_parts.append(
+            f"\n\n⚠️ *Note:* The SQL query below could not be verified due to: {verification_error}. Please review carefully before using."
+        )
+
+        qa_models = state.get("qa_models") or []
+        if qa_models:
+            model_names = [
+                m.get("name", "Unknown") for m in qa_models if isinstance(m, dict)
+            ]
+            if model_names:
+                initial_comment_parts.append(
+                    f"\n\n📊 *Analysis based on models:* {', '.join(model_names)}"
+                )
+
+        initial_comment = "".join(initial_comment_parts)
+
+        sql_content = f"""-- Generated SQL Query (UNVERIFIED)
+-- ⚠️ WARNING: This query could not be verified automatically.
+-- Please review and test carefully before using.
+
+{sql_query}
+"""
+
+        try:
+            await self.slack_client.files_upload_v2(
+                channel=self.current_channel_id,
+                thread_ts=self.current_thread_ts,
+                initial_comment=initial_comment,
+                content=sql_content,
+                filename="unverified_query.sql",
+                title="SQL Query (Unverified)",
+            )
+
+            if self.conversation_logger:
+                await sync_to_async(self.conversation_logger.log_agent_response)(
+                    content=initial_comment + "\n\nUnverified SQL uploaded as file.",
+                    metadata={
+                        "action": "auto_post_unverified_sql",
+                        "verification_failed": True,
+                        "channel": "slack",
+                    },
+                )
+
+            if self.verbose:
+                logger.info("auto_post_unverified_sql_node: File uploaded successfully")
+
+            return {"response_sent": True}
+        except Exception as e:
+            logger.exception(
+                f"auto_post_unverified_sql_node: failed to upload file: {e}"
+            )
+            return {"error_message": str(e)}
 
     @sync_to_async
     def _get_or_create_conversation(
