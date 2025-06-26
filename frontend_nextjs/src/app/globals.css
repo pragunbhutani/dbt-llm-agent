@@ -1,0 +1,78 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+  --radius: 0.625rem;
+
+  --color-background: theme(colors.white);
+  --color-foreground: theme(colors.slate.950);
+
+  --color-card: theme(colors.white);
+  --color-card-foreground: theme(colors.slate.950);
+
+  --color-popover: theme(colors.white);
+  --color-popover-foreground: theme(colors.slate.950);
+
+  --color-primary: theme(colors.indigo.600);
+  --color-primary-foreground: theme(colors.indigo.50);
+
+  --color-secondary: theme(colors.slate.100);
+  --color-secondary-foreground: theme(colors.slate.900);
+
+  --color-muted: theme(colors.slate.100);
+  --color-muted-foreground: theme(colors.slate.500);
+
+  --color-accent: theme(colors.slate.100);
+  --color-accent-foreground: theme(colors.slate.900);
+
+  --color-destructive: theme(colors.red.500);
+  --color-destructive-foreground: theme(colors.slate.50);
+
+  --color-border: theme(colors.slate.200);
+  --color-input: theme(colors.slate.200);
+  --color-ring: theme(colors.indigo.600);
+
+  --color-chart-1: theme(colors.amber.500);
+  --color-chart-2: theme(colors.sky.500);
+  --color-chart-3: theme(colors.violet.500);
+  --color-chart-4: theme(colors.lime.500);
+  --color-chart-5: oklch(0.769 0.188 70.08);
+}
+
+.dark {
+  --color-background: theme(colors.slate.950);
+  --color-foreground: theme(colors.slate.50);
+  --color-card: theme(colors.slate.950);
+  --color-card-foreground: theme(colors.slate.50);
+  --color-popover: theme(colors.slate.950);
+  --color-popover-foreground: theme(colors.slate.50);
+  --color-primary: theme(colors.indigo.500);
+  --color-primary-foreground: theme(colors.indigo.950);
+  --color-secondary: theme(colors.slate.800);
+  --color-secondary-foreground: theme(colors.slate.50);
+  --color-muted: theme(colors.slate.800);
+  --color-muted-foreground: theme(colors.slate.400);
+  --color-accent: theme(colors.slate.800);
+  --color-accent-foreground: theme(colors.slate.50);
+  --color-destructive: theme(colors.red.900);
+  --color-destructive-foreground: theme(colors.slate.50);
+  --color-border: theme(colors.slate.800);
+  --color-input: theme(colors.slate.800);
+  --color-ring: theme(colors.indigo.500);
+  --color-chart-1: oklch(0.488 0.243 264.376);
+  --color-chart-2: oklch(0.696 0.17 162.48);
+  --color-chart-3: oklch(0.769 0.188 70.08);
+  --color-chart-4: oklch(0.627 0.265 303.9);
+  --color-chart-5: oklch(0.645 0.246 16.439);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

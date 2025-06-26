@@ -1,0 +1,80 @@
+[project]
+name = "ragstar"
+version = "1.0.0"
+description = "An LLM-powered agent for interacting with dbt projects"
+authors = [{ name = "Pragun Bhutani", email = "pragun06@gmail.com" }]
+requires-python = "~=3.12"
+dependencies = [
+    "pandas>=2.0.0,<3",
+    "markdown>=3.4.0,<4",
+    "openai>=1.5.0,<2",
+    "dbt-core>=1.6.0,<2",
+    "sqlalchemy>=2.0.23,<3",
+    "psycopg-binary>=3.1.18,<4",
+    "pgvector>=0.2.5,<0.3",
+    "langchain>=0.3.2,<0.4",
+    "langchain-openai>=0.3.8,<0.4",
+    "pydantic==2.10.1",
+    "python-dotenv>=1.0.0,<2",
+    "fastapi>=0.115.0,<0.116",
+    "uvicorn>=0.25.0,<0.26",
+    "slack-sdk>=3.23.0,<4",
+    "slack-bolt>=1.18.0,<2",
+    "pytest>=7.4.3,<8",
+    "pytest-cov>=4.1.0,<5",
+    "pyyaml>=6.0.1,<7",
+    "alembic>=1.13.1,<2",
+    "sqlglot>=26.12.0,<27",
+    "requests>=2.32.3,<3",
+    "rich>=14.0.0,<15",
+    "langgraph>=0.3.25,<0.4",
+    "psycopg-pool>=3.2.6,<4",
+    "langgraph-checkpoint-postgres>=2.0.19,<3",
+    "aiohttp>=3.11.16,<4",
+    "tiktoken>=0.9.0,<0.10",
+    "django>=5.2",
+    "coloredlogs>=15.0.1",
+    "psycopg2-binary>=2.9.10",
+    "whitenoise>=6.9.0",
+    "djangorestframework>=3.16.0",
+    "langchain-google-genai>=2.1.4",
+    "langchain-anthropic>=0.3.13",
+    "dj-database-url>=2.3.0",
+    "starlette>=0.46.1",
+    "snowflake-connector-python>=3.15.0",
+    "pytz>=2025.2",
+    "djangorestframework-simplejwt>=5.5.0",
+    "django-cors-headers>=4.7.0",
+    "celery>=5.5.3",
+    "redis[hiredis]>=6.2.0",
+    "mcp>=1.0.0",
+    "python-jose[cryptography]>=3.3.0",
+    "python-multipart>=0.0.6",
+    "aiofiles>=23.0.0",
+    "httpx>=0.24.0",
+    "fastmcp>=2.9.0",
+    "django-extensions>=4.1",
+]
+
+[project.scripts]
+# ragstar = "ragstar.cli:main" # Keep the old one commented out or remove
+ragstar-django = "ragstar_cli:cli" # Add the new wrapper
+
+[dependency-groups]
+dev = [
+    "black>=23.11.0,<24",
+    "flower>=2.0.1",
+    "isort>=5.12.0,<6",
+    "mypy>=1.7.1,<2",
+    "ruff>=0.1.6,<0.2",
+]
+
+[tool.hatch.build.targets.sdist]
+include = ["ragstar"]
+
+[tool.hatch.build.targets.wheel]
+include = ["ragstar"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

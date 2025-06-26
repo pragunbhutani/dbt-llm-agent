@@ -21,29 +21,104 @@ services:
       retries: 5
     restart: unless-stopped
 
-  app:
+  redis:
+    image: redis:7-alpine
+    container_name: ragstar_redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  backend-django:
+    image: ragstar/backend_django
     build:
-      context: .
+      context: ./backend_django
       dockerfile: Dockerfile
-    container_name: ragstar_app
+    container_name: ragstar_django
     ports:
       - "${APP_PORT:-8000}:8000" # Expose API server port
     volumes:
-      # Mount local code for development (optional)
-      # Be mindful of potential performance issues on non-Linux hosts
-      - .:/app
-      # You might need to mount other volumes if your app writes data outside /app
+      - ./backend_django:/app # Mount local code for development
     env_file:
       - .env
     environment:
       # Use external DB URL if provided, otherwise use the 'db' service
       DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      CELERY_BROKER_URL: redis://redis:6379/0
       APP_PORT: ${APP_PORT:-8000}
     depends_on:
       db:
         condition: service_healthy # Wait for DB to be ready
-    # The command to run the app (replace the placeholder in Dockerfile or override here)
-    # command: poetry run uvicorn ragstar.api.server:app --host 0.0.0.0 --port 8000
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  celery-worker:
+    image: ragstar/celery_worker
+    build:
+      context: ./backend_django
+      dockerfile: Dockerfile
+    container_name: ragstar_celery_worker
+    command: >
+      sh -c "
+        uv run celery -A ragstar worker -l info
+      "
+    volumes:
+      - ./backend_django:/app # Mount local code for development
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      - backend-django
+      - redis
+    restart: unless-stopped
+
+  flower:
+    image: ragstar/flower
+    build:
+      context: ./backend_django
+      dockerfile: Dockerfile
+    container_name: ragstar_flower
+    command: >
+      sh -c "
+        uv run celery -A ragstar flower --address=0.0.0.0 --port=5555
+      "
+    ports:
+      - "5555:5555"
+    volumes:
+      - ./backend_django:/app # Mount local code for development
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      - backend-django
+      - redis
+      - celery-worker
+    restart: unless-stopped
+
+  frontend-nextjs:
+    image: ragstar/frontend_nextjs
+    build:
+      context: ./frontend_nextjs
+      dockerfile: Dockerfile
+      target: development
+    container_name: ragstar_frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    volumes:
+      - ./frontend_nextjs:/app
+      - /app/node_modules
+      - /app/.next
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: development
+      INTERNAL_API_URL: http://backend-django:8000
+    depends_on:
+      - backend-django
     restart: unless-stopped
 
 volumes:
