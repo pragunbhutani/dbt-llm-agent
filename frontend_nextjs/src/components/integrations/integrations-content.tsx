@@ -256,115 +256,103 @@ function IntegrationGrid({
   testingIntegration: number | null;
   togglingIntegration: number | null;
 }) {
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "connected":
-        return "bg-green-100 text-green-800 border-green-200";
-      case "error":
-        return "bg-red-100 text-red-800 border-red-200";
-      case "not_configured":
-        return "bg-gray-100 text-gray-800 border-gray-200";
-      default:
-        return "bg-yellow-100 text-yellow-800 border-yellow-200";
-    }
+  const getEnabledBadgeColor = (enabled: boolean) => {
+    return enabled
+      ? "bg-green-100 text-green-800 border-green-200"
+      : "bg-gray-100 text-gray-800 border-gray-200";
   };
 
-  const getStatusText = (status: string) => {
-    switch (status) {
-      case "connected":
-        return "Connected";
-      case "error":
-        return "Error";
-      case "not_configured":
-        return "Not Configured";
-      default:
-        return "Unknown";
-    }
-  };
+  const getEnabledBadgeText = (enabled: boolean) =>
+    enabled ? "Enabled" : "Disabled";
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      {integrations.map((integration) => (
-        <Card key={integration.key} className="relative">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">{integration.name}</CardTitle>
-              <Badge
-                variant="outline"
-                className={`text-xs ${getStatusColor(
-                  integration.connection_status
-                )}`}
-              >
-                {getStatusText(integration.connection_status)}
-              </Badge>
-            </div>
-            <CardDescription className="text-sm">
-              {getIntegrationDescription(integration.key)}
-            </CardDescription>
-          </CardHeader>
+      {integrations.map((integration) => {
+        const isToggling =
+          togglingIntegration !== null &&
+          togglingIntegration === integration.id;
 
-          <CardContent className="space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-600">Status:</span>
-              <span
-                className={
-                  integration.is_enabled ? "text-green-600" : "text-gray-400"
-                }
-              >
-                {integration.is_enabled ? "Enabled" : "Disabled"}
-              </span>
-            </div>
+        return (
+          <Card key={integration.key} className="relative">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg">{integration.name}</CardTitle>
+                <Badge
+                  variant="outline"
+                  className={`text-xs ${getEnabledBadgeColor(
+                    integration.is_enabled
+                  )}`}
+                >
+                  {getEnabledBadgeText(integration.is_enabled)}
+                </Badge>
+              </div>
+              <CardDescription className="text-sm">
+                {getIntegrationDescription(integration.key)}
+              </CardDescription>
+            </CardHeader>
 
-            <div className="flex gap-2 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="flex-1"
-                disabled={
-                  integration.id === null ||
-                  togglingIntegration === integration.id
-                }
-                onClick={() => integration.id && onToggle(integration.id)}
-              >
-                {togglingIntegration === integration.id ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    {integration.is_enabled ? "Disabling..." : "Enabling..."}
-                  </>
-                ) : (
-                  <>{integration.is_enabled ? "Disable" : "Enable"}</>
-                )}
-              </Button>
+            <CardContent className="space-y-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-gray-600">Configured:</span>
+                <span
+                  className={
+                    integration.is_configured
+                      ? "text-green-600"
+                      : "text-gray-400"
+                  }
+                >
+                  {integration.is_configured ? "Yes" : "No"}
+                </span>
+              </div>
 
-              {integration.is_configured && integration.id && (
+              <div className="flex gap-2 pt-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => onTestConnection(integration.id!)}
-                  disabled={testingIntegration === integration.id}
+                  className="flex-1"
+                  disabled={integration.id === null || isToggling}
+                  onClick={() => integration.id && onToggle(integration.id)}
                 >
-                  {testingIntegration === integration.id ? (
+                  {isToggling ? (
                     <>
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      Testing
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      {integration.is_enabled ? "Disabling..." : "Enabling..."}
                     </>
                   ) : (
-                    "Test"
+                    <>{integration.is_enabled ? "Disable" : "Enable"}</>
                   )}
                 </Button>
-              )}
 
-              <Button
-                variant="default"
-                size="sm"
-                onClick={() => onConfigure(integration)}
-              >
-                {integration.key === "slack" ? "Setup" : "Configure"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
+                {integration.is_configured && integration.id && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => onTestConnection(integration.id!)}
+                    disabled={testingIntegration === integration.id}
+                  >
+                    {testingIntegration === integration.id ? (
+                      <>
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        Testing
+                      </>
+                    ) : (
+                      "Test"
+                    )}
+                  </Button>
+                )}
+
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => onConfigure(integration)}
+                >
+                  {integration.key === "slack" ? "Setup" : "Configure"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
     </div>
   );
 }

@@ -47,6 +47,8 @@ except ImportError:
         "Snowflake connector not installed. SQLVerifier will not work with Snowflake."
     )
 
+# Shared response schema
+from apps.workflows.schemas import SQLVerificationResponse
 
 logger = logging.getLogger(__name__)
 
@@ -1394,8 +1396,8 @@ class SQLVerifierWorkflow:
             logger.error(
                 "SQLVerifierWorkflow: LLM client not available, but debugging is requested. Cannot proceed with debugging."
             )
-            # Return a state indicating failure due to missing LLM for debugging
-            return SQLVerifierState(
+            # Return a structured failure response
+            fallback_state = SQLVerifierState(
                 original_sql_query=sql_query,
                 current_sql_query=sql_query,
                 warehouse_type=warehouse_type,
@@ -1414,6 +1416,17 @@ class SQLVerifierWorkflow:
                 messages=[],
                 agent_tool_calls=[],
             )
+
+            fallback_response = SQLVerificationResponse(
+                success=False,
+                is_valid=False,
+                verified_sql=sql_query,
+                error=fallback_state["execution_error"],
+                explanation=fallback_state["debug_explanation"],
+                debugging_log=fallback_state["debugging_log"],
+                was_executed=False,
+            )
+            return fallback_response.dict()
 
         # Handle missing credentials gracefully by falling back to offline verification.
         if not self.snowflake_creds and warehouse_type.lower() == "snowflake":
@@ -1446,7 +1459,16 @@ class SQLVerifierWorkflow:
             # Include an explicit flag so callers know the query wasn't run.
             offline_state["was_executed"] = False  # type: ignore
 
-            return offline_state
+            offline_response = SQLVerificationResponse(
+                success=False,
+                is_valid=False,
+                verified_sql=sql_query,
+                error=offline_state["execution_error"],
+                explanation=offline_state["debug_explanation"],
+                debugging_log=offline_state["debugging_log"],
+                was_executed=False,
+            )
+            return offline_response.dict()
 
         # Ensure the graph is built
         if not hasattr(self, "graph_app") or self.graph_app is None:
@@ -1487,11 +1509,99 @@ class SQLVerifierWorkflow:
                 )
                 config = {"configurable": {"thread_id": conv_id}}
 
-        final_state = await self.graph_app.ainvoke(initial_state_dict, config=config)
+        ###########################
+        # BEGIN ERROR HANDLING WRAP
+        ###########################
+        try:
+            final_state = await self.graph_app.ainvoke(
+                initial_state_dict, config=config
+            )
 
-        # The final_state from ainvoke will be the state of the graph when it reached END.
-        # This state should contain all the necessary output fields.
-        return final_state
+            # The final_state from ainvoke will be the state of the graph when it reached END.
+            # This state should contain all the necessary output fields.
+            result_dict = {
+                "original_sql_query": final_state["original_sql_query"],
+                "corrected_sql_query": final_state["corrected_sql_query"],
+                "is_valid": final_state["is_valid"],
+                "execution_error": final_state["execution_error"],
+                "debug_explanation": final_state["debug_explanation"],
+                "debug_attempts_made": final_state["debug_attempts"],
+                "is_style_compliant": final_state["is_style_compliant"],
+                "style_violations": final_state["style_violations"],
+                "verified_sql": final_state["current_sql_query"],
+                "debugging_log": final_state["debugging_log"],
+                "status_message": (
+                    "SQL query is valid."
+                    if final_state["is_valid"]
+                    else f"SQL query is invalid after {final_state['debug_attempts']} attempt(s)."
+                ),
+                "messages": final_state["messages"],
+                "agent_described_tables_info": final_state[
+                    "agent_described_tables_info"
+                ],
+                "agent_listed_column_values": final_state["agent_listed_column_values"],
+                "agent_tool_calls": final_state["agent_tool_calls"],
+                "success": final_state["is_valid"],
+            }
+            response = SQLVerificationResponse(**result_dict)
+            return response.dict()  # Return canonical shape
+        except Exception as e:
+            # Catch **all** unexpected errors so that upstream workflows never break.
+            err_msg = f"SQLVerifierWorkflow crashed: {e}"
+            logger.exception(err_msg)
+
+            safe_state: SQLVerifierState = SQLVerifierState(
+                original_sql_query=sql_query,
+                current_sql_query=sql_query,
+                warehouse_type=warehouse_type,
+                is_valid=False,
+                execution_error=str(e),
+                corrected_sql_query=None,
+                debug_attempts=0,
+                max_debug_attempts=effective_max_debug_attempts,
+                dbt_models_info=dbt_models_info,
+                agent_described_tables_info={},
+                agent_listed_column_values={},
+                debug_explanation="Verifier encountered an unexpected error and could not complete automatic checks.",
+                debugging_log=[err_msg],
+                is_style_compliant=True,
+                style_violations=[],
+                messages=[],
+                agent_tool_calls=[],
+            )
+
+            # Include a flag so callers know we bailed out early
+            safe_state["was_executed"] = False  # type: ignore
+
+            result_dict = {
+                "original_sql_query": safe_state["original_sql_query"],
+                "corrected_sql_query": safe_state["corrected_sql_query"],
+                "is_valid": safe_state["is_valid"],
+                "execution_error": safe_state["execution_error"],
+                "debug_explanation": safe_state["debug_explanation"],
+                "debug_attempts_made": safe_state["debug_attempts"],
+                "is_style_compliant": safe_state["is_style_compliant"],
+                "style_violations": safe_state["style_violations"],
+                "verified_sql": safe_state["current_sql_query"],
+                "debugging_log": safe_state["debugging_log"],
+                "status_message": (
+                    "SQL query is invalid."
+                    if not safe_state["is_valid"]
+                    else "SQL query is valid."
+                ),
+                "messages": safe_state["messages"],
+                "agent_described_tables_info": safe_state[
+                    "agent_described_tables_info"
+                ],
+                "agent_listed_column_values": safe_state["agent_listed_column_values"],
+                "agent_tool_calls": safe_state["agent_tool_calls"],
+                "success": safe_state["is_valid"],
+            }
+            response = SQLVerificationResponse(**result_dict)
+            return response.dict()  # Return canonical shape
+        #########################
+        # END ERROR HANDLING WRAP
+        #########################
 
     async def finalize_verification_node(
         self, state: SQLVerifierState
@@ -1557,7 +1667,7 @@ class SQLVerifierWorkflow:
 
         # Return all relevant fields that QueryExecutorWorkflow might need.
         # This structure should align with what SQLDebugResult expects, more or less.
-        result = {
+        result_dict = {
             "original_sql_query": original_query,
             "corrected_sql_query": (
                 final_query
@@ -1570,12 +1680,14 @@ class SQLVerifierWorkflow:
             "debug_attempts_made": attempts,
             "is_style_compliant": style_compliant,
             "style_violations": style_violations,
+            "verified_sql": final_query,
             "debugging_log": current_debugging_log,  # Include the log
             "status_message": status_message,  # A human-readable summary
             "messages": state.get("messages", []),
             "agent_described_tables_info": state.get("agent_described_tables_info", {}),
             "agent_listed_column_values": state.get("agent_listed_column_values", {}),
             "agent_tool_calls": state.get("agent_tool_calls", []),
+            "success": is_valid,
         }
         # Ensure all keys expected by SQLDebugResult are present, even if None
         # This might be better handled by constructing an SQLDebugResult Pydantic model
@@ -1585,7 +1697,8 @@ class SQLVerifierWorkflow:
         # final_result_cleaned = {k: v for k, v in result.items() if v is not None}
         # However, QueryExecutor might expect all keys.
 
-        return result  # This dictionary will be the output of the graph's 'END' state.
+        response = SQLVerificationResponse(**result_dict)
+        return response.dict()  # Return canonical shape
 
 
 # Example usage (for testing, not part of the class)

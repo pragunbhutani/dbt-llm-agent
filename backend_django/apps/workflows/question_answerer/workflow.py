@@ -44,6 +44,9 @@ from .prompts import create_system_prompt, create_guidance_message
 # Import sync_to_async correctly
 from asgiref.sync import sync_to_async
 
+# Import QAResponse for contract validation
+from apps.workflows.schemas import QAResponse
+
 logger = logging.getLogger(__name__)
 
 
@@ -98,6 +101,7 @@ class QuestionAnsweringState(TypedDict):
     relevant_feedback: Dict[str, List[Any]]
     final_answer: Optional[str]
     models_snapshot_for_final_answer: Optional[List[Dict[str, Any]]]
+    sql_query: Optional[str]
     conversation_id: Optional[str]
     thread_context: Optional[List[Dict[str, Any]]]
     similar_original_messages: Optional[List[Dict[str, Any]]]
@@ -435,7 +439,9 @@ class QuestionAnswererAgent:
                     f"\nTool: finish_workflow(answer='{answer[:80]}...', sql_present={bool(sql_query)})"
                 )
 
-            return {"answer": answer, "sql_query": sql_query}
+            # Use the canonical QAResponse model for strong typing at the boundary
+            response_obj = QAResponse(answer=answer, sql_query=sql_query)
+            return response_obj.model_dump()
 
         self._tools = [
             fetch_model_details,
@@ -642,7 +648,14 @@ class QuestionAnswererAgent:
             try:
                 tool_content = json.loads(tool_content)
             except json.JSONDecodeError:
-                pass
+                # Fallback: try ast.literal_eval which can handle single quotes, etc.
+                try:
+                    import ast
+
+                    tool_content = ast.literal_eval(tool_content)
+                except (ValueError, SyntaxError):
+                    # leave as string if still unparseable
+                    pass
 
         tool_name = last_message.name
         if self.verbose:
@@ -729,8 +742,7 @@ class QuestionAnswererAgent:
             # Expecting dict with keys 'answer' and optional 'sql_query'
             if isinstance(tool_content, dict):
                 updates["final_answer"] = tool_content.get("answer")
-                if tool_content.get("sql_query"):
-                    updates["sql_query"] = tool_content.get("sql_query")
+                updates["sql_query"] = tool_content.get("sql_query")
 
                 updates["models_snapshot_for_final_answer"] = list(
                     state.get("accumulated_models", [])
@@ -975,6 +987,7 @@ class QuestionAnswererAgent:
             relevant_feedback={},
             final_answer=None,
             models_snapshot_for_final_answer=None,
+            sql_query=None,
             conversation_id=conversation_id,
             thread_context=thread_context,
             similar_original_messages=[],

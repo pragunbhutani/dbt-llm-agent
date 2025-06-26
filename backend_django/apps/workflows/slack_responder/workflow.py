@@ -50,6 +50,11 @@ from .prompts import (
 from slack_sdk.web.async_client import AsyncWebClient
 from slack_sdk.errors import SlackApiError
 
+# Shared schema for SQL verification results
+from apps.workflows.schemas import SQLVerificationResponse
+from apps.workflows.schemas import QAResponse
+from pydantic import ValidationError
+
 logger = logging.getLogger(__name__)
 
 
@@ -273,10 +278,41 @@ class SlackResponderAgent:
                     conversation_id=f"slack-{self.current_channel_id}-{self.current_thread_ts}",
                 )
 
-                # The QA workflow now returns keys: 'answer' and 'models_used'
-                qa_answer: Optional[str] = result.get("answer")
-                sql_query: Optional[str] = result.get("sql_query")
-                models_used: List[Dict[str, Any]] = result.get("models_used", [])
+                # Validate against the canonical schema for safety
+                try:
+                    qa_obj = QAResponse(**result)
+                    qa_answer: Optional[str] = qa_obj.answer
+                    sql_query: Optional[str] = qa_obj.sql_query
+                    models_used: List[Dict[str, Any]] = qa_obj.models_used
+                except ValidationError as ve:
+                    # Contract broken – log and salvage what we can
+                    logger.warning(
+                        "QuestionAnswerer returned payload that failed QAResponse validation: %s",
+                        ve,
+                    )
+                    if self.conversation_logger:
+                        await sync_to_async(self.conversation_logger.log_error)(
+                            content="QA payload validation failed",
+                            error_details={"validation_error": str(ve)},
+                        )
+
+                    # Fall back to best-effort extraction to avoid throwing away work
+                    qa_answer = (
+                        result.get("answer")
+                        or "I'm still working on that – could you clarify anything else?"
+                    )
+                    sql_query = result.get("sql_query")
+                    models_used = result.get("models_used", [])
+
+                # If no explicit sql_query returned, attempt to extract from fenced code block in answer
+                if sql_query is None and isinstance(qa_answer, str):
+                    import re
+
+                    sql_match = re.search(
+                        r"```sql\s*([\s\S]+?)```", qa_answer, re.IGNORECASE
+                    )
+                    if sql_match:
+                        sql_query = sql_match.group(1).strip()
 
                 # Log the QA response
                 if self.conversation_logger:
@@ -344,7 +380,7 @@ class SlackResponderAgent:
                         },
                     )
 
-                result = await self.sql_verifier.run(
+                raw_result = await self.sql_verifier.run(
                     sql_query=sql_query,
                     warehouse_type=getattr(
                         settings, "DATA_WAREHOUSE_TYPE", "snowflake"
@@ -354,42 +390,42 @@ class SlackResponderAgent:
                     conversation_id=f"verify-{self.current_channel_id}-{self.current_thread_ts}",
                 )
 
+                # Cast into shared contract model for reliable access
+                result = SQLVerificationResponse(**raw_result)
+
                 # Log verification result
                 if self.conversation_logger:
                     await sync_to_async(self.conversation_logger.log_system_message)(
-                        content=f"SQL verification completed. Valid: {result.get('is_valid')}",
+                        content=f"SQL verification completed. Valid: {result.is_valid}",
                         metadata={
                             "action": "sql_verification_complete",
-                            "is_valid": result.get("is_valid"),
-                            "has_error": bool(result.get("execution_error")),
+                            "is_valid": result.is_valid,
+                            "has_error": bool(result.error),
                         },
                     )
 
                 if self.verbose:
-                    logger.info(f"SQL verification completed: {result.get('is_valid')}")
+                    logger.info(f"SQL verification completed: {result.is_valid}")
 
-                if result.get("is_valid"):
+                if result.is_valid:
                     return {
                         "success": True,
                         "is_valid": True,
-                        "verified_sql": result.get("corrected_sql_query")
-                        or result.get("original_sql_query"),
-                        "error": result.get("execution_error"),
-                        "explanation": result.get("debug_explanation"),
+                        "verified_sql": result.verified_sql,
+                        "error": result.error,
+                        "explanation": result.explanation,
                     }
                 else:
-                    error_msg = (
-                        f"SQL verification failed: {result.get('execution_error')}"
-                    )
+                    error_msg = f"SQL verification failed: {result.error}"
                     logger.warning(error_msg)
 
                     # Provide non-fatal fallback so downstream logic can still share the query.
                     return {
                         "success": True,
                         "is_valid": False,
-                        "verified_sql": sql_query,
+                        "verified_sql": result.verified_sql or sql_query,
                         "error": error_msg,
-                        "explanation": None,
+                        "explanation": result.explanation,
                     }
             except Exception as e:
                 error_msg = f"Error in SQL verification: {e}"
@@ -865,7 +901,16 @@ class SlackResponderAgent:
             and last_message.content
             and not last_message.tool_calls
         ):
-            response_text = last_message.content.strip()
+            # Ensure we have a clean string to post. Some LLMs return `content` as a
+            # list of strings instead of a single string. Join list items if needed
+            # and then strip surrounding whitespace.
+            content = last_message.content
+            if isinstance(content, list):
+                response_text = "\n".join(
+                    [str(part) for part in content if part is not None]
+                ).strip()
+            else:
+                response_text = str(content).strip()
 
             # Avoid posting duplicate acknowledgements
             if state.get("acknowledgement_sent") and not state.get("qa_final_answer"):
