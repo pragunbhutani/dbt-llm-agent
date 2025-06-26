@@ -59,10 +59,24 @@ export const getColumns = ({
     cell: ({ row }) => {
       const question = row.getValue("initial_question") as string;
       const conversationId = row.original.id;
+
+      // Limit the displayed question length to avoid extremely wide cells
+      const MAX_CHARS = 120;
+      const displayQuestion =
+        question.length > MAX_CHARS
+          ? `${question.slice(0, MAX_CHARS)}…`
+          : question;
+
       return (
         <Link href={`/dashboard/chats/${conversationId}`}>
-          <div className="min-w-[300px] flex-1 truncate font-medium hover:text-blue-600 cursor-pointer">
-            {question}
+          {/*
+            The combination of max-w and truncate ensures the cell never
+            forces the table to exceed the page width while still showing an
+            ellipsis for overflow text. We intentionally remove flex-1 so the
+            column stops greedily expanding.
+          */}
+          <div className="min-w-[200px] max-w-[300px] truncate font-medium hover:text-blue-600 cursor-pointer">
+            {displayQuestion}
           </div>
         </Link>
       );
@@ -115,21 +129,11 @@ export const getColumns = ({
       <DataTableColumnHeader column={column} title="Status" />
     ),
     cell: ({ row }) => {
-      const status = row.getValue("status") as string;
-      const variant =
-        status === "completed"
-          ? "default"
-          : status === "active"
-          ? "secondary"
-          : status === "error"
-          ? "destructive"
-          : "outline";
+      const statusRaw = row.getValue("status") as string;
+      const displayStatus = statusRaw === "active" ? "Active" : "Completed";
+      const variant = statusRaw === "active" ? "secondary" : "default";
 
-      return (
-        <Badge variant={variant}>
-          {status.charAt(0).toUpperCase() + status.slice(1)}
-        </Badge>
-      );
+      return <Badge variant={variant}>{displayStatus}</Badge>;
     },
     filterFn: (row, id, value) => {
       return value.includes(row.getValue(id));
@@ -141,8 +145,10 @@ export const getColumns = ({
       <DataTableColumnHeader column={column} title="Started By" />
     ),
     cell: ({ row }) => {
+      // Prefer user_external_id (display name) but fall back to user_id
+      const userName = (row.original as ConversationListItem).user_external_id;
       const userId = row.getValue("user_id") as string;
-      return <span className="text-sm">{userId || "Unknown"}</span>;
+      return <span className="text-sm">{userName || userId || "Unknown"}</span>;
     },
   },
   {

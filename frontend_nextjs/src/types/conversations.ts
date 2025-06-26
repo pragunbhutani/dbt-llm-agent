@@ -36,6 +36,7 @@ export interface Conversation {
   external_id?: string;
   channel: "slack" | "web" | "mcp" | "api";
   user_id?: string;
+  user_external_id?: string;
   status: "active" | "completed" | "error" | "timeout";
   trigger: "slack_mention" | "web_interface" | "mcp_server" | "api_call";
   title?: string;
@@ -43,7 +44,6 @@ export interface Conversation {
   initial_question: string;
   channel_type: string;
   channel_id?: string;
-  user_external_id?: string;
   llm_provider: string;
   enabled_integrations: string[];
   total_parts: number;
@@ -66,6 +66,7 @@ export interface ConversationListItem {
   id: number;
   channel: "slack" | "web" | "mcp" | "api";
   user_id?: string;
+  user_external_id?: string;
   status: "active" | "completed" | "error" | "timeout";
   trigger: "slack_mention" | "web_interface" | "mcp_server" | "api_call";
   title?: string;

@@ -121,6 +121,7 @@ export default function ConversationsTable() {
   const initialColumnVisibility = {
     trigger: false,
     total_cost: false,
+    channel: false,
   };
 
   const filterOptions = [

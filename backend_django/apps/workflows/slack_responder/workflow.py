@@ -86,6 +86,13 @@ class PostTextResponseInput(BaseModel):
     message_text: str
 
 
+class PostAnalysisWithUnverifiedSQLInput(BaseModel):
+    message_text: str
+    sql_query: str
+    verification_error: Optional[str] = None
+    models_used: Optional[List[Dict[str, Any]]] = None
+
+
 # --- LangGraph State Definition ---
 class SlackResponderState(TypedDict):
     original_question: str
@@ -361,30 +368,41 @@ class SlackResponderAgent:
                 if self.verbose:
                     logger.info(f"SQL verification completed: {result.get('is_valid')}")
 
-                return {
-                    "success": True,
-                    "is_valid": result.get("is_valid"),
-                    # Even if the verifier couldn't mark the query as valid, we still pass back
-                    # the best version of the query we have (corrected or original). This allows
-                    # downstream logic to gracefully degrade by still showing users a candidate
-                    # query rather than hiding it entirely.
-                    "verified_sql": result.get("corrected_sql_query")
-                    or result.get("original_sql_query"),
-                    "error": result.get("execution_error"),
-                    "explanation": result.get("debug_explanation"),
-                }
+                if result.get("is_valid"):
+                    return {
+                        "success": True,
+                        "is_valid": True,
+                        "verified_sql": result.get("corrected_sql_query")
+                        or result.get("original_sql_query"),
+                        "error": result.get("execution_error"),
+                        "explanation": result.get("debug_explanation"),
+                    }
+                else:
+                    error_msg = (
+                        f"SQL verification failed: {result.get('execution_error')}"
+                    )
+                    logger.warning(error_msg)
+
+                    # Provide non-fatal fallback so downstream logic can still share the query.
+                    return {
+                        "success": True,
+                        "is_valid": False,
+                        "verified_sql": sql_query,
+                        "error": error_msg,
+                        "explanation": None,
+                    }
             except Exception as e:
                 error_msg = f"Error in SQL verification: {e}"
+                # Early graceful fallback so the workflow continues even if verification itself
+                # crashes. We send back the unverified SQL.
+                return {
+                    "success": True,
+                    "is_valid": False,
+                    "verified_sql": sql_query,
+                    "error": error_msg,
+                    "explanation": None,
+                }
                 logger.exception(error_msg)
-
-                # Log the error
-                if self.conversation_logger:
-                    await sync_to_async(self.conversation_logger.log_error)(
-                        content=error_msg,
-                        error_details={"component": "sql_verifier", "error": str(e)},
-                    )
-
-                return {"success": False, "error": error_msg}
 
         @tool(args_schema=PostFinalResponseInput)
         async def post_final_response_with_snippet(
@@ -471,6 +489,97 @@ class SlackResponderAgent:
                 logger.exception(f"Error posting text response: {e}")
                 return {"success": False, "error": str(e)}
 
+        @tool(args_schema=PostAnalysisWithUnverifiedSQLInput)
+        async def post_analysis_with_unverified_sql(
+            message_text: str,
+            sql_query: str,
+            verification_error: Optional[str] = None,
+            models_used: Optional[List[Dict[str, Any]]] = None,
+        ) -> Dict[str, Any]:
+            """Posts analysis results with unverified SQL when verification fails but we still want to provide value."""
+            if self.verbose:
+                logger.info("Tool: post_analysis_with_unverified_sql")
+
+            if not self.current_channel_id or not self.current_thread_ts:
+                return {
+                    "success": False,
+                    "error": "Channel/Thread context not available",
+                }
+
+            try:
+                # Create a comprehensive response that provides value despite verification failure
+                response_parts = [message_text]
+
+                # Add information about models used if available
+                if models_used:
+                    model_names = [
+                        m.get("name", "Unknown")
+                        for m in models_used
+                        if isinstance(m, dict)
+                    ]
+                    if model_names:
+                        response_parts.append(
+                            f"\n📊 *Analysis based on models:* {', '.join(model_names)}"
+                        )
+
+                # Add a clear disclaimer about the SQL
+                response_parts.append(
+                    f"\n⚠️ *Note:* The SQL query below was generated but could not be fully verified due to: {verification_error or 'verification issues'}"
+                )
+                response_parts.append(
+                    "\n*Please review carefully before running in production.*"
+                )
+
+                combined_message = "".join(response_parts)
+
+                # Create SQL file content with warnings
+                sql_content = f"""-- Generated SQL Query (UNVERIFIED)
+-- Question: {message_text[:100]}...
+-- 
+-- ⚠️ WARNING: This query could not be verified due to: {verification_error or 'verification issues'}
+-- Please review and test carefully before using in production
+--
+
+{sql_query}"""
+
+                # Log the fallback response
+                if self.conversation_logger:
+                    await sync_to_async(self.conversation_logger.log_agent_response)(
+                        content=f"{combined_message}\n\nUnverified SQL Query:\n```sql\n{sql_query}\n```",
+                        metadata={
+                            "action": "fallback_response_with_unverified_sql",
+                            "verification_failed": True,
+                            "verification_error": verification_error,
+                            "has_sql": True,
+                            "sql_length": len(sql_query),
+                            "models_used": [
+                                m.get("name")
+                                for m in (models_used or [])
+                                if isinstance(m, dict)
+                            ],
+                            "channel": "slack",
+                        },
+                    )
+
+                # Post message with file
+                await self.slack_client.files_upload_v2(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    initial_comment=combined_message,
+                    content=sql_content,
+                    filename="unverified_query.sql",
+                    title="SQL Query (Unverified)",
+                )
+
+                if self.verbose:
+                    logger.info(
+                        "Fallback response with unverified SQL posted successfully"
+                    )
+                return {"success": True, "response_sent": True}
+            except Exception as e:
+                logger.exception(f"Error posting fallback response: {e}")
+                return {"success": False, "error": str(e)}
+
         # Store tools for graph building
         self._tools = [
             fetch_slack_thread,
@@ -479,6 +588,7 @@ class SlackResponderAgent:
             verify_sql_query,
             post_final_response_with_snippet,
             post_text_response,
+            post_analysis_with_unverified_sql,
         ]
 
     # --- Graph Construction (Simplified Flow) ---
@@ -720,6 +830,7 @@ class SlackResponderAgent:
         elif last_message.name in [
             "post_final_response_with_snippet",
             "post_text_response",
+            "post_analysis_with_unverified_sql",
         ]:
             if isinstance(tool_content, dict):
                 if tool_content.get("success"):
@@ -949,14 +1060,46 @@ class SlackResponderAgent:
         self.current_channel_id = channel_id
         self.current_thread_ts = thread_ts
 
+        # --- Fetch Slack user display name for better UX ---
+        user_display_name: str | None = None
+        try:
+            # Attempt to fetch user info from Slack to get their real/display name
+            if self.slack_client and user_id:
+                user_info_resp = await self.slack_client.users_info(user=user_id)
+                if user_info_resp.get("ok"):
+                    profile = user_info_resp["user"].get("profile", {})
+                    user_display_name = (
+                        profile.get("real_name")
+                        or profile.get("display_name")
+                        or user_info_resp["user"].get("name")
+                    )
+        except SlackApiError as e:
+            logger.warning(
+                f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error fetching Slack user info for {user_id}: {e}"
+            )
+
         # Initialize conversation_id early for error handling
         conversation_id = f"slack-{channel_id}-{thread_ts}"
 
         try:
-            # Get or create conversation
+            # Get or create conversation (initially stores user_id as both id & external_id)
             self.conversation = await self._get_or_create_conversation(
                 question, channel_id, thread_ts, user_id
             )
+
+            # If we successfully fetched the user's display name, update the conversation
+            if (
+                user_display_name
+                and user_display_name != self.conversation.user_external_id
+            ):
+                self.conversation.user_external_id = user_display_name
+                await sync_to_async(self.conversation.save)(
+                    update_fields=["user_external_id"]
+                )
 
             # Initialize conversation logger
             self.conversation_logger = ConversationLogger(self.conversation)
@@ -1058,13 +1201,80 @@ class SlackResponderAgent:
 
     # --- Error Handling Node ---
     async def error_handler_node(self, state: SlackResponderState) -> Dict[str, Any]:
-        """Handles errors gracefully by sending user-friendly messages."""
+        """Handles errors gracefully by sending user-friendly messages, with fallback value when possible."""
         if self.verbose:
             logger.info(">>> Entering error_handler_node")
 
         error_message = state.get("error_message", "An unexpected issue occurred")
 
-        # Create user-friendly error message
+        # Check if we have partial results we can still provide value with
+        qa_answer = state.get("qa_final_answer")
+        qa_sql = state.get("qa_sql_query")
+        qa_models = state.get("qa_models")
+        sql_verification_error = state.get("sql_verification_error")
+
+        # Try to provide maximum value even in error scenarios
+        if qa_answer and qa_sql and "sql" in error_message.lower():
+            # We have analysis and SQL but verification failed - provide unverified SQL
+            try:
+                fallback_message = f"I was able to analyze your question and generate a response, though I couldn't fully verify the SQL query. Here's what I found:\n\n{qa_answer}"
+
+                await self.slack_client.files_upload_v2(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    initial_comment=fallback_message
+                    + f"\n\n⚠️ *Note:* The SQL below couldn't be fully verified due to: {sql_verification_error or 'verification issues'}. Please review before using.",
+                    content=f"""-- Generated SQL Query (UNVERIFIED)
+-- ⚠️ WARNING: Could not be verified due to: {sql_verification_error or 'verification issues'}
+-- Please review and test carefully before using
+
+{qa_sql}""",
+                    filename="unverified_query.sql",
+                    title="SQL Query (Unverified)",
+                )
+
+                if self.verbose:
+                    logger.info(
+                        "Sent fallback response with unverified SQL from error handler"
+                    )
+                return {"response_sent": True, "error_handled": True}
+            except Exception as e:
+                logger.exception(f"Failed to send fallback response: {e}")
+                # Fall through to generic error message
+
+        elif qa_answer and not qa_sql:
+            # We have analysis but no SQL - just send the analysis
+            try:
+                fallback_message = (
+                    f"I was able to analyze your question:\n\n{qa_answer}"
+                )
+                if qa_models:
+                    model_names = [
+                        m.get("name", "Unknown")
+                        for m in qa_models
+                        if isinstance(m, dict)
+                    ]
+                    if model_names:
+                        fallback_message += (
+                            f"\n\n📊 *Based on models:* {', '.join(model_names)}"
+                        )
+
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=fallback_message,
+                )
+
+                if self.verbose:
+                    logger.info(
+                        "Sent fallback response with analysis from error handler"
+                    )
+                return {"response_sent": True, "error_handled": True}
+            except Exception as e:
+                logger.exception(f"Failed to send analysis fallback: {e}")
+                # Fall through to generic error message
+
+        # Create user-friendly error message as last resort
         user_message = "I'm having trouble processing your request right now. "
 
         if "thread" in error_message.lower():
@@ -1075,7 +1285,7 @@ class SlackResponderAgent:
         ):
             user_message += "I need more information about your data models to answer that question. Could you provide more details?"
         elif "sql" in error_message.lower():
-            user_message += "I'm having trouble with the data analysis part. Let me try a different approach."
+            user_message += "I'm having trouble with the data analysis part, but I'll keep trying to help you find insights."
         else:
             user_message += "Please try again in a moment, or contact support if the issue persists."
 

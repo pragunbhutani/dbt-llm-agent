@@ -49,18 +49,24 @@ class ModelViewSet(viewsets.ModelViewSet):
             raise PermissionDenied("User is not associated with an organisation.")
 
     def _is_valid_embedding(self, embedding_record):
-        """Check if an embedding record is valid (not a placeholder)."""
+        """Return True if the embedding exists and is NOT a placeholder of all-zero values."""
         if not embedding_record:
             return False
 
-        # Check for placeholder values that indicate failed processing
-        is_placeholder = (
-            embedding_record.document == ""
-            or embedding_record.embedding == [0] * 3072
-            or embedding_record.embedding == [0.0] * 3072
+        # Convert the stored vector to a plain Python list (VectorField may return a
+        # specialised type that doesn't compare cleanly to another list).
+        try:
+            embedding_values = list(embedding_record.embedding)  # type: ignore
+        except Exception:
+            # Fallback: treat unknown format as invalid so that we retrain
+            return False
+
+        is_zero_vector = len(embedding_values) == 3072 and all(
+            v == 0 or v == 0.0 for v in embedding_values
         )
 
-        return not is_placeholder
+        # A valid embedding must have a non-empty document and a non-zero vector
+        return not (embedding_record.document == "" or is_zero_vector)
 
     @action(detail=True, methods=["post"], url_path="toggle-answering-status")
     def toggle_answering_status(self, request, pk=None):
@@ -140,8 +146,8 @@ class ModelViewSet(viewsets.ModelViewSet):
                 {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
-    @action(detail=False, methods=["post"], url_path="bulk-toggle-answering-status")
-    def bulk_toggle_answering_status(self, request):
+    @action(detail=False, methods=["post"], url_path="bulk-toggle-answering")
+    def bulk_toggle_answering(self, request):
         """
         Bulk enables or disables models for answering.
         Expects a list of model IDs and an 'action' ('enable' or 'disable').

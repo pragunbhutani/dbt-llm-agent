@@ -141,6 +141,7 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "id",
             "channel",
             "user_id",
+            "user_external_id",
             "status",
             "trigger",
             "title",
@@ -160,4 +161,5 @@ class ConversationListSerializer(serializers.ModelSerializer):
             "total_parts",
             "total_tokens_used",
             "total_cost",
+            "user_external_id",
         ]
