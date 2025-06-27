@@ -11,7 +11,7 @@ import os
 import django
 from django.core.asgi import get_asgi_application
 from starlette.applications import Starlette
-from starlette.routing import Lifespan, Mount
+from starlette.routing import Mount
 from starlette.responses import JSONResponse
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware  # If you need CORS
@@ -145,17 +145,14 @@ middleware = [
     )
 ]
 
-# Import the MCP FastAPI app
-from apps.mcp_server.main import app as mcp_app
-
-# Create the Starlette application with MCP server mounted
+# Create the Starlette application with ONLY the Django app mounted.
+# The MCP server will now run in its own standalone FastAPI service/container.
 application = Starlette(
     lifespan=lifespan,
     middleware=middleware,
     routes=[
-        # Add a trailing slash to the MCP mount to see if it affects routing priority.
-        Mount("/mcp/", app=mcp_app),
-        # Mount the Django app at the root as the fallback.
+        # Mount the Django app at the root.
+        # Any /mcp/* traffic should be routed to the separate MCP service via the reverse proxy / docker-compose network.
         Mount("/", app=django_asgi_app),
     ],
 )

@@ -60,8 +60,6 @@ urlpatterns = [
     ),
     # Generic integrations API (internal, authenticated)
     path("api/integrations/", include("apps.integrations.urls")),
-    # MCP Server OAuth endpoints for remote authentication
-    path("", include("apps.mcp_server.urls")),
 ]
 
 if settings.DEBUG:

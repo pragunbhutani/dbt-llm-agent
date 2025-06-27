@@ -87,7 +87,6 @@ INSTALLED_APPS = [
     "apps.llm_providers.apps.LlmProvidersConfig",
     "apps.workflows.apps.WorkflowsConfig",
     "apps.integrations.apps.IntegrationsConfig",
-    "apps.mcp_server.apps.McpServerConfig",
 ]
 
 AUTH_USER_MODEL = "accounts.User"

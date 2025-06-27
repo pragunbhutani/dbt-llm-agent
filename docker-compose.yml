@@ -121,6 +121,30 @@ services:
       - backend-django
     restart: unless-stopped
 
+  mcp-server:
+    image: ragstar/mcp_server
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    container_name: ragstar_mcp_server
+    command: >
+      sh -c "uv run python -m uvicorn apps.mcp_server.main:app --host 0.0.0.0 --port 9000"
+    ports:
+      - "${MCP_PORT:-9000}:9000"
+    volumes:
+      - ./backend_django:/app # Mount local code for development reuse
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      CELERY_BROKER_URL: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
 volumes:
   postgres_data:
     driver: local

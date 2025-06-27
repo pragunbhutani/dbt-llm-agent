@@ -1,0 +1,18 @@
+[project]
+name = "ragstar-mcp-server"
+version = "0.1.0"
+description = "Standalone MCP server for Ragstar"
+requires-python = "~=3.12"
+dependencies = [
+    "fastapi>=0.115.0,<0.116",
+    "uvicorn>=0.25.0,<0.26",
+    "fastmcp>=2.9.0",
+    "pydantic>=2.10.1",
+    "python-dotenv>=1.0.0,<2",
+    "aiohttp>=3.11.16,<4",
+    "httpx>=0.24.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build" 
