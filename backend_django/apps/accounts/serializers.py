@@ -118,21 +118,6 @@ class OrganisationSettingsSerializer(serializers.ModelSerializer):
                     }
                 )
 
-        # Auto-detect Slack team ID if bot token is provided
-        slack_bot_token = data.get("slack_bot_token")
-        if slack_bot_token:
-            from apps.integrations.slack.handlers import get_team_info_from_token
-
-            team_info = get_team_info_from_token(slack_bot_token)
-            if team_info:
-                data["slack_team_id"] = team_info["team_id"]
-            else:
-                raise serializers.ValidationError(
-                    {
-                        "slack_bot_token": "Invalid Slack bot token. Could not retrieve team information."
-                    }
-                )
-
         return data
 
 

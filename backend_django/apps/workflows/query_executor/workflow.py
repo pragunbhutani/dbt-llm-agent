@@ -34,9 +34,7 @@ from apps.accounts.models import OrganisationSettings
 
 # Query Executor specific imports
 # REMOVED: from . import tools as query_executor_tools
-from . import (
-    settings as query_executor_app_settings,
-)  # Our app-specific settings (for Snowflake)
+
 from .prompts import SQL_DEBUG_PROMPT_TEMPLATE
 from apps.workflows.rules_loader import get_agent_rules  # Updated import
 
@@ -45,6 +43,8 @@ from apps.workflows.services import get_slack_web_client
 
 # NEW: Import SQLVerifierWorkflow
 from apps.workflows.sql_verifier.workflow import SQLVerifierWorkflow
+from apps.workflows.services import ConversationLogger
+from apps.integrations.manager import IntegrationsManager
 
 # Import SQLDebugResult from the centralized SQLVerifierWorkflow models
 from apps.workflows.sql_verifier.models import SQLDebugResult
@@ -373,13 +373,35 @@ class QueryExecutorWorkflow:
         self.sql_verifier = SQLVerifierWorkflow(org_settings=org_settings)
 
         try:
-            self.snowflake_creds = (
-                query_executor_app_settings.get_snowflake_credentials()
-            )
-            self.warehouse_type = query_executor_app_settings.get_data_warehouse_type()
-        except ValueError as e:
+            # Get Snowflake credentials from integration system instead of environment variables
+            integrations_manager = IntegrationsManager(org_settings.organisation)
+            snowflake_integration = integrations_manager.get_integration("snowflake")
+
+            if snowflake_integration and snowflake_integration.is_configured():
+                # Get credentials from the integration
+                credentials = snowflake_integration.org_integration.credentials
+                self.snowflake_creds = {
+                    "account": credentials.get("account"),
+                    "user": credentials.get("user"),
+                    "password": credentials.get("password"),
+                    "warehouse": credentials.get("warehouse"),
+                    "database": credentials.get("database"),
+                    "schema": credentials.get("schema"),
+                }
+                self.warehouse_type = "snowflake"
+                logger.info(
+                    "QueryExecutorWorkflow: Snowflake credentials loaded from integration system."
+                )
+            else:
+                self.snowflake_creds = None
+                self.warehouse_type = None
+                logger.warning(
+                    "QueryExecutorWorkflow: Snowflake integration not configured."
+                )
+
+        except Exception as e:
             logger.error(
-                f"QueryExecutorWorkflow: Critical - Failed to load Snowflake credentials: {e}. Workflow may not function."
+                f"QueryExecutorWorkflow: Failed to load Snowflake credentials from integration system: {e}. Workflow may not function."
             )
             self.snowflake_creds = None  # Ensure it's None if loading failed
             self.warehouse_type = None  # Ensure it's None

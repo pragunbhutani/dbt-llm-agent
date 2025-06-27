@@ -73,32 +73,24 @@ def get_signing_secret_for_request(request: HttpRequest) -> Optional[str]:
             )
             return None
 
-        # Find the organization settings for this team
-        org_settings = OrganisationSettings.objects.filter(
-            slack_team_id=team_id
-        ).first()
-        if not org_settings:
-            logger.warning(f"No organization settings found for Slack team: {team_id}")
-            return None
+        # Find the organization integration for this team using the new system
+        from apps.integrations.models import OrganisationIntegration
 
-        # Get the Slack integration for this organization
         org_integration = OrganisationIntegration.objects.filter(
-            organisation=org_settings.organisation,
             integration_key="slack",
             is_enabled=True,
+            configuration__team_id=team_id,
         ).first()
 
         if not org_integration:
-            logger.warning(
-                f"No enabled Slack integration found for organization: {org_settings.organisation.name}"
-            )
+            logger.warning(f"No enabled Slack integration found for team: {team_id}")
             return None
 
         # Get signing secret from credentials
         signing_secret = org_integration.credentials.get("signing_secret")
         if not signing_secret:
             logger.warning(
-                f"No signing secret configured for Slack integration in organization: {org_settings.organisation.name}"
+                f"No signing secret configured for Slack integration in organization: {org_integration.organisation.name}"
             )
             return None
 
@@ -143,31 +135,23 @@ def get_slack_web_client_for_team(team_id: str) -> Optional[AsyncWebClient]:
     Get a Slack web client for a specific team using the organization's bot token.
     """
     try:
-        # Find the organization settings for this team
-        org_settings = OrganisationSettings.objects.filter(
-            slack_team_id=team_id
-        ).first()
-        if not org_settings:
-            logger.error(f"No organization settings found for Slack team: {team_id}")
-            return None
+        # Find the organization integration for this team using the new system
+        from apps.integrations.models import OrganisationIntegration
 
-        # Get the Slack integration for this organization
         org_integration = OrganisationIntegration.objects.filter(
-            organisation=org_settings.organisation,
             integration_key="slack",
             is_enabled=True,
+            configuration__team_id=team_id,
         ).first()
 
         if not org_integration:
-            logger.error(
-                f"No enabled Slack integration found for organization: {org_settings.organisation.name}"
-            )
+            logger.error(f"No enabled Slack integration found for team: {team_id}")
             return None
 
         bot_token = org_integration.credentials.get("bot_token")
         if not bot_token:
             logger.error(
-                f"No bot token found for organization: {org_settings.organisation.name}"
+                f"No bot token found for organization: {org_integration.organisation.name}"
             )
             return None
 
@@ -207,7 +191,12 @@ def slack_interactive_view(request: HttpRequest):
 
 @csrf_exempt
 def slack_shortcut_view(request: HttpRequest):
-    """Handles interactive shortcut payloads from Slack."""
+    """
+    Handles interactive shortcut payloads from Slack.
+
+    This endpoint must respond within 3 seconds to acknowledge receipt of the shortcut.
+    All processing is done asynchronously via Celery tasks.
+    """
     if not verify_slack_request(request):
         return HttpResponse("Slack request verification failed.", status=403)
 
@@ -239,11 +228,10 @@ def slack_shortcut_view(request: HttpRequest):
             )
             return HttpResponse(status=200)  # Acknowledge receipt
 
-        # Get organization settings for this team
-        org_settings = OrganisationSettings.objects.filter(
-            slack_team_id=team_id
-        ).first()
+        # Get organization settings for this team using the new integration system
+        from apps.integrations.slack.handlers import get_org_settings_for_team
 
+        org_settings = get_org_settings_for_team(team_id)
         if not org_settings:
             logger.error(f"No organization settings found for Slack team: {team_id}")
             return HttpResponse("Organization not found", status=400)
