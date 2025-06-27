@@ -24,9 +24,7 @@ from asgiref.sync import sync_to_async
 # Project specific imports
 from apps.llm_providers.services import ChatService
 from apps.accounts.models import OrganisationSettings
-from apps.workflows.query_executor import (
-    settings as query_executor_app_settings,
-)  # For Snowflake creds
+from apps.integrations.manager import IntegrationsManager
 from .prompts import (
     create_sql_verifier_debug_prompt,
     create_schema_validation_prompt,
@@ -129,24 +127,35 @@ class SQLVerifierWorkflow:
         self.default_max_debug_loops = max_debug_loops
 
         try:
-            self.snowflake_creds = (
-                query_executor_app_settings.get_snowflake_credentials()
-            )
-            self.warehouse_type = query_executor_app_settings.get_data_warehouse_type()
-            if (
-                self.warehouse_type != "snowflake" and snowflake
-            ):  # Check if snowflake connector is available
-                logger.warning(
-                    f"SQLVerifierWorkflow is configured for warehouse type '{self.warehouse_type}' but currently primarily supports Snowflake for direct execution."
+            # Get Snowflake credentials from integration system instead of environment variables
+            integrations_manager = IntegrationsManager(org_settings.organisation)
+            snowflake_integration = integrations_manager.get_integration("snowflake")
+
+            if snowflake_integration and snowflake_integration.is_configured():
+                # Get credentials from the integration
+                credentials = snowflake_integration.org_integration.credentials
+                self.snowflake_creds = {
+                    "account": credentials.get("account"),
+                    "user": credentials.get("user"),
+                    "password": credentials.get("password"),
+                    "warehouse": credentials.get("warehouse"),
+                    "database": credentials.get("database"),
+                    "schema": credentials.get("schema"),
+                }
+                self.warehouse_type = "snowflake"
+                logger.info(
+                    "SQLVerifierWorkflow: Snowflake credentials loaded from integration system."
                 )
-            if not self.snowflake_creds and self.warehouse_type == "snowflake":
-                logger.error(
-                    "SQLVerifierWorkflow: Snowflake credentials not loaded. Execution will fail."
+            else:
+                self.snowflake_creds = None
+                self.warehouse_type = None
+                logger.warning(
+                    "SQLVerifierWorkflow: Snowflake integration not configured."
                 )
 
-        except ValueError as e:
+        except Exception as e:
             logger.error(
-                f"SQLVerifierWorkflow: Critical - Failed to load Snowflake credentials: {e}. Workflow may not function for Snowflake."
+                f"SQLVerifierWorkflow: Failed to load Snowflake credentials from integration system: {e}. Workflow may not function for Snowflake."
             )
             self.snowflake_creds = None
             self.warehouse_type = None

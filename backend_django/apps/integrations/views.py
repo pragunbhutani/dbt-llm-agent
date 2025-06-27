@@ -478,11 +478,6 @@ class SlackIntegrationViewSet(viewsets.ViewSet):
                 org_integration.is_enabled = True
                 org_integration.save()
 
-            # Update organization settings with team ID for backward compatibility
-            org_settings = request.user.organisation.settings
-            org_settings.slack_team_id = team_info["team_id"]
-            org_settings.save()
-
             # Test the connection
             manager = IntegrationsManager(request.user.organisation)
             manager.reload_integrations()  # Reload to pick up new configuration

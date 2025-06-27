@@ -416,8 +416,8 @@ class SlackResponderAgent:
                         "explanation": result.explanation,
                     }
                 else:
-                    error_msg = f"SQL verification failed: {result.error}"
-                    logger.warning(error_msg)
+                    error_msg = result.error
+                    logger.warning(f"SQL verification failed: {error_msg}")
 
                     # Provide non-fatal fallback so downstream logic can still share the query.
                     return {
