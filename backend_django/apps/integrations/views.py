@@ -457,18 +457,23 @@ class SlackIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"team_id": team_info["team_id"]},
-                    "credentials": {
+                },
+            )
+
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
                         "bot_token": bot_token,
                         "signing_secret": signing_secret,
                         "app_token": app_token if app_token else "",
-                    },
-                },
-            )
+                    }
+                )
 
             if not created:
                 # Update existing integration
                 org_integration.configuration.update({"team_id": team_info["team_id"]})
-                org_integration.credentials.update(
+                org_integration.update_credentials(
                     {
                         "bot_token": bot_token,
                         "signing_secret": signing_secret,
@@ -606,29 +611,35 @@ class SnowflakeIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"schema": schema if database else None},
-                    "credentials": {
+                },
+            )
+
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
                         "account": account,
                         "user": user_field,
                         "password": password,
                         "warehouse": warehouse,
                         "database": database if database else None,
                         "schema": schema if database else None,
-                    },
-                },
-            )
-
-            if not created:
+                    }
+                )
+            else:
                 # Update existing integration
                 org_integration.is_enabled = True
                 org_integration.configuration = {"schema": schema if database else None}
-                org_integration.credentials = {
-                    "account": account,
-                    "user": user_field,
-                    "password": password,
-                    "warehouse": warehouse,
-                    "database": database if database else None,
-                    "schema": schema if database else None,
-                }
+                org_integration.set_credentials(
+                    {
+                        "account": account,
+                        "user": user_field,
+                        "password": password,
+                        "warehouse": warehouse,
+                        "database": database if database else None,
+                        "schema": schema if database else None,
+                    }
+                )
                 org_integration.save()
 
             # Test the connection
@@ -718,23 +729,29 @@ class MetabaseIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"database_id": database_id},
-                    "credentials": {
-                        "url": url,
-                        "api_key": api_key,
-                        "database_id": database_id,
-                    },
                 },
             )
 
-            if not created:
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
+                        "url": url,
+                        "api_key": api_key,
+                        "database_id": database_id,
+                    }
+                )
+            else:
                 # Update existing integration
                 org_integration.is_enabled = True
                 org_integration.configuration = {"database_id": database_id}
-                org_integration.credentials = {
-                    "url": url,
-                    "api_key": api_key,
-                    "database_id": database_id,
-                }
+                org_integration.set_credentials(
+                    {
+                        "url": url,
+                        "api_key": api_key,
+                        "database_id": database_id,
+                    }
+                )
                 org_integration.save()
 
             # Test the connection

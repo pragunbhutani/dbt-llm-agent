@@ -367,8 +367,8 @@ export default function SlackIntegrationPage() {
                     />
                     <p className="text-sm text-gray-600">
                       Leave empty to use the default URL. Use this for local
-                      development with ngrok/localtunnel or if you're hosting
-                      Ragstar on a custom domain.
+                      development with ngrok/localtunnel or if you&apos;re
+                      hosting Ragstar on a custom domain.
                     </p>
                   </div>
 
@@ -409,12 +409,15 @@ export default function SlackIntegrationPage() {
                     <Info className="h-5 w-5 text-blue-600 mt-0.5" />
                     <div>
                       <h4 className="font-medium text-blue-800">
-                        What you'll need to do:
+                        What you&apos;ll need to do:
                       </h4>
                       <ol className="list-decimal list-inside text-sm text-blue-700 mt-2 space-y-1">
                         <li>Copy the manifest below (preserves formatting)</li>
-                        <li>Click "Create App on Slack" to open Slack API</li>
-                        <li>Choose "From an app manifest"</li>
+                        <li>
+                          Click &quot;Create App on Slack&quot; to open Slack
+                          API
+                        </li>
+                        <li>Choose &quot;From an app manifest&quot;</li>
                         <li>Paste the manifest and create the app</li>
                         <li>Install the app to your workspace</li>
                         <li>Copy the tokens back here in the next step</li>
@@ -497,7 +500,7 @@ export default function SlackIntegrationPage() {
                       required
                     />
                     <p className="text-sm text-gray-600">
-                      Found in OAuth & Permissions → Bot User OAuth Token
+                      Found in OAuth &amp; Permissions → Bot User OAuth Token
                     </p>
                   </div>
 
@@ -563,7 +566,7 @@ export default function SlackIntegrationPage() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <h4 className="font-medium">What's Next?</h4>
+                  <h4 className="font-medium">What&apos;s Next?</h4>
                   <ul className="list-disc list-inside text-sm text-gray-600 space-y-1">
                     <li>Invite the Ragstar bot to your Slack channels</li>
                     <li>Start asking questions using @ragstar mentions</li>

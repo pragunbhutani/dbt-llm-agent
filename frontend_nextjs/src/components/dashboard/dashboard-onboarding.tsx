@@ -11,6 +11,7 @@ import { CheckCircleIcon, ClockIcon } from "@heroicons/react/24/outline";
 interface OnboardingSteps {
   connect_dbt_project: boolean;
   train_knowledge_base: boolean;
+  configure_llm_settings: boolean;
   connect_to_slack: boolean;
   ask_first_question: boolean;
 }
@@ -32,6 +33,11 @@ const ONBOARDING_STEPS = [
     key: "train_knowledge_base" as keyof OnboardingSteps,
     title: "Train your Knowledge Base",
     description: "Let us learn about your data models",
+  },
+  {
+    key: "configure_llm_settings" as keyof OnboardingSteps,
+    title: "Configure LLM Settings",
+    description: "Set up your AI provider and API keys",
   },
   {
     key: "connect_to_slack" as keyof OnboardingSteps,
@@ -70,7 +76,7 @@ export function DashboardOnboarding() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-green-800">
-              🎉 You're all set up!
+              🎉 You&apos;re all set up!
             </CardTitle>
             <Badge variant="secondary" className="bg-green-100 text-green-800">
               Complete

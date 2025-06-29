@@ -37,9 +37,9 @@ class EmbeddingService:
         api_key: Optional[str] = None
 
         if provider_name == "openai":
-            api_key = org_settings.llm_openai_api_key
+            api_key = org_settings.get_llm_openai_api_key()
         elif provider_name == "google":
-            api_key = org_settings.llm_google_api_key
+            api_key = org_settings.get_llm_google_api_key()
         # Anthropic not currently supported for embeddings in this basic setup
 
         if not api_key and provider_name in ["openai", "google"]:
@@ -117,11 +117,11 @@ class ChatService:
         api_key: Optional[str] = None
 
         if provider_name == "openai":
-            api_key = org_settings.llm_openai_api_key
+            api_key = org_settings.get_llm_openai_api_key()
         elif provider_name == "google":
-            api_key = org_settings.llm_google_api_key
+            api_key = org_settings.get_llm_google_api_key()
         elif provider_name == "anthropic":
-            api_key = org_settings.llm_anthropic_api_key
+            api_key = org_settings.get_llm_anthropic_api_key()
 
         # TODO: Add temperature to OrganisationSettings model
         temperature = getattr(settings, "LLM_CHAT_CONFIG_TEMPERATURE", None)

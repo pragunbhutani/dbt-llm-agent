@@ -122,12 +122,6 @@ export function IntegrationsContent() {
       return;
     }
 
-    // For MCP, navigate to dedicated setup page
-    if (integration.key === "mcp") {
-      router.push("/dashboard/integrations/mcp");
-      return;
-    }
-
     setSelectedIntegration(integration);
     setIsConfigModalOpen(true);
   };
@@ -138,7 +132,8 @@ export function IntegrationsContent() {
 
   const inboundIntegrations =
     integrationStatus?.filter(
-      (i: IntegrationStatus) => i.integration_type === "inbound"
+      (i: IntegrationStatus) =>
+        i.integration_type === "inbound" && i.key !== "mcp"
     ) || [];
   const outboundIntegrations =
     integrationStatus?.filter(
