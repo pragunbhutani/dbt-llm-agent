@@ -249,29 +249,26 @@ export function SettingsContent() {
           </CardHeader>
           <CardContent className="space-y-6">
             {/* ----------- API KEYS ----------- */}
-            <Card>
+            {/* Temporarily hidden to simplify onboarding – keep code for future use */}
+            {/* <Card>
               <CardHeader>
                 <CardTitle>API Keys</CardTitle>
                 <CardDescription>
-                  Provide API keys for the LLM providers you want to use.
-                  Existing keys are not displayed for security.
+                  Provide API keys for the LLM providers you want to use. Existing keys
+                  are not displayed for security.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {KeyInput("openai", "OpenAI API Key", "llm_openai_api_key")}
-                {KeyInput(
-                  "anthropic",
-                  "Anthropic API Key",
-                  "llm_anthropic_api_key"
-                )}
-                {KeyInput("google", "Google API Key", "llm_google_api_key")}
-                <div className="flex justify-end pt-4">
-                  <Button onClick={handleSaveKeys} className="px-6" size="sm">
-                    Save API Keys
-                  </Button>
-                </div>
+                 {KeyInput("openai", "OpenAI API Key", "llm_openai_api_key")}
+                 {KeyInput("anthropic", "Anthropic API Key", "llm_anthropic_api_key")}
+                 {KeyInput("google", "Google API Key", "llm_google_api_key")}
+                 <div className="flex justify-end pt-4">
+                   <Button onClick={handleSaveKeys} className="px-6" size="sm">
+                     Save API Keys
+                   </Button>
+                 </div>
               </CardContent>
-            </Card>
+            </Card> */}
 
             {/* ----------- MODEL SELECTION ----------- */}
             <Card>

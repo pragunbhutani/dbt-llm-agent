@@ -2,6 +2,7 @@ from django.db import models
 import uuid
 from django.contrib.auth.models import AbstractUser
 from django.conf import settings
+import os
 
 # Create your models here.
 # All models previously in this file have been moved to their respective apps:
@@ -151,6 +152,10 @@ class OrganisationSettings(models.Model):
 
     def get_llm_openai_api_key(self) -> str | None:
         """Retrieve the actual OpenAI API key from Parameter Store."""
+        # Environment variable override (useful for single-tenant or demo deployments)
+        env_key = os.environ.get("LLM_OPENAI_API_KEY")
+        if env_key:
+            return self._clean_api_key(env_key)
         if not self.llm_openai_api_key_path:
             return None
         from .services import secret_manager
@@ -160,6 +165,10 @@ class OrganisationSettings(models.Model):
 
     def get_llm_google_api_key(self) -> str | None:
         """Retrieve the actual Google API key from Parameter Store."""
+        # Environment variable override (useful for single-tenant or demo deployments)
+        env_key = os.environ.get("LLM_GOOGLE_API_KEY")
+        if env_key:
+            return self._clean_api_key(env_key)
         if not self.llm_google_api_key_path:
             return None
         from .services import secret_manager
@@ -169,6 +178,10 @@ class OrganisationSettings(models.Model):
 
     def get_llm_anthropic_api_key(self) -> str | None:
         """Retrieve the actual Anthropic API key from Parameter Store."""
+        # Environment variable override (useful for single-tenant or demo deployments)
+        env_key = os.environ.get("LLM_ANTHROPIC_API_KEY")
+        if env_key:
+            return self._clean_api_key(env_key)
         if not self.llm_anthropic_api_key_path:
             return None
         from .services import secret_manager
