@@ -15,15 +15,18 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { toast } from "sonner";
 import { mutate } from "swr";
 
 export function AddProjectModal({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
+    dbt_cloud_url: "https://cloud.getdbt.com",
+    dbt_cloud_account_id: "",
+    dbt_cloud_api_key: "",
     name: "",
-    account_id: "",
-    project_id: "",
   });
   const { accessToken } = useAuth();
 
@@ -32,21 +35,41 @@ export function AddProjectModal({ children }: { children: React.ReactNode }) {
     if (!accessToken) return;
 
     setLoading(true);
-    try {
-      await fetcher("/api/data_sources/projects/", accessToken, {
-        method: "POST",
-        body: formData,
-      });
+    toast.info("Connecting to dbt Cloud...");
 
-      // Refresh the projects list
+    try {
+      await fetcher(
+        "/api/data_sources/projects/create_dbt_cloud_project/",
+        accessToken,
+        {
+          method: "POST",
+          body: {
+            dbt_cloud_url: formData.dbt_cloud_url,
+            dbt_cloud_account_id: parseInt(formData.dbt_cloud_account_id, 10),
+            dbt_cloud_api_key: formData.dbt_cloud_api_key,
+            name: formData.name,
+          },
+        }
+      );
+
+      toast.success("Project added successfully!");
+
+      // Refresh the projects list and stats
       mutate("/api/data_sources/projects/");
       mutate("/api/data_sources/dashboard-stats/");
 
       setOpen(false);
-      setFormData({ name: "", account_id: "", project_id: "" });
-    } catch (error) {
-      console.error("Failed to add project:", error);
-      // TODO: Show error message to user
+      setFormData({
+        dbt_cloud_url: "https://cloud.getdbt.com",
+        dbt_cloud_account_id: "",
+        dbt_cloud_api_key: "",
+        name: "",
+      });
+    } catch (error: any) {
+      toast.error(
+        `Failed to add project: ${error.info?.error || "Unknown error"}`
+      );
+      console.error(error);
     } finally {
       setLoading(false);
     }
@@ -55,66 +78,91 @@ export function AddProjectModal({ children }: { children: React.ReactNode }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
-      <DialogContent className="sm:max-w-[425px]">
+      <DialogContent className="sm:max-w-[600px]">
         <DialogHeader>
           <DialogTitle>Add dbt Project</DialogTitle>
           <DialogDescription>
             Connect a new dbt project to your Ragstar workspace.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleSubmit}>
-          <div className="grid gap-4 py-4">
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="name" className="text-right">
-                Project Name
-              </Label>
-              <Input
-                id="name"
-                value={formData.name}
-                onChange={(e) =>
-                  setFormData({ ...formData, name: e.target.value })
-                }
-                className="col-span-3"
-                required
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="account_id" className="text-right">
-                Account ID
-              </Label>
-              <Input
-                id="account_id"
-                type="number"
-                value={formData.account_id}
-                onChange={(e) =>
-                  setFormData({ ...formData, account_id: e.target.value })
-                }
-                className="col-span-3"
-                required
-              />
-            </div>
-            <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="project_id" className="text-right">
-                Project ID
-              </Label>
-              <Input
-                id="project_id"
-                type="number"
-                value={formData.project_id}
-                onChange={(e) =>
-                  setFormData({ ...formData, project_id: e.target.value })
-                }
-                className="col-span-3"
-                required
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button type="submit" disabled={loading}>
-              {loading ? "Adding..." : "Add Project"}
-            </Button>
-          </DialogFooter>
-        </form>
+        <Tabs defaultValue="dbt-cloud" className="mt-4">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="dbt-cloud">dbt Cloud</TabsTrigger>
+            <TabsTrigger value="github" disabled>
+              Source Code (GitHub)
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent value="dbt-cloud" className="mt-6">
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="dbt-cloud-url">dbt Cloud URL</Label>
+                <Input
+                  id="dbt-cloud-url"
+                  placeholder="https://cloud.getdbt.com"
+                  value={formData.dbt_cloud_url}
+                  onChange={(e) =>
+                    setFormData({ ...formData, dbt_cloud_url: e.target.value })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="dbt-cloud-account-id">
+                  dbt Cloud Account ID
+                </Label>
+                <Input
+                  id="dbt-cloud-account-id"
+                  placeholder="123456"
+                  value={formData.dbt_cloud_account_id}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      dbt_cloud_account_id: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="dbt-cloud-api-key">dbt Cloud API Key</Label>
+                <Input
+                  id="dbt-cloud-api-key"
+                  type="password"
+                  placeholder="••••••••••••••••••••"
+                  value={formData.dbt_cloud_api_key}
+                  onChange={(e) =>
+                    setFormData({
+                      ...formData,
+                      dbt_cloud_api_key: e.target.value,
+                    })
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="project-name">Project Name (Optional)</Label>
+                <Input
+                  id="project-name"
+                  placeholder="My dbt Project"
+                  value={formData.name}
+                  onChange={(e) =>
+                    setFormData({ ...formData, name: e.target.value })
+                  }
+                />
+              </div>
+              <DialogFooter className="mt-6">
+                <Button type="submit" disabled={loading}>
+                  {loading ? "Connecting..." : "Connect Project"}
+                </Button>
+              </DialogFooter>
+            </form>
+          </TabsContent>
+          <TabsContent value="github">
+            <p className="text-sm text-gray-500 my-4">
+              Connecting via GitHub is coming soon.
+            </p>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );

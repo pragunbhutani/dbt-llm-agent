@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from apps.data_sources.models import DbtProject
 from apps.knowledge_base.models import Model
 from apps.embeddings.models import ModelEmbedding
-from apps.workflows.models import Question
+from apps.workflows.models import Question, Conversation
 from apps.accounts.models import Organisation, OrganisationSettings
 
 
@@ -28,6 +28,9 @@ class DashboardStatsAPIView(APIView):
             organisation=organisation
         ).count()
         questions_count = Question.objects.filter(organisation=organisation).count()
+        conversations_count = Conversation.objects.filter(
+            organisation=organisation
+        ).count()
 
         # Check for slack integration using new integration model
         slack_integrated = False
@@ -85,7 +88,7 @@ class DashboardStatsAPIView(APIView):
             "train_knowledge_base": knowledge_base_count > 0,
             "configure_llm_settings": llm_configured,
             "connect_to_slack": slack_integrated,
-            "ask_first_question": questions_count > 0,
+            "ask_first_question": (questions_count > 0) or (conversations_count > 0),
         }
 
         stats = {
