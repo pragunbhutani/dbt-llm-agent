@@ -145,6 +145,22 @@ class OrganisationSettingsSerializer(serializers.ModelSerializer):
             return "****"
         return f"{api_key[:4]}{'*' * (len(api_key) - 8)}{api_key[-4:]}"
 
+    def _is_unmasked_key(self, key: str | None) -> bool:
+        """Determine if the supplied key looks like a real (new) key versus a masked placeholder."""
+        if not key:
+            return False
+        stripped = key.strip()
+        # Common placeholder patterns – completely asterisks or starts/ends with asterisks after prefix
+        if set(stripped) == {"*"}:  # e.g., "********"
+            return False
+        # Patterns like "sk-****" or "****abcd" or "abcd****efgh" where majority is *
+        stars = stripped.count("*")
+        if (
+            stars and stars / len(stripped) > 0.3
+        ):  # heuristic: >30% stars considered masked
+            return False
+        return True
+
     def update(self, instance, validated_data):
         """Custom update method to handle API keys using secret management."""
         # Extract API keys from validated data
@@ -155,22 +171,22 @@ class OrganisationSettingsSerializer(serializers.ModelSerializer):
         # Update the regular fields first
         instance = super().update(instance, validated_data)
 
-        # Handle API keys using secret management
-        if openai_key:
+        # Handle API keys using secret management if a *new* key was supplied
+        if self._is_unmasked_key(openai_key):
             success = instance.set_llm_openai_api_key(openai_key)
             if not success:
                 raise serializers.ValidationError(
                     {"llm_openai_api_key": "Failed to store OpenAI API key securely."}
                 )
 
-        if google_key:
+        if self._is_unmasked_key(google_key):
             success = instance.set_llm_google_api_key(google_key)
             if not success:
                 raise serializers.ValidationError(
                     {"llm_google_api_key": "Failed to store Google API key securely."}
                 )
 
-        if anthropic_key:
+        if self._is_unmasked_key(anthropic_key):
             success = instance.set_llm_anthropic_api_key(anthropic_key)
             if not success:
                 raise serializers.ValidationError(

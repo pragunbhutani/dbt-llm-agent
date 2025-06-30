@@ -23,12 +23,18 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { CHAT_MODELS, EMBEDDING_MODELS } from "@/lib/llm_models";
-import { cn } from "@/lib/utils";
 import useSWR from "swr";
 import { fetcher } from "@/utils/fetcher";
 
 export function SettingsContent() {
   const { data: session } = useSession();
+
+  /**
+   * Two pieces of state:
+   * 1. `settings` – holds the *editable* form values.
+   * 2. `existing` – booleans indicating whether a given secret is already set so we can
+   *    inform the user without pre-filling inputs (which would re-save masked values).
+   */
   const [settings, setSettings] = useState({
     llm_openai_api_key: "",
     llm_anthropic_api_key: "",
@@ -38,6 +44,13 @@ export function SettingsContent() {
     llm_embeddings_provider: "",
     llm_embeddings_model: "",
   });
+
+  const [existing, setExisting] = useState({
+    openai: false,
+    anthropic: false,
+    google: false,
+  });
+
   const [availableChatModels, setAvailableChatModels] = useState<
     { public_name: string; api_name: string }[]
   >([]);
@@ -45,13 +58,23 @@ export function SettingsContent() {
     { public_name: string; api_name: string }[]
   >([]);
 
-  // Use SWR with suspense for settings data
+  // Tracks whether user has entered/edited a key (to switch input to revealed text)
+  const [editedKeys, setEditedKeys] = useState<{
+    [k in "openai" | "anthropic" | "google"]: boolean;
+  }>({
+    openai: false,
+    anthropic: false,
+    google: false,
+  });
+
+  // Fetch organisation settings (SWR with suspense)
   const { data: settingsData } = useSWR(
     session?.accessToken ? "/api/accounts/settings/" : null,
     (url: string) => fetcher(url, session?.accessToken),
     { suspense: true }
   );
 
+  // --- Effect: populate form once data is fetched ---
   useEffect(() => {
     if (session?.error === "RefreshAccessTokenError") {
       toast.error("Your session has expired. Please sign in again.");
@@ -59,12 +82,23 @@ export function SettingsContent() {
     }
 
     if (settingsData) {
-      setSettings({
-        ...settingsData,
+      // Prefill masked keys *as returned by backend* so user can reveal them.
+      setSettings((prev) => ({
+        ...prev,
+        llm_openai_api_key: settingsData.llm_openai_api_key || "",
+        llm_anthropic_api_key: settingsData.llm_anthropic_api_key || "",
+        llm_google_api_key: settingsData.llm_google_api_key || "",
         llm_chat_provider: settingsData.llm_chat_provider || "",
         llm_chat_model: settingsData.llm_chat_model || "",
         llm_embeddings_provider: settingsData.llm_embeddings_provider || "",
         llm_embeddings_model: settingsData.llm_embeddings_model || "",
+      }));
+
+      // Track whether secrets are already configured
+      setExisting({
+        openai: Boolean(settingsData.llm_openai_api_key),
+        anthropic: Boolean(settingsData.llm_anthropic_api_key),
+        google: Boolean(settingsData.llm_google_api_key),
       });
 
       if (settingsData.llm_chat_provider) {
@@ -80,6 +114,7 @@ export function SettingsContent() {
     }
   }, [session, settingsData]);
 
+  // --- Handlers ---
   const handleChange = (name: string, value: string) => {
     if (name === "llm_chat_provider") {
       setSettings((prev) => ({
@@ -97,39 +132,106 @@ export function SettingsContent() {
       setAvailableEmbeddingModels(EMBEDDING_MODELS[value] || []);
     } else {
       setSettings((prev) => ({ ...prev, [name]: value }));
+
+      // Mark field as edited so we switch to revealed text
+      if (name === "llm_openai_api_key")
+        setEditedKeys((e) => ({ ...e, openai: true }));
+      if (name === "llm_anthropic_api_key")
+        setEditedKeys((e) => ({ ...e, anthropic: true }));
+      if (name === "llm_google_api_key")
+        setEditedKeys((e) => ({ ...e, google: true }));
     }
   };
 
-  const handleSave = async () => {
-    const promise = async () => {
-      const payload: Partial<typeof settings> = { ...settings };
-      if (!payload.llm_openai_api_key) {
-        delete payload.llm_openai_api_key;
-      }
-      if (!payload.llm_anthropic_api_key) {
-        delete payload.llm_anthropic_api_key;
-      }
-      if (!payload.llm_google_api_key) {
-        delete payload.llm_google_api_key;
-      }
-      await api.put("/api/accounts/settings/", payload);
-    };
+  // Helper to detect masked strings (contain * representing hidden chars)
+  const isMasked = (val: string) => val.includes("*");
 
-    toast.promise(promise(), {
-      loading: "Saving settings...",
-      success: "Settings saved successfully!",
-      error: (error: any) => {
-        console.error(error);
-        if (error.response && error.response.status === 400) {
-          const errorMessages = Object.entries(error.response.data)
-            .map(([key, value]: [string, any]) => `${key}: ${value.join(", ")}`)
-            .join("\n");
-          return `Please correct the following errors:\n${errorMessages}`;
-        }
-        return "Failed to save settings.";
+  /** Save only API keys that have been entered and are not masked. */
+  const handleSaveKeys = async () => {
+    const payload: Partial<typeof settings> = {};
+    (
+      [
+        ["llm_openai_api_key", "openai"],
+        ["llm_anthropic_api_key", "anthropic"],
+        ["llm_google_api_key", "google"],
+      ] as [keyof typeof settings, "openai" | "anthropic" | "google"][]
+    ).forEach(([field]) => {
+      const val = settings[field];
+      if (val && !isMasked(val)) {
+        payload[field] = val;
+      }
+    });
+
+    if (Object.keys(payload).length === 0) {
+      toast.message("No new keys to save.");
+      return;
+    }
+
+    const promise = api.put("/api/accounts/settings/", payload);
+
+    toast.promise(promise, {
+      loading: "Saving keys...",
+      success: () => {
+        // After successful save clear inputs and refresh SWR cache
+        setSettings((prev) => ({
+          ...prev,
+          llm_openai_api_key: "",
+          llm_anthropic_api_key: "",
+          llm_google_api_key: "",
+        }));
+        // Update existing flags (will also be updated on next revalidate)
+        setExisting((prev) => ({
+          ...prev,
+          openai: Boolean(payload.llm_openai_api_key) || prev.openai,
+          anthropic: Boolean(payload.llm_anthropic_api_key) || prev.anthropic,
+          google: Boolean(payload.llm_google_api_key) || prev.google,
+        }));
+        return "API keys saved.";
       },
+      error: "Failed to save keys.",
     });
   };
+
+  /** Save provider / model selections */
+  const handleSaveModels = async () => {
+    const payload: Partial<typeof settings> = {};
+    if (settings.llm_chat_provider)
+      payload.llm_chat_provider = settings.llm_chat_provider;
+    if (settings.llm_chat_model)
+      payload.llm_chat_model = settings.llm_chat_model;
+    if (settings.llm_embeddings_provider)
+      payload.llm_embeddings_provider = settings.llm_embeddings_provider;
+    if (settings.llm_embeddings_model)
+      payload.llm_embeddings_model = settings.llm_embeddings_model;
+
+    const promise = api.put("/api/accounts/settings/", payload);
+
+    toast.promise(promise, {
+      loading: "Saving model configuration...",
+      success: "Model configuration saved.",
+      error: "Failed to save model configuration.",
+    });
+  };
+
+  /* ------------ RENDER ------------- */
+
+  /* Reusable API-key input row (masked value always shown) */
+  const KeyInput = (
+    provider: "openai" | "anthropic" | "google",
+    label: string,
+    field: keyof typeof settings
+  ) => (
+    <div className="space-y-2">
+      <Label htmlFor={`${provider}-api-key`}>{label}</Label>
+      <Input
+        id={`${provider}-api-key`}
+        type={existing[provider] && !editedKeys[provider] ? "password" : "text"}
+        placeholder="Enter new key to update..."
+        value={settings[field] as string}
+        onChange={(e) => handleChange(field as string, e.target.value)}
+      />
+    </div>
+  );
 
   return (
     <Tabs defaultValue="llm">
@@ -146,6 +248,7 @@ export function SettingsContent() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
+            {/* ----------- API KEYS ----------- */}
             <Card>
               <CardHeader>
                 <CardTitle>API Keys</CardTitle>
@@ -155,45 +258,22 @@ export function SettingsContent() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="openai-api-key">OpenAI API Key</Label>
-                  <Input
-                    id="openai-api-key"
-                    type="password"
-                    placeholder="Enter new key to update..."
-                    value={settings.llm_openai_api_key ?? ""}
-                    onChange={(e) =>
-                      handleChange("llm_openai_api_key", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="anthropic-api-key">Anthropic API Key</Label>
-                  <Input
-                    id="anthropic-api-key"
-                    type="password"
-                    placeholder="Enter new key to update..."
-                    value={settings.llm_anthropic_api_key ?? ""}
-                    onChange={(e) =>
-                      handleChange("llm_anthropic_api_key", e.target.value)
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="google-api-key">Google API Key</Label>
-                  <Input
-                    id="google-api-key"
-                    type="password"
-                    placeholder="Enter new key to update..."
-                    value={settings.llm_google_api_key ?? ""}
-                    onChange={(e) =>
-                      handleChange("llm_google_api_key", e.target.value)
-                    }
-                  />
+                {KeyInput("openai", "OpenAI API Key", "llm_openai_api_key")}
+                {KeyInput(
+                  "anthropic",
+                  "Anthropic API Key",
+                  "llm_anthropic_api_key"
+                )}
+                {KeyInput("google", "Google API Key", "llm_google_api_key")}
+                <div className="flex justify-end pt-4">
+                  <Button onClick={handleSaveKeys} className="px-6" size="sm">
+                    Save API Keys
+                  </Button>
                 </div>
               </CardContent>
             </Card>
 
+            {/* ----------- MODEL SELECTION ----------- */}
             <Card>
               <CardHeader>
                 <CardTitle>Model Selection</CardTitle>
@@ -291,17 +371,18 @@ export function SettingsContent() {
                     </Select>
                   </div>
                 </div>
+                <div className="flex justify-end pt-4">
+                  <Button onClick={handleSaveModels} className="px-6" size="sm">
+                    Save Model Configuration
+                  </Button>
+                </div>
               </CardContent>
             </Card>
-
-            <div className="flex justify-end">
-              <Button onClick={handleSave} className="px-8">
-                Save Settings
-              </Button>
-            </div>
           </CardContent>
         </Card>
       </TabsContent>
+
+      {/* ---------- Workspace Tab Placeholder ---------- */}
       <TabsContent value="workspace">
         <Card>
           <CardHeader>
