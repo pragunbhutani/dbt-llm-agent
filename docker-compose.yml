@@ -28,6 +28,24 @@ services:
       - "6379:6379"
     restart: unless-stopped
 
+  localstack:
+    image: localstack/localstack:latest
+    container_name: ragstar_localstack
+    ports:
+      - "4566:4566" # LocalStack main port
+    environment:
+      - SERVICES=ssm # Only enable Systems Manager (Parameter Store)
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - LOCALSTACK_HOST=localstack
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./.localstack_data:/var/lib/localstack"
+    restart: unless-stopped
+
   backend-django:
     image: ragstar/backend_django
     build:
@@ -35,20 +53,22 @@ services:
       dockerfile: Dockerfile
     container_name: ragstar_django
     ports:
-      - "${APP_PORT:-8000}:8000" # Expose API server port
+      - "8000:8000" # Standardized port
     volumes:
       - ./backend_django:/app # Mount local code for development
     env_file:
       - .env
     environment:
-      # Use external DB URL if provided, otherwise use the 'db' service
-      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
-      CELERY_BROKER_URL: redis://redis:6379/0
-      APP_PORT: ${APP_PORT:-8000}
+      # Use DATABASE_URL if provided, otherwise construct from PostgreSQL variables
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - LOCALSTACK_HOST=localstack
     depends_on:
       db:
         condition: service_healthy # Wait for DB to be ready
       redis:
+        condition: service_started
+      localstack:
         condition: service_started
     restart: unless-stopped
 
@@ -67,11 +87,13 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
-      CELERY_BROKER_URL: redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - LOCALSTACK_HOST=localstack
     depends_on:
       - backend-django
       - redis
+      - localstack
     restart: unless-stopped
 
   flower:
@@ -91,8 +113,9 @@ services:
     env_file:
       - .env
     environment:
-      DATABASE_URL: ${EXTERNAL_POSTGRES_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
-      CELERY_BROKER_URL: redis://redis:6379/0
+      - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - LOCALSTACK_HOST=localstack
     depends_on:
       - backend-django
       - redis
@@ -107,7 +130,7 @@ services:
       target: development
     container_name: ragstar_frontend
     ports:
-      - "${FRONTEND_PORT:-3000}:3000"
+      - "3000:3000" # Standardized port
     volumes:
       - ./frontend_nextjs:/app
       - /app/node_modules
@@ -115,8 +138,8 @@ services:
     env_file:
       - .env
     environment:
-      NODE_ENV: development
-      INTERNAL_API_URL: http://backend-django:8000
+      - NODE_ENV=development
+      - INTERNAL_API_URL=http://backend-django:8000
     depends_on:
       - backend-django
     restart: unless-stopped

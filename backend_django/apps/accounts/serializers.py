@@ -79,10 +79,123 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
 
 class OrganisationSettingsSerializer(serializers.ModelSerializer):
+    # Add the API key fields as write-only for backward compatibility
+    llm_openai_api_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+    llm_google_api_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+    llm_anthropic_api_key = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, allow_null=True
+    )
+
     class Meta:
         model = OrganisationSettings
-        fields = "__all__"
-        read_only_fields = ("organisation",)
+        fields = [
+            "organisation",
+            "llm_chat_provider",
+            "llm_chat_model",
+            "llm_embeddings_provider",
+            "llm_embeddings_model",
+            "llm_openai_api_key_path",
+            "llm_google_api_key_path",
+            "llm_anthropic_api_key_path",
+            "created_at",
+            "updated_at",
+            # Write-only fields for API keys
+            "llm_openai_api_key",
+            "llm_google_api_key",
+            "llm_anthropic_api_key",
+        ]
+        read_only_fields = (
+            "organisation",
+            "created_at",
+            "updated_at",
+            "llm_openai_api_key_path",
+            "llm_google_api_key_path",
+            "llm_anthropic_api_key_path",
+        )
+
+    def to_representation(self, instance):
+        """Custom representation to include actual API keys for frontend display."""
+        data = super().to_representation(instance)
+
+        # Add the actual API keys for display (masked for security)
+        openai_key = instance.get_llm_openai_api_key()
+        google_key = instance.get_llm_google_api_key()
+        anthropic_key = instance.get_llm_anthropic_api_key()
+
+        # Show masked versions or None
+        data["llm_openai_api_key"] = (
+            self._mask_api_key(openai_key) if openai_key else None
+        )
+        data["llm_google_api_key"] = (
+            self._mask_api_key(google_key) if google_key else None
+        )
+        data["llm_anthropic_api_key"] = (
+            self._mask_api_key(anthropic_key) if anthropic_key else None
+        )
+
+        return data
+
+    def _mask_api_key(self, api_key: str) -> str:
+        """Mask API key for display purposes."""
+        if not api_key or len(api_key) < 8:
+            return "****"
+        return f"{api_key[:4]}{'*' * (len(api_key) - 8)}{api_key[-4:]}"
+
+    def _is_unmasked_key(self, key: str | None) -> bool:
+        """Determine if the supplied key looks like a real (new) key versus a masked placeholder."""
+        if not key:
+            return False
+        stripped = key.strip()
+        # Common placeholder patterns – completely asterisks or starts/ends with asterisks after prefix
+        if set(stripped) == {"*"}:  # e.g., "********"
+            return False
+        # Patterns like "sk-****" or "****abcd" or "abcd****efgh" where majority is *
+        stars = stripped.count("*")
+        if (
+            stars and stars / len(stripped) > 0.3
+        ):  # heuristic: >30% stars considered masked
+            return False
+        return True
+
+    def update(self, instance, validated_data):
+        """Custom update method to handle API keys using secret management."""
+        # Extract API keys from validated data
+        openai_key = validated_data.pop("llm_openai_api_key", None)
+        google_key = validated_data.pop("llm_google_api_key", None)
+        anthropic_key = validated_data.pop("llm_anthropic_api_key", None)
+
+        # Update the regular fields first
+        instance = super().update(instance, validated_data)
+
+        # Handle API keys using secret management if a *new* key was supplied
+        if self._is_unmasked_key(openai_key):
+            success = instance.set_llm_openai_api_key(openai_key)
+            if not success:
+                raise serializers.ValidationError(
+                    {"llm_openai_api_key": "Failed to store OpenAI API key securely."}
+                )
+
+        if self._is_unmasked_key(google_key):
+            success = instance.set_llm_google_api_key(google_key)
+            if not success:
+                raise serializers.ValidationError(
+                    {"llm_google_api_key": "Failed to store Google API key securely."}
+                )
+
+        if self._is_unmasked_key(anthropic_key):
+            success = instance.set_llm_anthropic_api_key(anthropic_key)
+            if not success:
+                raise serializers.ValidationError(
+                    {
+                        "llm_anthropic_api_key": "Failed to store Anthropic API key securely."
+                    }
+                )
+
+        return instance
 
     def validate(self, data):
         chat_provider = data.get("llm_chat_provider")

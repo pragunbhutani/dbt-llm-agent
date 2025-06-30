@@ -5,7 +5,7 @@ from .models import DbtProject
 class DbtProjectSerializer(serializers.ModelSerializer):
     class Meta:
         model = DbtProject
-        fields = "__all__"
+        exclude = ("credentials_path",)
 
 
 class DbtCloudProjectCreateSerializer(serializers.Serializer):

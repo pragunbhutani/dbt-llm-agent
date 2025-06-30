@@ -1197,9 +1197,7 @@ class SlackResponderAgent:
                     "status": ConversationStatus.ACTIVE,
                     "trigger": ConversationTrigger.SLACK_MENTION,
                     "initial_question": question,
-                    "llm_provider": getattr(
-                        self.org_settings, "llm_anthropic_api_key", None
-                    )
+                    "llm_provider": self.org_settings.get_llm_anthropic_api_key()
                     and "anthropic"
                     or "openai",
                     "enabled_integrations": self._get_enabled_integrations(),
@@ -1249,9 +1247,7 @@ class SlackResponderAgent:
                     status=ConversationStatus.ACTIVE,
                     trigger=ConversationTrigger.SLACK_MENTION,
                     initial_question=question,
-                    llm_provider=getattr(
-                        self.org_settings, "llm_anthropic_api_key", None
-                    )
+                    llm_provider=self.org_settings.get_llm_anthropic_api_key()
                     and "anthropic"
                     or "openai",
                     enabled_integrations=enabled_integrations,

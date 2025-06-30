@@ -53,8 +53,15 @@ class DbtProjectViewSet(viewsets.ModelViewSet):
                     connection_type=DbtProject.ConnectionType.DBT_CLOUD,
                     dbt_cloud_url=validated_data["dbt_cloud_url"],
                     dbt_cloud_account_id=validated_data["dbt_cloud_account_id"],
-                    dbt_cloud_api_key=validated_data["dbt_cloud_api_key"],
                 )
+
+                # Store the sensitive API key securely in Parameter Store
+                project.set_credentials(
+                    {
+                        "dbt_cloud_api_key": validated_data["dbt_cloud_api_key"],
+                    }
+                )
+
                 initialize_dbt_cloud_project(
                     dbt_project=project,
                     organisation=request.user.organisation,

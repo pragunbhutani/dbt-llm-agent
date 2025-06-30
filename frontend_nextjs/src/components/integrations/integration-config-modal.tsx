@@ -311,10 +311,11 @@ function SlackConfigForm({
         </h4>
         <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
           <li>Go to your Slack app configuration at api.slack.com</li>
-          <li>Navigate to "OAuth & Permissions" section</li>
-          <li>Copy the "Bot User OAuth Token" (starts with xoxb-)</li>
+          <li>Navigate to &quot;OAuth &amp; Permissions&quot; section</li>
+          <li>Copy the &quot;Bot User OAuth Token&quot; (starts with xoxb-)</li>
           <li>
-            Optionally, copy the "Signing Secret" from "Basic Information"
+            Optionally, copy the &quot;Signing Secret&quot; from &quot;Basic
+            Information&quot;
           </li>
         </ol>
       </div>
@@ -984,8 +985,9 @@ function MCPConfigForm({
           <div className="mt-3 p-3 bg-purple-100 rounded-md">
             <p className="text-xs text-purple-700">
               <strong>💡 Tip:</strong> Once connected, you can ask Claude
-              questions like "Show me my dbt models" or "What data sources do I
-              have?" and Claude will use ragstar's tools to answer.
+              questions like &quot;Show me my dbt models&quot; or &quot;What
+              data sources do I have?&quot; and Claude will use ragstar&apos;s
+              tools to answer.
             </p>
           </div>
         </div>
@@ -1033,9 +1035,9 @@ function MCPConfigForm({
           </ol>
           <div className="mt-3 p-3 bg-green-100 rounded-md">
             <p className="text-xs text-green-700">
-              <strong>📝 Note:</strong> OpenAI's MCP integration is still
-              evolving. Check OpenAI's documentation for the latest connection
-              instructions.
+              <strong>📝 Note:</strong> OpenAI&apos;s MCP integration is still
+              evolving. Check OpenAI&apos;s documentation for the latest
+              connection instructions.
             </p>
           </div>
         </div>

@@ -9,11 +9,13 @@ export default function SignUpPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+    setLoading(true);
 
     try {
       await api.post("/api/accounts/register/", {
@@ -23,6 +25,7 @@ export default function SignUpPage() {
         organisation_name: `${name}'s Organisation`,
       });
       router.push("/signin");
+      setLoading(false);
     } catch (error: any) {
       // Construct a user-friendly error message
       let errorMessage = "Something went wrong. Please try again.";
@@ -40,6 +43,7 @@ export default function SignUpPage() {
         }
       }
       setError(errorMessage);
+      setLoading(false);
     }
   };
 
@@ -106,9 +110,38 @@ export default function SignUpPage() {
           <div>
             <button
               type="submit"
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+              disabled={loading}
+              className={`group relative w-full flex justify-center items-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${
+                loading ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+              }`}
             >
-              Sign up
+              {loading ? (
+                <>
+                  <svg
+                    className="animate-spin h-5 w-5 text-white mr-2"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
+                    ></path>
+                  </svg>
+                  Signing up...
+                </>
+              ) : (
+                "Sign up"
+              )}
             </button>
           </div>
         </form>
