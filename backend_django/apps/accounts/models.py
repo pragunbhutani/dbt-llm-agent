@@ -142,13 +142,21 @@ class OrganisationSettings(models.Model):
     def __str__(self):
         return f"Settings for {self.organisation.name}"
 
+    def _clean_api_key(self, api_key: str | None) -> str | None:
+        """Return a sanitized API key without any surrounding whitespace or quotes."""
+        if not api_key:
+            return None
+        # Strip whitespace/newlines and any accidental wrapping quotes
+        return api_key.strip().strip('"').strip("'")
+
     def get_llm_openai_api_key(self) -> str | None:
         """Retrieve the actual OpenAI API key from Parameter Store."""
         if not self.llm_openai_api_key_path:
             return None
         from .services import secret_manager
 
-        return secret_manager.get_secret(self.llm_openai_api_key_path)
+        raw_key = secret_manager.get_secret(self.llm_openai_api_key_path)
+        return self._clean_api_key(raw_key)
 
     def get_llm_google_api_key(self) -> str | None:
         """Retrieve the actual Google API key from Parameter Store."""
@@ -156,7 +164,8 @@ class OrganisationSettings(models.Model):
             return None
         from .services import secret_manager
 
-        return secret_manager.get_secret(self.llm_google_api_key_path)
+        raw_key = secret_manager.get_secret(self.llm_google_api_key_path)
+        return self._clean_api_key(raw_key)
 
     def get_llm_anthropic_api_key(self) -> str | None:
         """Retrieve the actual Anthropic API key from Parameter Store."""
@@ -164,7 +173,8 @@ class OrganisationSettings(models.Model):
             return None
         from .services import secret_manager
 
-        return secret_manager.get_secret(self.llm_anthropic_api_key_path)
+        raw_key = secret_manager.get_secret(self.llm_anthropic_api_key_path)
+        return self._clean_api_key(raw_key)
 
     def set_llm_openai_api_key(self, api_key: str) -> bool:
         """Store OpenAI API key in Parameter Store and update the path."""
