@@ -43,18 +43,28 @@ def _validate_llm_settings(organisation):
     ):
         missing_items.append("embeddings provider & model")
 
-    # API keys (check path exists for whichever providers are selected)
-    provider_to_path = {
-        "openai": org_settings.llm_openai_api_key_path,
-        "google": org_settings.llm_google_api_key_path,
-        "anthropic": org_settings.llm_anthropic_api_key_path,
+    # API keys (check that a usable key exists for any provider that is selected)
+    # Keys can be supplied either via Parameter Store path *or* the corresponding
+    # environment variable, so we need to consider both sources.
+
+    provider_to_key_check: dict[str, callable[[], str | None]] = {
+        "openai": org_settings.get_llm_openai_api_key,
+        "google": org_settings.get_llm_google_api_key,
+        "anthropic": org_settings.get_llm_anthropic_api_key,
     }
 
-    for provider in {
+    selected_providers = {
         org_settings.llm_chat_provider,
         org_settings.llm_embeddings_provider,
-    }:
-        if provider in provider_to_path and not provider_to_path[provider]:
+    }
+
+    for provider in selected_providers:
+        # Skip None/empty providers
+        if not provider or provider not in provider_to_key_check:
+            continue
+
+        key_value = provider_to_key_check[provider]()
+        if not key_value:
             missing_items.append(f"{provider} API key")
 
     if missing_items:
