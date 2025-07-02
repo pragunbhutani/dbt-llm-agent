@@ -55,11 +55,10 @@ Run first-time Django tasks:
 ```bash
 # inside the running backend container
 $ docker compose exec backend-django \
-    uv run python manage.py migrate && \
-    uv run python manage.py createsuperuser
+    uv run python manage.py migrate
 ```
 
-🎉 That's it — open http://localhost:3000, sign in with the super-user you just created, and follow the onboarding wizard.
+🎉 That's it — open http://localhost:3000, sign up for a new account and you're ready to start using Ragstar.
 
 ---
 
@@ -91,9 +90,9 @@ Create a `.env` file in the repo root and paste the three lines above (adjust UR
 | `CELERY_BROKER_URL`                                                | `redis://redis:6379/0`       | Use an external Redis / RabbitMQ instead of the bundled one.                                           |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_DEFAULT_REGION` | not set                      | **Only required when you disable LocalStack and want to store secrets in real AWS Parameter Store.**   |
 
-### 3.3 LLM provider shortcuts (all optional)
+### 3.3 LLM Provider API Keys
 
-If you would rather keep LLM keys in plain env vars instead of Ragstar's secure store:
+You need to provide API keys for all the LLM providers you plan on using.
 
 ```bash
 LLM_OPENAI_API_KEY=...
@@ -112,15 +111,6 @@ POSTGRES_PORT=5432
 
 Set a single `EXTERNAL_POSTGRES_URL=<url>` to BYO Postgres (with the `pgvector` extension).
 
-### 3.5 Integration specific (optional)
-
-```bash
-INTEGRATIONS_METABASE_URL=https://metabase.example.com
-INTEGRATIONS_METABASE_API_KEY=...
-```
-
-Feel free to add others – every integration documents extra variables in its README or the dashboard form.
-
 ---
 
 ## 4. First-run onboarding
@@ -128,13 +118,12 @@ Feel free to add others – every integration documents extra variables in its R
 After logging into the dashboard you'll be guided through these steps:
 
 1. **Add a dbt project** → _Projects › New_ (dbt **Cloud** recommended — just paste the service token). GitHub or local zip upload also supported.
-2. **Add LLM provider keys** → _Settings › LLM Providers_ and paste your OpenAI / Anthropic keys.
-3. **Pick default models** → choose which model to use for ∙ questions ∙ embeddings ∙ SQL verification.
-4. **Configure Slack** (optional)
+2. **Pick the dbt models you want to use for answering questions** → choose which model to use for ∙ questions ∙ embeddings ∙ SQL verification.
+3. **Configure Slack** (optional)
    - Go to _Integrations › Slack_.
    - Follow the inline manifest to create a Slack app.
    - Paste **Bot Token**, **Signing Secret**, **App Token**.
-5. **Ask questions!** Use the chat on the dashboard or `/ask` in Slack.
+4. **Ask questions!** Use the chat on the dashboard or `/ask` in Slack.
 
 > Other integrations (Metabase, Snowflake, MCP) are available under _Integrations_ but currently **βeta / experimental**. MCP server is temporarily disabled while we stabilise streaming support.
 
