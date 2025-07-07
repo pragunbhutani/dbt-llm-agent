@@ -719,8 +719,6 @@ class SlackResponderAgent:
         system_prompt_content = create_slack_responder_system_prompt(
             original_question=state["original_question"],
             thread_history=state.get("thread_history"),
-            user_display_name=getattr(self, "_user_display_name", None),
-            user_locale=getattr(self, "_user_locale", None),
             qa_final_answer=state.get("qa_final_answer"),
             qa_sql_query=state.get("qa_sql_query"),
             qa_models=state.get("qa_models"),
