@@ -101,13 +101,6 @@ export default function SlackIntegrationPage() {
               "Executes the query and returns the result as CSV to the same thread",
           },
           {
-            name: "Learn from this thread",
-            type: "message",
-            callback_id: "learn_from_thread",
-            description:
-              "Extracts learnings from the current thread and saves to knowledge base.",
-          },
-          {
             name: "Create Metabase Query",
             type: "message",
             callback_id: "create_metabase_query",

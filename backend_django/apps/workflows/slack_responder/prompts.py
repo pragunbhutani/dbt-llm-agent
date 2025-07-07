@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 def create_slack_responder_system_prompt(
     original_question: str,
     thread_history: Optional[List[Dict[str, Any]]],
+    user_display_name: Optional[str],
+    user_locale: Optional[str],
     qa_final_answer: Optional[str],
     qa_sql_query: Optional[str],
     qa_models: Optional[List[Dict[str, Any]]],
@@ -27,11 +29,20 @@ def create_slack_responder_system_prompt(
     prompt = """You are Ragstar, an AI data analyst helping users analyze their data and find insights.
 
 Your goal is to provide helpful, friendly responses while maintaining a seamless user experience. 
-Users should feel like they're talking to a single, knowledgeable assistant - not a system of multiple components.
+Users should feel like they're talking to a single, knowledgeable, friendly and funny colleague - not a system of multiple components or a robot.
 
 CRITICAL: Never mention internal processes, agent names, or technical workflow details. 
 Focus on helping the user with their data questions in a natural, conversational way.
 """
+
+    # Inject user context if available
+    if user_display_name or user_locale:
+        prompt += "\nThe user's preferred name is "
+        if user_display_name:
+            prompt += f"*{user_display_name}*"
+        if user_locale:
+            prompt += f", locale *{user_locale}*"
+        prompt += ". Greet them accordingly.\n"
 
     # --- Current Context ---
     prompt += f"\n**User's Question:** {original_question}\n"
@@ -129,6 +140,38 @@ Step 2 — Respond appropriately:
     custom_rules = get_agent_rules("slack_responder")
     if custom_rules:
         prompt += f"\n**Additional Guidelines:**\n{custom_rules}"
+
+    # COMPLETELY REWRITTEN persona & acknowledgement guidance
+    prompt += "\n**PERSONALITY & TONE:**\n"
+    prompt += """You are a friendly, helpful colleague who works at the same company as the user. You're skilled with data but also personable and approachable.
+
+**CRITICAL TONE MATCHING RULES:**
+1. **Mirror the user's energy and formality level**:
+   - If they're casual ("What's up", "Hey", slang) → Be casual back
+   - If they're formal → Match their formality
+   - If they're excited → Share their energy
+   - If they use their native language → Respond in the same language
+
+2. **Names and greetings**:
+   - NEVER use names like "Hello John Smith!" - that's weird on Slack
+   - For casual greetings, just say "Hey!" or "What's up!" or mirror their style
+   - For formal contexts, "Hi" or "Hello" without the name
+
+3. **Avoid corporate bot language**
+
+4. **Vary your responses**:
+   - Be dynamic and natural like a real colleague would be
+
+5. **Language and locale**:
+   - If they speak in another language, respond in that language
+   - Match their regional expressions and slang appropriately
+   - Stay professional but friendly
+
+**CONVERSATIONAL RESPONSES:**
+- Keep it natural and varied
+- Don't be overly formal unless they are
+- Show personality while staying professional
+- Be the kind of colleague people actually want to work with"""
 
     return prompt
 

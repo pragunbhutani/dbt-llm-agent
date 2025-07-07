@@ -543,10 +543,14 @@ class SlackResponderAgent:
                 }
 
             try:
-                # Create a comprehensive response that provides value despite verification failure
+                raw_error = verification_error
+                friendly_error = SlackResponderAgent._friendly_verification_error(
+                    raw_error
+                )
+
+                # Build analysis message with minimal duplication
                 response_parts = [message_text]
 
-                # Add information about models used if available
                 if models_used:
                     model_names = [
                         m.get("name", "Unknown")
@@ -558,23 +562,16 @@ class SlackResponderAgent:
                             f"\n📊 *Analysis based on models:* {', '.join(model_names)}"
                         )
 
-                # Add a clear disclaimer about the SQL
                 response_parts.append(
-                    f"\n⚠️ *Note:* The SQL query below was generated but could not be fully verified due to: {verification_error or 'verification issues'}"
-                )
-                response_parts.append(
-                    "\n*Please review carefully before running in production.*"
+                    f"\n⚠️ *Note:* I couldn't run this query automatically because {friendly_error}. The SQL is attached below — please review before using."
                 )
 
                 combined_message = "".join(response_parts)
 
-                # Create SQL file content with warnings
+                # SQL file content with concise header
                 sql_content = f"""-- Generated SQL Query (UNVERIFIED)
--- Question: {message_text[:100]}...
--- 
--- ⚠️ WARNING: This query could not be verified due to: {verification_error or 'verification issues'}
--- Please review and test carefully before using in production
---
+-- Reason: {friendly_error}
+-- Review carefully before use.
 
 {sql_query}"""
 
@@ -722,6 +719,8 @@ class SlackResponderAgent:
         system_prompt_content = create_slack_responder_system_prompt(
             original_question=state["original_question"],
             thread_history=state.get("thread_history"),
+            user_display_name=getattr(self, "_user_display_name", None),
+            user_locale=getattr(self, "_user_locale", None),
             qa_final_answer=state.get("qa_final_answer"),
             qa_sql_query=state.get("qa_sql_query"),
             qa_models=state.get("qa_models"),
@@ -1079,14 +1078,11 @@ class SlackResponderAgent:
         if not sql_query:
             return {"error_message": "No SQL query available for auto post."}
 
-        verification_error = (
-            state.get("sql_verification_error") or "verification issues"
-        )
+        raw_error = state.get("sql_verification_error")
+        friendly_error = SlackResponderAgent._friendly_verification_error(raw_error)
 
         # Build analysis text (will be posted as a normal message)
-        analysis_parts: List[str] = [
-            "I couldn't verify this query automatically, but it should help answer your question.",
-        ]
+        analysis_parts: List[str] = []
 
         qa_answer = state.get("qa_final_answer")
         if qa_answer:
@@ -1098,7 +1094,7 @@ class SlackResponderAgent:
                 analysis_parts.append("\n\n" + stripped_answer)
 
         analysis_parts.append(
-            f"\n\n⚠️ *Note:* The SQL query could not be verified due to: {verification_error}. Please review carefully before using."
+            f"\n\n⚠️ *Note:* I couldn't run this query automatically because {friendly_error}. The SQL is attached below — please review before using."
         )
 
         qa_models = state.get("qa_models") or []
@@ -1114,8 +1110,8 @@ class SlackResponderAgent:
         analysis_text = "".join(analysis_parts)
 
         sql_content = f"""-- Generated SQL Query (UNVERIFIED)
--- ⚠️ WARNING: This query could not be verified automatically.
--- Please review and test carefully before using.
+-- Reason: {friendly_error}
+-- Review carefully before use.
 
 {sql_query}
 """
@@ -1128,11 +1124,11 @@ class SlackResponderAgent:
                 text=analysis_text,
             )
 
-            # 2) upload SQL file with a very short comment to avoid 414
+            # 2) upload SQL file with a concise comment to avoid duplication
             await self.slack_client.files_upload_v2(
                 channel=self.current_channel_id,
                 thread_ts=self.current_thread_ts,
-                initial_comment="Here is the SQL query (unverified).",
+                initial_comment="SQL query attached (unverified).",
                 content=sql_content,
                 filename="unverified_query.sql",
                 title="SQL Query (Unverified)",
@@ -1285,6 +1281,7 @@ class SlackResponderAgent:
 
         # --- Fetch Slack user display name for better UX ---
         user_display_name: str | None = None
+        user_locale: str | None = None
         try:
             # Attempt to fetch user info from Slack to get their real/display name
             if self.slack_client and user_id:
@@ -1296,6 +1293,7 @@ class SlackResponderAgent:
                         or profile.get("display_name")
                         or user_info_resp["user"].get("name")
                     )
+                    user_locale = user_info_resp["user"].get("locale")
         except SlackApiError as e:
             logger.warning(
                 f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
@@ -1327,6 +1325,10 @@ class SlackResponderAgent:
             # Initialize conversation logger
             self.conversation_logger = ConversationLogger(self.conversation)
 
+            # Pass the logger down to child workflows so they can log tool usage
+            self.question_answerer.conversation_logger = self.conversation_logger
+            self.sql_verifier.conversation_logger = self.conversation_logger
+
             # Log the initial user message (wrapped in sync_to_async)
             await sync_to_async(self.conversation_logger.log_user_message)(
                 content=question,
@@ -1341,6 +1343,10 @@ class SlackResponderAgent:
                 logger.info(
                     f"Initialized conversation logging for conversation {self.conversation.id}"
                 )
+
+            # Save user context for prompt generation
+            self._user_display_name = user_display_name
+            self._user_locale = user_locale
 
             config = {"configurable": {"thread_id": conversation_id}}
 
@@ -1446,10 +1452,10 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     initial_comment=fallback_message
-                    + f"\n\n⚠️ *Note:* The SQL below couldn't be fully verified due to: {sql_verification_error or 'verification issues'}. Please review before using.",
+                    + f"\n\n*Note:* I couldn't run this query automatically because {SlackResponderAgent._friendly_verification_error(sql_verification_error)}. Please review before using.",
                     content=f"""-- Generated SQL Query (UNVERIFIED)
--- ⚠️ WARNING: Could not be verified due to: {sql_verification_error or 'verification issues'}
--- Please review and test carefully before using
+-- Reason: {SlackResponderAgent._friendly_verification_error(sql_verification_error)}
+-- Review carefully before use.
 
 {qa_sql}""",
                     filename="unverified_query.sql",
@@ -1526,3 +1532,57 @@ class SlackResponderAgent:
             logger.exception(f"Failed to send error message: {e}")
 
         return {"response_sent": True, "error_handled": True}
+
+    # --- Helper: map raw verifier errors to concise, user-friendly messages ---
+
+    @staticmethod
+    def _friendly_verification_error(error: Optional[str]) -> str:
+        """Return a concise, user-friendly reason why verification failed.
+
+        We try to detect common failure patterns (missing warehouse credentials,
+        authentication failures, dialect/unsupported warehouse, etc.) and map
+        them to a short explanation.  If we cannot recognise the pattern we
+        return the original error string so the user still gets some context.
+        """
+        if not error:
+            return "warehouse connection is not configured"
+
+        lowered = error.lower()
+
+        # Missing configuration / integration disabled
+        if (
+            "not configured" in lowered
+            or "no credentials" in lowered
+            or "credentials not available" in lowered
+        ):
+            return "warehouse connection is not configured"
+
+        # Authentication / password issues
+        if any(
+            word in lowered
+            for word in [
+                "authentication",
+                "auth failed",
+                "password",
+                "invalid credentials",
+            ]
+        ):
+            return "warehouse credentials appear to be incorrect"
+
+        # Network / connectivity
+        if any(
+            word in lowered
+            for word in [
+                "could not connect",
+                "connection refused",
+                "network",
+                "timeout",
+            ]
+        ):
+            return "unable to connect to the warehouse"
+
+        # Generic Snowflake error pattern
+        if "snowflake" in lowered:
+            return "unable to connect to Snowflake"
+
+        return error.strip()

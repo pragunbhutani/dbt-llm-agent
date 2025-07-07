@@ -35,6 +35,7 @@ from .models import (
     SQLSchemaValidationResult,
     SQLStyleCheckResult,
 )
+from apps.workflows.services import trigger_model_interpretation, ConversationLogger
 
 # Snowflake connector (ensure it's listed in requirements if not already)
 try:
@@ -164,6 +165,11 @@ class SQLVerifierWorkflow:
 
         # No specific tools to define for external LLM calls yet, debugging is an internal LLM call node.
         # self.graph_app = self._build_graph() # Will be uncommented once nodes are defined
+
+        # Note: self.tools is initialized inside _define_tools; avoid overriding here.
+
+        # Optional conversation logger (propagated by orchestrator)
+        self.conversation_logger: Optional[ConversationLogger] = None
 
     # --- Core SQL Execution Logic (adapted from QueryExecutorWorkflow) ---
     def _execute_sql_query_sync(
@@ -430,6 +436,14 @@ class SQLVerifierWorkflow:
                 logger.info(
                     f"Agent tool: describe_table_tool called for table: {table_name}"
                 )
+
+                # Conversation logging
+                if getattr(self, "conversation_logger", None):
+                    await sync_to_async(self.conversation_logger.log_tool_call)(
+                        tool_name="describe_table_tool",
+                        tool_input={"table_name": table_name},
+                    )
+
                 schema_info = await self._fetch_table_schema(table_name)
                 if schema_info:
                     return schema_info
@@ -456,6 +470,18 @@ class SQLVerifierWorkflow:
                 logger.info(
                     f"Agent tool: list_column_values_tool called for {table_name}.{column_name} with limit {effective_limit}"
                 )
+
+                # Conversation logging
+                if getattr(self, "conversation_logger", None):
+                    await sync_to_async(self.conversation_logger.log_tool_call)(
+                        tool_name="list_column_values_tool",
+                        tool_input={
+                            "table_name": table_name,
+                            "column_name": column_name,
+                            "limit": effective_limit,
+                        },
+                    )
+
                 values, error = await self._fetch_column_values(
                     table_name, column_name, limit=effective_limit
                 )
@@ -473,16 +499,17 @@ class SQLVerifierWorkflow:
                     "error": f"No distinct values returned or an unknown error occurred for {table_name}.{column_name}"
                 }
 
-            self.tools.extend([describe_table_tool, list_column_values_tool])
+                # Bind tools (empty list is fine – LLM just gets no tool schema)
+                if self.llm:
+                    self.llm_with_tools = self.llm.bind_tools(self.tools)
+                else:
+                    self.llm_with_tools = None
+                    logger.error(
+                        "SQLVerifierWorkflow: LLM not available, cannot bind tools for agentic debugging."
+                    )
 
-        # Bind tools (empty list is fine – LLM just gets no tool schema)
-        if self.llm:
-            self.llm_with_tools = self.llm.bind_tools(self.tools)
-        else:
-            self.llm_with_tools = None
-            logger.error(
-                "SQLVerifierWorkflow: LLM not available, cannot bind tools for agentic debugging."
-            )
+            # Register the tools so the agent schema includes them
+            self.tools.extend([describe_table_tool, list_column_values_tool])
 
     # --- Node Functions (to be defined) ---
     async def start_verification_node(self, state: SQLVerifierState) -> Dict[str, Any]:

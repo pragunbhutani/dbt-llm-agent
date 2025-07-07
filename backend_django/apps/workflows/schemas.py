@@ -39,6 +39,30 @@ class SQLVerificationResponse(BaseModel):
     is_style_compliant: Optional[bool] = Field(default=None)
     style_violations: Optional[List[str]] = Field(default=None)
 
+    # ---------------------------------------------------------------------
+    # Helper methods
+    # ---------------------------------------------------------------------
+
+    def dict(self, *args, **kwargs):  # type: ignore[override]
+        """Return a trimmed dict excluding heavyweight internal fields by default.
+
+        Callers can still explicitly include extras by passing an `exclude` set
+        themselves; we will union it with the default blacklist to ensure these
+        keys never leak unintentionally.
+        """
+
+        # Always strip out verbose debugging artefacts that should remain
+        # internal-only for privacy and payload size reasons.
+        default_exclude = {
+            "debugging_log",
+        }
+
+        # Merge caller-supplied exclusions if provided
+        caller_exclude = set(kwargs.pop("exclude", set()))
+        final_exclude = caller_exclude.union(default_exclude)
+
+        return super().dict(*args, exclude=final_exclude, **kwargs)
+
 
 class QAResponse(BaseModel):
     """Canonical contract object exchanged from QuestionAnswerer → SlackResponder.
@@ -48,6 +72,19 @@ class QAResponse(BaseModel):
     """
 
     answer: str = Field(..., description="End-user facing answer (plain text)")
+
+    # Workflow status
+    success: bool = Field(
+        default=True,
+        description="Indicates whether the QA workflow completed without internal errors.",
+    )
+
+    # Additional structured commentary for downstream formatting (e.g., Slack bullets)
+    notes: List[str] = Field(
+        default_factory=list,
+        description="List of bullet-point caveats or clarifications to accompany the answer.",
+    )
+
     sql_query: Optional[str] = Field(
         default=None,
         description="SQL query that supports the answer, when applicable",

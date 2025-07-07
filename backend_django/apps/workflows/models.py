@@ -279,6 +279,7 @@ class ConversationPart(models.Model):
             ("intent_classification", "Intent Classification"),
             ("llm_input", "LLM Input"),
             ("llm_output", "LLM Output"),
+            ("tool_call", "Tool Call"),
             ("tool_execution", "Tool Execution"),
             ("tool_error", "Tool Error"),
             ("slack_output", "Slack Output"),
@@ -322,6 +323,13 @@ class ConversationPart(models.Model):
     )
     tool_output = models.JSONField(
         null=True, blank=True, help_text="Output from tool execution"
+    )
+
+    # Optional short summary of tool result (helps avoid storing large payloads)
+    result_summary = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Truncated or human-friendly summary of the tool output",
     )
 
     # Performance tracking
