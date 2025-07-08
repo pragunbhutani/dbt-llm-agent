@@ -54,6 +54,8 @@ from slack_sdk.errors import SlackApiError
 from apps.workflows.schemas import SQLVerificationResponse
 from apps.workflows.schemas import QAResponse
 from pydantic import ValidationError
+from apps.workflows.utils import ensure_contract
+from apps.workflows.utils import format_for_slack
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +112,14 @@ class SlackResponderState(TypedDict):
     qa_final_answer: Optional[str]
     qa_sql_query: Optional[str]
     qa_models: Optional[List[Dict[str, Any]]]
+    qa_notes: Optional[List[str]]
 
     # SQL Verification fields
     sql_is_verified: Optional[bool]
     verified_sql_query: Optional[str]
     sql_verification_error: Optional[str]
     sql_verification_explanation: Optional[str]
+    sql_style_violations: Optional[List[str]]
 
     error_message: Optional[str]
     response_sent: Optional[bool]
@@ -238,7 +242,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=acknowledgement_text,
+                    text=format_for_slack(acknowledgement_text),
                 )
                 if self.verbose:
                     logger.info("Acknowledgement sent successfully")
@@ -279,30 +283,15 @@ class SlackResponderAgent:
                 )
 
                 # Validate against the canonical schema for safety
-                try:
-                    qa_obj = QAResponse(**result)
-                    qa_answer: Optional[str] = qa_obj.answer
-                    sql_query: Optional[str] = qa_obj.sql_query
-                    models_used: List[Dict[str, Any]] = qa_obj.models_used
-                except ValidationError as ve:
-                    # Contract broken – log and salvage what we can
-                    logger.warning(
-                        "QuestionAnswerer returned payload that failed QAResponse validation: %s",
-                        ve,
-                    )
-                    if self.conversation_logger:
-                        await sync_to_async(self.conversation_logger.log_error)(
-                            content="QA payload validation failed",
-                            error_details={"validation_error": str(ve)},
-                        )
-
-                    # Fall back to best-effort extraction to avoid throwing away work
-                    qa_answer = (
-                        result.get("answer")
-                        or "I'm still working on that – could you clarify anything else?"
-                    )
-                    sql_query = result.get("sql_query")
-                    models_used = result.get("models_used", [])
+                qa_obj = ensure_contract(
+                    QAResponse,
+                    result,
+                    component="slack_responder.ask_question_answerer",
+                    strict_mode=False,
+                )
+                qa_answer: Optional[str] = qa_obj.answer
+                sql_query: Optional[str] = qa_obj.sql_query
+                models_used: List[Dict[str, Any]] = qa_obj.models_used
 
                 # If no explicit sql_query returned, attempt to extract from fenced code block in answer
                 if sql_query is None and isinstance(qa_answer, str):
@@ -479,7 +468,7 @@ class SlackResponderAgent:
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=message_text,
+                    initial_comment=format_for_slack(message_text),
                     content=sql_content,
                     filename="query.sql",
                     title="SQL Query",
@@ -515,7 +504,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=message_text,
+                    text=format_for_slack(message_text),
                 )
 
                 if self.verbose:
@@ -598,7 +587,7 @@ class SlackResponderAgent:
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=combined_message,
+                    initial_comment=format_for_slack(combined_message),
                     content=sql_content,
                     filename="unverified_query.sql",
                     title="SQL Query (Unverified)",
@@ -722,10 +711,12 @@ class SlackResponderAgent:
             qa_final_answer=state.get("qa_final_answer"),
             qa_sql_query=state.get("qa_sql_query"),
             qa_models=state.get("qa_models"),
+            qa_notes=state.get("qa_notes"),
             sql_is_verified=state.get("sql_is_verified"),
             verified_sql_query=state.get("verified_sql_query"),
             sql_verification_error=state.get("sql_verification_error"),
             sql_verification_explanation=state.get("sql_verification_explanation"),
+            sql_style_violations=state.get("sql_style_violations"),
             acknowledgement_sent=state.get("acknowledgement_sent"),
             error_message=state.get("error_message"),
         )
@@ -849,6 +840,7 @@ class SlackResponderAgent:
                     qa_answer = tool_content.get("answer")
                     updates["qa_final_answer"] = qa_answer
                     updates["qa_models"] = tool_content.get("models_used", [])
+                    updates["qa_notes"] = tool_content.get("notes", [])
                     # Store sql_query directly if provided
                     if "sql_query" in tool_content and tool_content["sql_query"]:
                         updates["qa_sql_query"] = tool_content["sql_query"]
@@ -863,6 +855,9 @@ class SlackResponderAgent:
                     updates["sql_verification_error"] = tool_content.get("error")
                     updates["sql_verification_explanation"] = tool_content.get(
                         "explanation"
+                    )
+                    updates["sql_style_violations"] = tool_content.get(
+                        "style_violations", []
                     )
                     if self.verbose:
                         logger.info(
@@ -969,7 +964,7 @@ class SlackResponderAgent:
                     await self.slack_client.files_upload_v2(
                         channel=self.current_channel_id,
                         thread_ts=self.current_thread_ts,
-                        initial_comment=initial_comment,
+                        initial_comment=format_for_slack(initial_comment),
                         content=sql_query,
                         filename="query.sql",
                         title="SQL Query",
@@ -1002,7 +997,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=response_text,
+                    text=format_for_slack(response_text),
                 )
 
                 if self.verbose:
@@ -1163,7 +1158,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=fallback_text,
+                    text=format_for_slack(fallback_text),
                 )
                 return {"response_sent": True}
             except Exception as ee:
@@ -1360,10 +1355,12 @@ class SlackResponderAgent:
                 qa_final_answer=None,
                 qa_sql_query=None,
                 qa_models=None,
+                qa_notes=None,
                 sql_is_verified=None,
                 verified_sql_query=None,
                 sql_verification_error=None,
                 sql_verification_explanation=None,
+                sql_style_violations=None,
                 error_message=None,
                 response_sent=None,
                 conversation_id=self.conversation.id,
@@ -1449,8 +1446,10 @@ class SlackResponderAgent:
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=fallback_message
-                    + f"\n\n*Note:* I couldn't run this query automatically because {SlackResponderAgent._friendly_verification_error(sql_verification_error)}. Please review before using.",
+                    initial_comment=format_for_slack(
+                        fallback_message
+                        + f"\n\n*Note:* I couldn't run this query automatically because {SlackResponderAgent._friendly_verification_error(sql_verification_error)}. Please review before using."
+                    ),
                     content=f"""-- Generated SQL Query (UNVERIFIED)
 -- Reason: {SlackResponderAgent._friendly_verification_error(sql_verification_error)}
 -- Review carefully before use.
@@ -1489,7 +1488,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=fallback_message,
+                    text=format_for_slack(fallback_message),
                 )
 
                 if self.verbose:
@@ -1522,7 +1521,7 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=user_message,
+                    text=format_for_slack(user_message),
                 )
                 if self.verbose:
                     logger.info("Sent user-friendly error message")

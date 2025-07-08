@@ -14,10 +14,12 @@ def create_slack_responder_system_prompt(
     qa_final_answer: Optional[str],
     qa_sql_query: Optional[str],
     qa_models: Optional[List[Dict[str, Any]]],
+    qa_notes: Optional[List[str]],
     sql_is_verified: Optional[bool],
     verified_sql_query: Optional[str],
     sql_verification_error: Optional[str],
     sql_verification_explanation: Optional[str],
+    sql_style_violations: Optional[List[str]],
     acknowledgement_sent: Optional[bool],
     error_message: Optional[str],
 ) -> str:
@@ -70,12 +72,26 @@ Focus on helping the user with their data questions in a natural, conversational
         else:
             status_items.append("- No SQL query in analysis")
 
+    if sql_style_violations:
+        status_items.append("⚠️ Style violations present")
+
     if status_items:
         prompt += f"\n**Progress:** {', '.join(status_items)}\n"
 
     # --- Show Analysis Results if Available ---
     if qa_final_answer:
         prompt += f"\n**Analysis Results:**\n{qa_final_answer}\n"
+
+    if qa_notes:
+        prompt += "\n**Additional Notes:**\n"
+        for n in qa_notes:
+            prompt += f"• {n}\n"
+
+    # --- Style violations ---
+    if sql_style_violations:
+        prompt += "\n**SQL Style Feedback:**\n"
+        for v in sql_style_violations:
+            prompt += f"• {v}\n"
 
     # --- Error Context (without exposing internals) ---
     if error_message:

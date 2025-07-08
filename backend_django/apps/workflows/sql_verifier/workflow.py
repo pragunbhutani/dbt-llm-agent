@@ -511,6 +511,16 @@ class SQLVerifierWorkflow:
             # Register the tools so the agent schema includes them
             self.tools.extend([describe_table_tool, list_column_values_tool])
 
+        # Outside the Snowflake-credentials block so attribute always exists
+        # Bind tools (empty list is fine – LLM just gets no tool schema)
+        if self.llm:
+            self.llm_with_tools = self.llm.bind_tools(self.tools)
+        else:
+            self.llm_with_tools = None
+            logger.error(
+                "SQLVerifierWorkflow: LLM not available, cannot bind tools for agentic debugging."
+            )
+
     # --- Node Functions (to be defined) ---
     async def start_verification_node(self, state: SQLVerifierState) -> Dict[str, Any]:
         """
