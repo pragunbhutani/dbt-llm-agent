@@ -767,6 +767,47 @@ class SlackResponderAgent:
             if self.verbose:
                 logger.info(f"SlackResponder Agent response: {response}")
 
+            # --- NEW: capture prompt & completion tokens ---
+            if getattr(self, "conversation_logger", None):
+                try:
+                    usage_meta = (
+                        getattr(response, "additional_kwargs", {}).get("usage", {})
+                        or getattr(response, "response_metadata", {}).get("usage", {})
+                        or getattr(response, "usage_metadata", {})
+                    )
+
+                    prompt_tokens = int(
+                        usage_meta.get("prompt_tokens")
+                        or usage_meta.get("input_tokens")
+                        or 0
+                    )
+                    completion_tokens = int(
+                        usage_meta.get("completion_tokens")
+                        or usage_meta.get("output_tokens")
+                        or 0
+                    )
+
+                    if prompt_tokens:
+                        self.conversation_logger.log_agent_response(
+                            content="[LLM Prompt – SlackResponder]",
+                            tokens_used=prompt_tokens,
+                            metadata={"type": "llm_input"},
+                        )
+
+                    self.conversation_logger.log_agent_response(
+                        content=(
+                            response.content
+                            if hasattr(response, "content")
+                            else "[LLM Response]"
+                        ),
+                        tokens_used=completion_tokens,
+                        metadata={"type": "llm_output"},
+                    )
+                except Exception as log_err:
+                    logger.warning(
+                        f"SlackResponder: failed to record LLM token usage: {log_err}"
+                    )
+
             if first_turn_human_message:
                 return {"messages": [first_turn_human_message, response]}
             else:
@@ -1186,9 +1227,8 @@ class SlackResponderAgent:
                     "status": ConversationStatus.ACTIVE,
                     "trigger": ConversationTrigger.SLACK_MENTION,
                     "initial_question": question,
-                    "llm_provider": self.org_settings.get_llm_anthropic_api_key()
-                    and "anthropic"
-                    or "openai",
+                    "llm_provider": self.org_settings.llm_chat_provider,
+                    "llm_chat_model": self.org_settings.llm_chat_model,
                     "enabled_integrations": self._get_enabled_integrations(),
                 },
             )
@@ -1236,9 +1276,8 @@ class SlackResponderAgent:
                     status=ConversationStatus.ACTIVE,
                     trigger=ConversationTrigger.SLACK_MENTION,
                     initial_question=question,
-                    llm_provider=self.org_settings.get_llm_anthropic_api_key()
-                    and "anthropic"
-                    or "openai",
+                    llm_provider=self.org_settings.llm_chat_provider,
+                    llm_chat_model=self.org_settings.llm_chat_model,
                     enabled_integrations=enabled_integrations,
                 )
                 if self.verbose:
@@ -1278,15 +1317,29 @@ class SlackResponderAgent:
         try:
             # Attempt to fetch user info from Slack to get their real/display name
             if self.slack_client and user_id:
+                logger.info(f"Fetching Slack user info for user_id: {user_id}")
                 user_info_resp = await self.slack_client.users_info(user=user_id)
+                logger.info(f"Slack users_info response: {user_info_resp}")
                 if user_info_resp.get("ok"):
                     profile = user_info_resp["user"].get("profile", {})
+                    logger.info(f"User profile data: {profile}")
                     user_display_name = (
                         profile.get("real_name")
                         or profile.get("display_name")
                         or user_info_resp["user"].get("name")
                     )
                     user_locale = user_info_resp["user"].get("locale")
+                    logger.info(
+                        f"Successfully fetched user display name: {user_display_name}"
+                    )
+                else:
+                    logger.warning(
+                        f"Slack users_info API returned not ok: {user_info_resp}"
+                    )
+            else:
+                logger.warning(
+                    f"Slack client not available or user_id empty. slack_client: {self.slack_client}, user_id: {user_id}"
+                )
         except SlackApiError as e:
             logger.warning(
                 f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
@@ -1306,13 +1359,26 @@ class SlackResponderAgent:
             )
 
             # If we successfully fetched the user's display name, update the conversation
+            logger.info(
+                f"Checking if user_external_id needs update. user_display_name: '{user_display_name}', current user_external_id: '{self.conversation.user_external_id}'"
+            )
             if (
                 user_display_name
                 and user_display_name != self.conversation.user_external_id
             ):
+                logger.info(
+                    f"Updating conversation user_external_id from '{self.conversation.user_external_id}' to '{user_display_name}'"
+                )
                 self.conversation.user_external_id = user_display_name
                 await sync_to_async(self.conversation.save)(
                     update_fields=["user_external_id"]
+                )
+                logger.info(
+                    f"Successfully updated conversation user_external_id to: {user_display_name}"
+                )
+            else:
+                logger.info(
+                    f"Not updating user_external_id. user_display_name: {user_display_name}, current user_external_id: {self.conversation.user_external_id}"
                 )
 
             # Initialize conversation logger

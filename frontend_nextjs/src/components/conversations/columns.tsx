@@ -3,12 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DataTableColumnHeader } from "@/components/data-table/data-table-column-header";
-import {
-  MoreHorizontal,
-  MessageSquare,
-  Calendar,
-  Activity,
-} from "lucide-react";
+import { MoreHorizontal, MessageSquare, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -60,12 +55,24 @@ export const getColumns = ({
       const question = row.getValue("initial_question") as string;
       const conversationId = row.original.id;
 
-      // Limit the displayed question length to avoid extremely wide cells
-      const MAX_CHARS = 120;
+      // Utility to decode a handful of common HTML entities that sometimes
+      // appear in questions (e.g. Slack encodes < and >)
+      const decodeHtmlEntities = (str: string) =>
+        str
+          .replace(/&lt;/g, "<")
+          .replace(/&gt;/g, ">")
+          .replace(/&amp;/g, "&")
+          .replace(/&quot;/g, '"')
+          .replace(/&#039;/g, "'");
+
+      const decodedQuestion = decodeHtmlEntities(question);
+
+      // Limit the displayed question length further to keep table compact
+      const MAX_CHARS = 100;
       const displayQuestion =
-        question.length > MAX_CHARS
-          ? `${question.slice(0, MAX_CHARS)}…`
-          : question;
+        decodedQuestion.length > MAX_CHARS
+          ? `${decodedQuestion.slice(0, MAX_CHARS)}…`
+          : decodedQuestion;
 
       return (
         <Link href={`/dashboard/chats/${conversationId}`}>
@@ -123,22 +130,7 @@ export const getColumns = ({
       );
     },
   },
-  {
-    accessorKey: "status",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Status" />
-    ),
-    cell: ({ row }) => {
-      const statusRaw = row.getValue("status") as string;
-      const displayStatus = statusRaw === "active" ? "Active" : "Completed";
-      const variant = statusRaw === "active" ? "secondary" : "default";
-
-      return <Badge variant={variant}>{displayStatus}</Badge>;
-    },
-    filterFn: (row, id, value) => {
-      return value.includes(row.getValue(id));
-    },
-  },
+  // Status and Cost columns removed per updated requirements
   {
     accessorKey: "user_id",
     header: ({ column }) => (
@@ -185,20 +177,6 @@ export const getColumns = ({
           <Calendar className="h-4 w-4 text-gray-500" />
           <span className="text-sm">{formattedDate}</span>
         </div>
-      );
-    },
-  },
-  {
-    accessorKey: "total_cost",
-    header: ({ column }) => (
-      <DataTableColumnHeader column={column} title="Cost" />
-    ),
-    cell: ({ row }) => {
-      const cost = row.getValue("total_cost") as number | string;
-      return (
-        <span className="text-sm font-mono">
-          ${(parseFloat(String(cost)) || 0).toFixed(4)}
-        </span>
       );
     },
   },

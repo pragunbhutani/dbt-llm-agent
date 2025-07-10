@@ -166,6 +166,12 @@ class Conversation(OrganisationScopedModelMixin, models.Model):
         default="anthropic",
         help_text="LLM provider used for this conversation",
     )
+    llm_chat_model = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        help_text="Specific LLM model used for this conversation",
+    )
     enabled_integrations = models.JSONField(
         default=list, help_text="List of integrations enabled for this conversation"
     )
@@ -238,6 +244,40 @@ class Conversation(OrganisationScopedModelMixin, models.Model):
     def calculated_total_cost(self):
         """Calculate the total cost across all parts."""
         return self.parts.aggregate(total=models.Sum("cost"))["total"] or 0
+
+    # --------------------------------------------------------------
+    # Token breakdown helpers
+    # --------------------------------------------------------------
+
+    @property
+    def calculated_input_tokens(self):
+        """Total tokens used for messages sent *to* the LLM."""
+        return (
+            self.parts.filter(message_type="llm_input").aggregate(
+                total=models.Sum("tokens_used")
+            )["total"]
+            or 0
+        )
+
+    @property
+    def calculated_output_tokens(self):
+        """Total tokens produced *by* the LLM."""
+        return (
+            self.parts.filter(message_type="llm_output").aggregate(
+                total=models.Sum("tokens_used")
+            )["total"]
+            or 0
+        )
+
+    @property
+    def calculated_thinking_tokens(self):
+        """Tokens used for internal agent reasoning / thinking steps."""
+        return (
+            self.parts.filter(message_type="thinking").aggregate(
+                total=models.Sum("tokens_used")
+            )["total"]
+            or 0
+        )
 
 
 class ConversationPart(models.Model):

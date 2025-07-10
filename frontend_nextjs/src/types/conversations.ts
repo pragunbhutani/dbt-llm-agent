@@ -45,10 +45,14 @@ export interface Conversation {
   channel_type: string;
   channel_id?: string;
   llm_provider: string;
+  llm_chat_model?: string;
   enabled_integrations: string[];
   total_parts: number;
   total_tokens_used: number;
   total_cost: number | string;
+  input_tokens?: number;
+  output_tokens?: number;
+  thinking_tokens?: number;
   started_at: string;
   completed_at?: string;
   user_rating?: number;
@@ -74,6 +78,9 @@ export interface ConversationListItem {
   total_parts: number;
   total_tokens_used: number;
   total_cost: number | string;
+  input_tokens?: number;
+  output_tokens?: number;
+  thinking_tokens?: number;
   started_at: string;
   completed_at?: string;
   user_rating?: number;

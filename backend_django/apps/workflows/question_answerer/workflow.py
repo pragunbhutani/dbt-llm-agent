@@ -472,7 +472,7 @@ class QuestionAnswererAgent:
         @tool(args_schema=FinishWorkflowInput)
         async def finish_workflow(
             answer: str, sql_query: Optional[str] = None
-        ) -> Dict[str, Any]:
+        ) -> QAResponse:
             """Concludes the workflow and returns both the answer text and an optional SQL query."""
             if self.verbose:
                 logger.info(
@@ -481,6 +481,7 @@ class QuestionAnswererAgent:
 
             # Use the canonical QAResponse model for strong typing at the boundary
             response_obj = QAResponse(answer=answer, sql_query=sql_query)
+            # Return as a plain dict for JSON serialization while preserving the static type annotation
             return response_obj.model_dump()
 
         self._tools = [
@@ -651,6 +652,52 @@ class QuestionAnswererAgent:
             response = await agent_llm_with_tools.ainvoke(
                 messages_for_llm, config=config
             )
+
+            # --- NEW: Log token usage for this LLM call ---
+            if getattr(self, "conversation_logger", None):
+                try:
+                    usage_meta = (
+                        getattr(response, "additional_kwargs", {}).get("usage", {})
+                        or getattr(response, "response_metadata", {}).get("usage", {})
+                        or getattr(response, "usage_metadata", {})
+                    )
+
+                    prompt_tokens = int(
+                        usage_meta.get("prompt_tokens")
+                        or usage_meta.get("input_tokens")
+                        or 0
+                    )
+                    completion_tokens = int(
+                        usage_meta.get("completion_tokens")
+                        or usage_meta.get("output_tokens")
+                        or 0
+                    )
+
+                    # Log LLM input (prompt)
+                    if prompt_tokens:
+                        await sync_to_async(
+                            self.conversation_logger.log_agent_response
+                        )(
+                            content="[LLM Prompt]",  # We avoid logging the full prompt to DB
+                            tokens_used=prompt_tokens,
+                            metadata={"type": "llm_input"},
+                        )
+
+                    # Log LLM output (response)
+                    await sync_to_async(self.conversation_logger.log_agent_response)(
+                        content=(
+                            response.content
+                            if hasattr(response, "content")
+                            else "[LLM Response]"
+                        ),
+                        tokens_used=completion_tokens,
+                        metadata={"type": "llm_output"},
+                    )
+                except Exception as log_err:
+                    logger.warning(
+                        f"Failed to record LLM token usage in conversation log: {log_err}"
+                    )
+
             if self.verbose:
                 # Add separators and format response
                 response_str = json.dumps(

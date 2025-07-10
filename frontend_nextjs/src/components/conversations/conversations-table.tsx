@@ -120,14 +120,12 @@ export default function ConversationsTable() {
   const columns = getColumns({ handleDeleteConversation });
   const initialColumnVisibility = {
     trigger: false,
-    total_cost: false,
     channel: false,
   };
 
   const filterOptions = [
     { value: "initial_question", label: "Question" },
     { value: "channel", label: "Channel" },
-    { value: "status", label: "Status" },
     { value: "user_id", label: "User" },
   ];
 

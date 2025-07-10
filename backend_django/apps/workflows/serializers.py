@@ -89,6 +89,11 @@ class ConversationSerializer(serializers.ModelSerializer):
     total_tokens_used = serializers.ReadOnlyField(source="calculated_total_tokens")
     total_cost = serializers.ReadOnlyField(source="calculated_total_cost")
 
+    # Detailed token metrics
+    input_tokens = serializers.ReadOnlyField(source="calculated_input_tokens")
+    output_tokens = serializers.ReadOnlyField(source="calculated_output_tokens")
+    thinking_tokens = serializers.ReadOnlyField(source="calculated_thinking_tokens")
+
     class Meta:
         model = Conversation
         fields = [
@@ -105,6 +110,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "channel_id",
             "user_external_id",
             "llm_provider",
+            "llm_chat_model",
             "enabled_integrations",
             "total_parts",
             "total_tokens_used",
@@ -116,6 +122,10 @@ class ConversationSerializer(serializers.ModelSerializer):
             "conversation_context",
             "organisation",
             "parts",
+            # Added detailed token fields for analytics
+            "input_tokens",
+            "output_tokens",
+            "thinking_tokens",
         ]
         read_only_fields = [
             "id",
@@ -124,6 +134,9 @@ class ConversationSerializer(serializers.ModelSerializer):
             "total_parts",
             "total_tokens_used",
             "total_cost",
+            "input_tokens",
+            "output_tokens",
+            "thinking_tokens",
         ]
 
 

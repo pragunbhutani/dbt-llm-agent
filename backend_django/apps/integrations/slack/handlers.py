@@ -202,6 +202,29 @@ def _register_event_handlers(app: App):
                     f"Found organization settings: {org_settings.organisation.id}"
                 )
 
+            # ----------------------------------------------------------
+            # NEW: Fetch user display name for better UX
+            # ----------------------------------------------------------
+            user_display_name: Optional[str] = None
+            try:
+                if client and user_id:
+                    user_info_resp = client.users_info(user=user_id)
+                    if user_info_resp.get("ok"):
+                        profile = user_info_resp["user"].get("profile", {})
+                        user_display_name = (
+                            profile.get("real_name")
+                            or profile.get("display_name")
+                            or user_info_resp["user"].get("name")
+                        )
+            except SlackApiError as e:
+                logger.warning(
+                    f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Unexpected error fetching Slack user info for {user_id}: {e}"
+                )
+
             # 5. Create conversation record
             conversation = get_or_create_conversation_record(
                 org_settings=org_settings,
@@ -209,6 +232,7 @@ def _register_event_handlers(app: App):
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 question=user_question,
+                user_display_name=user_display_name,
             )
 
             # 6. Get bot token for the Celery task
@@ -419,7 +443,32 @@ def _register_event_handlers(app: App):
                 )
                 return
 
-            # Get organization settings
+            # ----------------------------------------------------------
+            # NEW: Fetch user display name for DM conversations
+            # ----------------------------------------------------------
+            user_display_name: Optional[str] = None
+            try:
+                if client and user_id:
+                    user_info_resp = client.users_info(user=user_id)
+                    if user_info_resp.get("ok"):
+                        profile = user_info_resp["user"].get("profile", {})
+                        user_display_name = (
+                            profile.get("real_name")
+                            or profile.get("display_name")
+                            or user_info_resp["user"].get("name")
+                        )
+            except SlackApiError as e:
+                logger.warning(
+                    f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Unexpected error fetching Slack user info for {user_id}: {e}"
+                )
+
+            # ----------------------------------------------------------
+            # Fetch organisation settings (restored)
+            # ----------------------------------------------------------
             org_settings = get_org_settings_for_team(team_id)
             if not org_settings:
                 logger.error(f"No organization settings found for team: {team_id}")
@@ -436,6 +485,7 @@ def _register_event_handlers(app: App):
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 question=user_question,
+                user_display_name=user_display_name,
             )
 
             # Get bot token for the Celery task
@@ -536,10 +586,17 @@ def get_org_settings_for_team(team_id: str):
 
 
 def get_or_create_conversation_record(
-    org_settings, user_id: str, channel_id: str, thread_ts: str, question: str
+    org_settings,
+    user_id: str,
+    channel_id: str,
+    thread_ts: str,
+    question: str,
+    user_display_name: Optional[str] = None,
 ) -> Conversation:
     """Get or create a conversation record in the database for a Slack thread."""
     try:
+        preferred_display = user_display_name or user_id
+
         # Try to get existing conversation first
         conversation, created = Conversation.objects.get_or_create(
             organisation=org_settings.organisation,
@@ -548,8 +605,12 @@ def get_or_create_conversation_record(
                 "initial_question": question,
                 "channel": "slack",
                 "user_id": user_id,
+                "user_external_id": preferred_display,
                 "channel_id": channel_id,
                 "trigger": ConversationTrigger.SLACK_MENTION,
+                # Store the LLM provider & model at creation time for analytics
+                "llm_provider": org_settings.llm_chat_provider or "unknown",
+                "llm_chat_model": org_settings.llm_chat_model,
                 "conversation_context": {
                     "slack_user_id": user_id,
                     "slack_channel_id": channel_id,
@@ -558,6 +619,29 @@ def get_or_create_conversation_record(
                 },
             },
         )
+
+        # If the conversation already existed, we may need to backfill missing fields.
+        fields_to_update: list[str] = []
+
+        # Update display name if we now have a better one
+        if user_display_name and (
+            not conversation.user_external_id
+            or conversation.user_external_id == conversation.user_id
+        ):
+            conversation.user_external_id = user_display_name
+            fields_to_update.append("user_external_id")
+
+        # Backfill provider / model if they were previously missing
+        if not conversation.llm_provider and org_settings.llm_chat_provider:
+            conversation.llm_provider = org_settings.llm_chat_provider
+            fields_to_update.append("llm_provider")
+
+        if not conversation.llm_chat_model and org_settings.llm_chat_model:
+            conversation.llm_chat_model = org_settings.llm_chat_model
+            fields_to_update.append("llm_chat_model")
+
+        if fields_to_update:
+            conversation.save(update_fields=fields_to_update)
 
         if created:
             logger.info(
@@ -577,6 +661,8 @@ def get_or_create_conversation_record(
             organisation=org_settings.organisation,
             initial_question=question,
             channel="slack",
+            llm_provider=org_settings.llm_chat_provider or "unknown",
+            llm_chat_model=org_settings.llm_chat_model,
             conversation_context={"error": "Failed to create full record"},
         )
 

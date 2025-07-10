@@ -597,6 +597,19 @@ class SQLVerifierWorkflow:
                 f"execute_sql_node: Executing query (attempt {state['debug_attempts'] + 1}): {query[:100]}..."
             )
 
+        # NEW: Log the execution attempt as a tool call **before** running the query so the code path is always hit
+        if getattr(self, "conversation_logger", None):
+            try:
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="execute_sql_query",
+                    tool_input={"sql_query": query[:400]},
+                )
+            except Exception as e:
+                logger.error(
+                    f"Failed to log execute_sql_query tool call: {e}",
+                    exc_info=self.verbose,
+                )
+
         _, error = await self._execute_sql_query(query)
 
         if error:
@@ -898,6 +911,53 @@ class SQLVerifierWorkflow:
             ai_response_message = await self.llm_with_tools.ainvoke(
                 llm_actual_input_messages
             )
+
+            # --- NEW: Log token usage for this LLM call ---
+            if getattr(self, "conversation_logger", None):
+                try:
+                    usage_meta = (
+                        getattr(ai_response_message, "additional_kwargs", {}).get(
+                            "usage", {}
+                        )
+                        or getattr(ai_response_message, "response_metadata", {}).get(
+                            "usage", {}
+                        )
+                        or getattr(ai_response_message, "usage_metadata", {})
+                    )
+
+                    prompt_tokens = int(
+                        usage_meta.get("prompt_tokens")
+                        or usage_meta.get("input_tokens")
+                        or 0
+                    )
+                    completion_tokens = int(
+                        usage_meta.get("completion_tokens")
+                        or usage_meta.get("output_tokens")
+                        or 0
+                    )
+
+                    if prompt_tokens:
+                        await sync_to_async(
+                            self.conversation_logger.log_agent_response
+                        )(
+                            content="[LLM Prompt – SQL Verifier]",
+                            tokens_used=prompt_tokens,
+                            metadata={"type": "llm_input"},
+                        )
+
+                    await sync_to_async(self.conversation_logger.log_agent_response)(
+                        content=(
+                            ai_response_message.content
+                            if hasattr(ai_response_message, "content")
+                            else "[LLM Response]"
+                        ),
+                        tokens_used=completion_tokens,
+                        metadata={"type": "llm_output"},
+                    )
+                except Exception as log_err:
+                    logger.warning(
+                        f"SQLVerifierWorkflow: failed to record LLM token usage: {log_err}"
+                    )
 
             # IMPORTANT: Append the new AI response to the original `messages` list
             # (which reflects the full state history being built up), NOT to `llm_actual_input_messages`.
@@ -1419,7 +1479,7 @@ class SQLVerifierWorkflow:
         max_debug_attempts: Optional[int] = None,
         dbt_models_info: Optional[List[Dict[str, Any]]] = None,
         conversation_id: Optional[str] = None,  # For checkpointing
-    ) -> Dict[str, Any]:
+    ) -> SQLVerificationResponse:
         """
         Asynchronously runs the SQL verification and debugging workflow.
         """
@@ -1590,7 +1650,7 @@ class SQLVerifierWorkflow:
                 "success": final_state["is_valid"],
             }
             response = SQLVerificationResponse(**result_dict)
-            return response.dict()  # Return canonical shape
+            return response.dict()
         except Exception as e:
             # Catch **all** unexpected errors so that upstream workflows never break.
             err_msg = f"SQLVerifierWorkflow crashed: {e}"
@@ -1644,7 +1704,7 @@ class SQLVerifierWorkflow:
                 "success": safe_state["is_valid"],
             }
             response = SQLVerificationResponse(**result_dict)
-            return response.dict()  # Return canonical shape
+            return response.dict()
         #########################
         # END ERROR HANDLING WRAP
         #########################
@@ -1744,7 +1804,7 @@ class SQLVerifierWorkflow:
         # However, QueryExecutor might expect all keys.
 
         response = SQLVerificationResponse(**result_dict)
-        return response.dict()  # Return canonical shape
+        return response.dict()  # Return canonical shape as a dict for graph state
 
 
 # Example usage (for testing, not part of the class)
