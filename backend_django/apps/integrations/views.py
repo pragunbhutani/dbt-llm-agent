@@ -79,6 +79,27 @@ def slack_events_handler(request: HttpRequest):  # Removed async
         )
         return HttpResponse(status=405, content="Method Not Allowed")
 
+    # --- Handle Slack URL verification challenge requests ---------------------------------
+    # Slack sends a special URL verification payload when you first configure the Events
+    # endpoint. This payload does **not** contain a team_id and therefore will fail the
+    # logic below that expects one. We short-circuit here and simply echo back the
+    # provided challenge so Slack can confirm the endpoint.
+    try:
+        raw_body = request.body.decode(request.encoding or "utf-8")
+        payload = json.loads(raw_body)
+    except Exception:
+        payload = None
+
+    if payload and payload.get("type") == "url_verification":
+        challenge = payload.get("challenge")
+        if challenge:
+            logger.info("Responding to Slack URL verification challenge")
+            return HttpResponse(
+                json.dumps({"challenge": challenge}),
+                status=200,
+                content_type="application/json",
+            )
+
     logger.debug("slack_events_handler: Converting Django request to Bolt request")
     try:
         bolt_req: BoltRequest = to_bolt_request(request)  # Removed await
