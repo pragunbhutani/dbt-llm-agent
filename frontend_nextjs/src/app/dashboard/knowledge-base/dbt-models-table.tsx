@@ -129,6 +129,18 @@ export default function DbtModelsTable() {
   if (error) return <div>Failed to load models</div>;
   if (!models) return <div>No data available</div>;
 
+  // Sort models to show those enabled for answering (Yes) first
+  const sortedModels = [...models].sort((a, b) => {
+    if (a.answering_status === "Yes" && b.answering_status !== "Yes") {
+      return -1;
+    }
+    if (a.answering_status !== "Yes" && b.answering_status === "Yes") {
+      return 1;
+    }
+    // If both have same status or neither is 'Yes', preserve original order (by updated_at)
+    return 0;
+  });
+
   const columns = getColumns({ handleToggleAnswering, handleRefreshModel });
   const initialColumnVisibility = {
     path: false,
@@ -138,7 +150,7 @@ export default function DbtModelsTable() {
   return (
     <DataTable
       columns={columns}
-      data={models}
+      data={sortedModels}
       initialColumnVisibility={initialColumnVisibility}
       onBulkAction={handleBulkAction}
     />
