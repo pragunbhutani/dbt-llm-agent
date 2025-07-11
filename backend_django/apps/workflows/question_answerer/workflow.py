@@ -46,6 +46,7 @@ from asgiref.sync import sync_to_async
 
 # Import QAResponse for contract validation
 from apps.workflows.schemas import QAResponse
+from apps.workflows.services import ConversationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,10 @@ class QuestionAnswererAgent:
                     f"Failed to initialize AsyncPostgresSaver: {e}",
                     exc_info=self.verbose,
                 )
+
+        # Optional conversation logger (propagated by higher-level orchestrator)
+        self.conversation_logger: Optional[ConversationLogger] = None
+
         self._define_tools()
         # Compile graph
         compile_kwargs = {}
@@ -250,10 +255,17 @@ class QuestionAnswererAgent:
         # (Tool definitions copied and adapted from previous agents.py - verified in that step)
         @tool(args_schema=FetchModelsInput)
         async def fetch_model_details(model_names: List[str]) -> List[Dict[str, Any]]:
-            """Fetches detailed information for specific dbt models by name using Django ORM."""
+            """Fetches detailed information for specified dbt models."""
             if self.verbose:
                 # Add newline for spacing
                 logger.info(f"\nTool: fetch_model_details(names={model_names})")
+
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="fetch_model_details",
+                    tool_input={"model_names": model_names},
+                )
 
             @sync_to_async
             def _fetch():
@@ -272,10 +284,17 @@ class QuestionAnswererAgent:
 
         @tool(args_schema=SearchModelsInput)
         async def model_similarity_search(query: str) -> List[Dict[str, Any]]:
-            """Searches for relevant dbt models using vector similarity via Django ORM and pgvector."""
+            """Performs a semantic search for models similar to the query."""
             if self.verbose:
                 # Add newline for spacing
                 logger.info(f"\nTool: model_similarity_search(query='{query}')")
+
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="model_similarity_search",
+                    tool_input={"query": query},
+                )
 
             @sync_to_async
             def _search():
@@ -313,10 +332,17 @@ class QuestionAnswererAgent:
 
         @tool(args_schema=SearchFeedbackInput)
         async def search_past_feedback(query: str) -> List[Dict[str, Any]]:
-            """Searches past questions based on similarity using Django ORM and pgvector."""
+            """Searches past feedback linked to similar questions."""
             if self.verbose:
                 # Add newline for spacing
                 logger.info(f"\nTool: search_past_feedback(query='{query}')")
+
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="search_past_feedback",
+                    tool_input={"query": query},
+                )
 
             @sync_to_async
             def _search():
@@ -352,10 +378,17 @@ class QuestionAnswererAgent:
 
         @tool(args_schema=SearchFeedbackContentInput)
         async def search_feedback_content(query: str) -> List[Dict[str, Any]]:
-            """Searches feedback text content using Django ORM and pgvector."""
+            """Searches the content of past feedback entries for relevant information."""
             if self.verbose:
                 # Add newline for spacing
                 logger.info(f"\nTool: search_feedback_content(query='{query}')")
+
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="search_feedback_content",
+                    tool_input={"query": query},
+                )
 
             @sync_to_async
             def _search():
@@ -390,10 +423,17 @@ class QuestionAnswererAgent:
 
         @tool(args_schema=SearchOrganizationalContextInput)
         async def search_organizational_context(query: str) -> List[Dict[str, Any]]:
-            """Searches past original questions using Django ORM and pgvector."""
+            """Searches organizational context based on the current question."""
             if self.verbose:
                 # Add newline for spacing
                 logger.info(f"\nTool: search_organizational_context(query='{query}')")
+
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="search_organizational_context",
+                    tool_input={"query": query},
+                )
 
             @sync_to_async
             def _search():
@@ -432,7 +472,7 @@ class QuestionAnswererAgent:
         @tool(args_schema=FinishWorkflowInput)
         async def finish_workflow(
             answer: str, sql_query: Optional[str] = None
-        ) -> Dict[str, Any]:
+        ) -> QAResponse:
             """Concludes the workflow and returns both the answer text and an optional SQL query."""
             if self.verbose:
                 logger.info(
@@ -441,6 +481,7 @@ class QuestionAnswererAgent:
 
             # Use the canonical QAResponse model for strong typing at the boundary
             response_obj = QAResponse(answer=answer, sql_query=sql_query)
+            # Return as a plain dict for JSON serialization while preserving the static type annotation
             return response_obj.model_dump()
 
         self._tools = [
@@ -611,6 +652,52 @@ class QuestionAnswererAgent:
             response = await agent_llm_with_tools.ainvoke(
                 messages_for_llm, config=config
             )
+
+            # --- NEW: Log token usage for this LLM call ---
+            if getattr(self, "conversation_logger", None):
+                try:
+                    usage_meta = (
+                        getattr(response, "additional_kwargs", {}).get("usage", {})
+                        or getattr(response, "response_metadata", {}).get("usage", {})
+                        or getattr(response, "usage_metadata", {})
+                    )
+
+                    prompt_tokens = int(
+                        usage_meta.get("prompt_tokens")
+                        or usage_meta.get("input_tokens")
+                        or 0
+                    )
+                    completion_tokens = int(
+                        usage_meta.get("completion_tokens")
+                        or usage_meta.get("output_tokens")
+                        or 0
+                    )
+
+                    # Log LLM input (prompt)
+                    if prompt_tokens:
+                        await sync_to_async(
+                            self.conversation_logger.log_agent_response
+                        )(
+                            content="[LLM Prompt]",  # We avoid logging the full prompt to DB
+                            tokens_used=prompt_tokens,
+                            metadata={"type": "llm_input"},
+                        )
+
+                    # Log LLM output (response)
+                    await sync_to_async(self.conversation_logger.log_agent_response)(
+                        content=(
+                            response.content
+                            if hasattr(response, "content")
+                            else "[LLM Response]"
+                        ),
+                        tokens_used=completion_tokens,
+                        metadata={"type": "llm_output"},
+                    )
+                except Exception as log_err:
+                    logger.warning(
+                        f"Failed to record LLM token usage in conversation log: {log_err}"
+                    )
+
             if self.verbose:
                 # Add separators and format response
                 response_str = json.dumps(

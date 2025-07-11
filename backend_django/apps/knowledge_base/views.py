@@ -17,6 +17,66 @@ from apps.embeddings.models import ModelEmbedding
 logger = logging.getLogger(__name__)
 
 
+# Helper for validating LLM settings before starting interpretation/embedding
+def _validate_llm_settings(organisation):
+    """Returns (is_valid, message)."""
+    from apps.accounts.models import OrganisationSettings
+
+    try:
+        org_settings = OrganisationSettings.objects.get(organisation=organisation)
+    except OrganisationSettings.DoesNotExist:
+        return (
+            False,
+            "Organisation settings not found. Please configure your LLM provider and API keys before training.",
+        )
+
+    missing_items = []
+
+    # Chat provider & model
+    if not org_settings.llm_chat_provider or not org_settings.llm_chat_model:
+        missing_items.append("chat provider & model")
+
+    # Embeddings provider & model
+    if (
+        not org_settings.llm_embeddings_provider
+        or not org_settings.llm_embeddings_model
+    ):
+        missing_items.append("embeddings provider & model")
+
+    # API keys (check that a usable key exists for any provider that is selected)
+    # Keys can be supplied either via Parameter Store path *or* the corresponding
+    # environment variable, so we need to consider both sources.
+
+    provider_to_key_check: dict[str, callable[[], str | None]] = {
+        "openai": org_settings.get_llm_openai_api_key,
+        "google": org_settings.get_llm_google_api_key,
+        "anthropic": org_settings.get_llm_anthropic_api_key,
+    }
+
+    selected_providers = {
+        org_settings.llm_chat_provider,
+        org_settings.llm_embeddings_provider,
+    }
+
+    for provider in selected_providers:
+        # Skip None/empty providers
+        if not provider or provider not in provider_to_key_check:
+            continue
+
+        key_value = provider_to_key_check[provider]()
+        if not key_value:
+            missing_items.append(f"{provider} API key")
+
+    if missing_items:
+        pretty = ", ".join(sorted(set(missing_items)))
+        return (
+            False,
+            f"Your LLM configuration is incomplete. Missing: {pretty}. Please complete these settings before training.",
+        )
+
+    return (True, "")
+
+
 class ModelViewSet(viewsets.ModelViewSet):
     """API endpoint that allows Models to be viewed or edited, scoped by organisation."""
 
@@ -78,6 +138,11 @@ class ModelViewSet(viewsets.ModelViewSet):
         - If enabling: always triggers interpret + embed workflow
         - If disabling: just toggles the can_be_used_for_answers flag
         """
+        # Validate LLM configuration before proceeding.
+        is_valid, message = _validate_llm_settings(request.user.organisation)
+        if not is_valid:
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
             model = self.get_object()
             embedding = ModelEmbedding.objects.filter(model=model).first()
@@ -157,6 +222,11 @@ class ModelViewSet(viewsets.ModelViewSet):
         - If model has interpretation but no embedding: triggers embedding only
         - If model has embedding but is disabled: just enables it
         """
+        # Validate LLM configuration before proceeding.
+        is_valid, message = _validate_llm_settings(request.user.organisation)
+        if not is_valid:
+            return Response({"error": message}, status=status.HTTP_400_BAD_REQUEST)
+
         model_ids = request.data.get("model_ids", [])
         enable = request.data.get("enable", True)
 
@@ -174,67 +244,68 @@ class ModelViewSet(viewsets.ModelViewSet):
         already_processing = 0
 
         for model in models:
-            if enable:
-                embedding = ModelEmbedding.objects.filter(model=model).first()
-                has_interpretation = bool(
-                    model.interpreted_description or model.interpreted_columns
-                )
-                has_valid_embedding = self._is_valid_embedding(embedding)
-
-                if not embedding or not has_valid_embedding:
-                    # No valid embedding exists - clean up any placeholder
-                    if embedding and not has_valid_embedding:
-                        # Delete placeholder embedding
-                        embedding.delete()
-                        logger.info(
-                            f"Deleted placeholder embedding for model: {model.name}"
-                        )
-
-                    # Create new embedding record and determine what to run
-                    ModelEmbedding.objects.create(
-                        model=model,
-                        organisation=model.organisation,
-                        dbt_project=model.dbt_project,
-                        document="",  # Will be populated by the task
-                        embedding=[0] * 3072,  # Placeholder, will be updated by task
-                        is_processing=True,
-                        can_be_used_for_answers=False,
-                    )
-
-                    if has_interpretation:
-                        # Has interpretation, just need embedding
-                        from apps.embeddings.tasks import embed_model_task
-
-                        embed_model_task.delay(model.id)
-                        started_embedding_tasks += 1
-                    else:
-                        # No interpretation, need both interpretation + embedding
-                        interpret_and_embed_model_task.delay(model.id)
-                        started_interpretation_tasks += 1
-
-                elif embedding.is_processing:
-                    # Already processing
-                    already_processing += 1
-                else:
-                    # Valid embedding exists, check if we need to run interpretation
-                    if not has_interpretation:
-                        # Has embedding but no interpretation - run interpretation only
-                        # and update the embedding after
-                        embedding.is_processing = True
-                        embedding.save()
-                        interpret_and_embed_model_task.delay(model.id)
-                        started_interpretation_tasks += 1
-                    else:
-                        # Has both interpretation and embedding, just enable it
-                        embedding.can_be_used_for_answers = True
-                        embedding.save()
-                        updated_existing += 1
-            else:
-                # Disable for answering
+            if not enable:
+                # Disable answering for model
                 ModelEmbedding.objects.filter(model=model).update(
                     can_be_used_for_answers=False
                 )
                 updated_existing += 1
+                continue
+
+            embedding = ModelEmbedding.objects.filter(model=model).first()
+            has_interpretation = bool(
+                model.interpreted_description or model.interpreted_columns
+            )
+            has_valid_embedding = self._is_valid_embedding(embedding)
+
+            if not embedding or not has_valid_embedding:
+                # No valid embedding exists - clean up any placeholder
+                if embedding and not has_valid_embedding:
+                    # Delete placeholder embedding
+                    embedding.delete()
+                    logger.info(
+                        f"Deleted placeholder embedding for model: {model.name}"
+                    )
+
+                # Create new embedding record and determine what to run
+                ModelEmbedding.objects.create(
+                    model=model,
+                    organisation=model.organisation,
+                    dbt_project=model.dbt_project,
+                    document="",  # Will be populated by the task
+                    embedding=[0] * 3072,  # Placeholder, will be updated by task
+                    is_processing=True,
+                    can_be_used_for_answers=False,
+                )
+
+                if has_interpretation:
+                    # Has interpretation, just need embedding
+                    from apps.embeddings.tasks import embed_model_task
+
+                    embed_model_task.delay(model.id)
+                    started_embedding_tasks += 1
+                else:
+                    # No interpretation, need both interpretation + embedding
+                    interpret_and_embed_model_task.delay(model.id)
+                    started_interpretation_tasks += 1
+
+            elif embedding.is_processing:
+                # Already processing
+                already_processing += 1
+            else:
+                # Valid embedding exists, check if we need to run interpretation
+                if not has_interpretation:
+                    # Has embedding but no interpretation - run interpretation only
+                    # and update the embedding after
+                    embedding.is_processing = True
+                    embedding.save()
+                    interpret_and_embed_model_task.delay(model.id)
+                    started_interpretation_tasks += 1
+                else:
+                    # Has both interpretation and embedding, just enable it
+                    embedding.can_be_used_for_answers = True
+                    embedding.save()
+                    updated_existing += 1
 
         response_msg = f"Processed {len(model_ids)} models. "
         if enable:

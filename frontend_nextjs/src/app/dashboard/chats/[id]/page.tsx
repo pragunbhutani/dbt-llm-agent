@@ -15,13 +15,12 @@ import {
   Calendar,
   User,
   MessageSquare,
-  Clock,
-  DollarSign,
   Trash2,
   Hash,
   Activity,
 } from "lucide-react";
 import { Conversation, ConversationPart } from "@/types/conversations";
+import { CHAT_MODELS } from "@/lib/llm_models";
 
 export default function ConversationDetailPage() {
   const params = useParams();
@@ -84,6 +83,16 @@ export default function ConversationDetailPage() {
     });
   };
 
+  const getModelDisplayName = (provider: string, model?: string) => {
+    if (!model) return provider;
+
+    const providerModels = CHAT_MODELS[provider];
+    if (!providerModels) return model;
+
+    const modelInfo = providerModels.find((m) => m.api_name === model);
+    return modelInfo?.public_name || model;
+  };
+
   const getMessageAlignment = (actor: ConversationPart["actor"]) => {
     switch (actor) {
       case "user":
@@ -100,11 +109,10 @@ export default function ConversationDetailPage() {
       case "user":
         return "bg-blue-500 text-white"; // User messages - blue
       case "agent":
-        return "bg-white border border-gray-200"; // Agent messages - white
+      case "llm": // Treat LLM same as agent
+        return "bg-white border border-gray-200"; // Assistant messages - white
       case "system":
         return "bg-gray-100 text-gray-700"; // System messages - gray
-      case "llm":
-        return "bg-green-50 border border-green-200 text-green-800"; // LLM - green
       case "tool":
         return "bg-orange-50 border border-orange-200 text-orange-800"; // Tool - orange
       default:
@@ -117,11 +125,10 @@ export default function ConversationDetailPage() {
       case "user":
         return "You";
       case "agent":
+      case "llm":
         return "Assistant";
       case "system":
         return "System";
-      case "llm":
-        return "LLM";
       case "tool":
         return "Tool";
       default:
@@ -132,7 +139,9 @@ export default function ConversationDetailPage() {
   const shouldShowInTimeline = (part: ConversationPart) => {
     // Filter out internal system messages that aren't user-facing
     const hiddenTypes = ["thinking", "llm_input", "tool_execution"];
-    return !hiddenTypes.includes(part.message_type);
+    const isEmptyLlm =
+      part.actor === "llm" && (!part.content || part.content.trim() === "");
+    return !hiddenTypes.includes(part.message_type) && !isEmptyLlm;
   };
 
   // Function to format message content with code blocks
@@ -260,15 +269,6 @@ export default function ConversationDetailPage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <Hash className="h-4 w-4 text-gray-500" />
-                  <span className="text-sm font-medium">Status</span>
-                  <Badge variant={statusVariant} className="ml-auto">
-                    {conversation.status.charAt(0).toUpperCase() +
-                      conversation.status.slice(1)}
-                  </Badge>
-                </div>
-
-                <div className="flex items-center gap-2">
                   <MessageSquare className="h-4 w-4 text-gray-500" />
                   <span className="text-sm font-medium">Channel</span>
                   <Badge variant={channelVariant} className="ml-auto">
@@ -281,7 +281,9 @@ export default function ConversationDetailPage() {
                   <User className="h-4 w-4 text-gray-500" />
                   <span className="text-sm font-medium">Started by</span>
                   <span className="text-sm text-gray-600 ml-auto">
-                    {conversation.user_id || "Unknown"}
+                    {conversation.user_external_id ||
+                      conversation.user_id ||
+                      "Unknown"}
                   </span>
                 </div>
 
@@ -308,39 +310,44 @@ export default function ConversationDetailPage() {
                   </span>
                 </div>
 
+                {/* Chat model used */}
+                <div className="flex items-center gap-2">
+                  <Hash className="h-4 w-4 text-gray-500" />
+                  <span className="text-sm font-medium">Model</span>
+                  {/* Value */}
+                  <span
+                    className="text-sm text-gray-600 ml-auto truncate max-w-[140px]"
+                    title={getModelDisplayName(
+                      conversation.llm_provider,
+                      conversation.llm_chat_model
+                    )}
+                  >
+                    {getModelDisplayName(
+                      conversation.llm_provider,
+                      conversation.llm_chat_model
+                    )}
+                  </span>
+                </div>
+
+                {/* Token breakdown */}
                 <div className="flex items-center gap-2">
                   <Activity className="h-4 w-4 text-gray-500" />
-                  <span className="text-sm font-medium">Tokens</span>
+                  <span className="text-sm font-medium">Input Tokens</span>
                   <span className="text-sm text-gray-600 ml-auto">
-                    {conversation.calculated_total_tokens?.toLocaleString() ||
-                      "N/A"}
+                    {conversation.input_tokens?.toLocaleString() || 0}
                   </span>
                 </div>
-
                 <div className="flex items-center gap-2">
-                  <DollarSign className="h-4 w-4 text-gray-500" />
-                  <span className="text-sm font-medium">Total Cost</span>
+                  <Activity className="h-4 w-4 text-gray-500" />
+                  <span className="text-sm font-medium">Output Tokens</span>
                   <span className="text-sm text-gray-600 ml-auto">
-                    $
-                    {(
-                      parseFloat(String(conversation.calculated_total_cost)) ||
-                      0
-                    ).toFixed(4)}
+                    {conversation.output_tokens?.toLocaleString() || 0}
                   </span>
                 </div>
               </CardContent>
             </Card>
 
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm">Initial Question</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm text-gray-700 leading-relaxed">
-                  {conversation.initial_question}
-                </p>
-              </CardContent>
-            </Card>
+            {/* Removed Initial Question card as redundant */}
           </div>
         </div>
 

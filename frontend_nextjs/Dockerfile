@@ -24,11 +24,14 @@ COPY postcss.config.mjs eslint.config.mjs ./
 # Copy the rest of the application source code.
 # While docker-compose will mount the local directory, this makes the image runnable on its own.
 COPY . .
-# Ensure the .next directory exists and has proper permissions
-RUN mkdir -p .next && chown -R node:node .next
-# Set proper ownership for the app directory
-RUN chown -R node:node /app
-USER node
+# Ensure the .next directory exists (permissions inherited from root)
+RUN mkdir -p .next
+
+# NOTE: We intentionally run the dev server as root inside the container
+# to avoid permission issues when the project directory is bind-mounted
+# from the host (UID/GID mismatches can cause EACCES errors when writing
+# to .next or node_modules). This only affects the development stage. The
+# production stage below still runs as an unprivileged user for security.
 # The command to start the dev server with hot-reloading.
 CMD ["pnpm", "dev"]
 

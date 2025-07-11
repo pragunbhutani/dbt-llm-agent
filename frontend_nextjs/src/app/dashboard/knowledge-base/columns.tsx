@@ -14,6 +14,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 
 export type DbtModel = {
   id: string;
@@ -66,9 +67,11 @@ export const getColumns = ({
     ),
     cell: ({ row }) => {
       return (
-        <div className="min-w-[200px] flex-1 truncate font-medium">
-          {row.getValue("name")}
-        </div>
+        <Link href={`/dashboard/knowledge-base/models/${row.original.id}`}>
+          <div className="min-w-[200px] flex-1 truncate font-medium hover:text-blue-600 cursor-pointer">
+            {row.getValue("name")}
+          </div>
+        </Link>
       );
     },
   },
@@ -167,7 +170,11 @@ export const getColumns = ({
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>Actions</DropdownMenuLabel>
-            <DropdownMenuItem>View Details</DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href={`/dashboard/knowledge-base/models/${model.id}`}>
+                View Details
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem
               onClick={() => handleToggleAnswering(model.id, status)}
               disabled={isTraining}

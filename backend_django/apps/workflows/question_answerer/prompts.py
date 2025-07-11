@@ -12,6 +12,7 @@ except ImportError:
     Question = Any  # type: ignore
 
 from apps.workflows.rules_loader import get_agent_rules  # Updated import
+from apps.workflows.prompts.common import SQL_STYLE_GUIDE_EXAMPLE
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +130,11 @@ def create_system_prompt(
     *   **CTE Commenting:** Descriptive comment blocks for a CTE should be placed on the lines immediately preceding the `cte_name as (...)` definition. These comment blocks must start with `--` on each line. Ensure a blank line exists between the end of the previous CTE (i.e., after its closing parenthesis `)`) and the start of the comment block for the next CTE. If it's the first CTE after the `with` keyword, the comment block (if present) should also be preceded by a blank line after `with`. Do not place these multi-line descriptive comment blocks *inside* the CTE's parentheses as the first lines.
 *   **Explanations:** Add concise comments within the SQL (`-- explanation`) to clarify joins or complex logic.
 *   **Limitations:** If the available models are insufficient to fully answer the question, generate the best possible query using *only* the available models and clearly state these limitations as a list of bullet points (e.g., `* Limitation 1\n* Limitation 2`) *after* the SQL block. Do NOT add a "Footnotes:", "Notes:", or any other heading to this list of bullet points; only provide the raw bullet points. The system will handle the appropriate header.
-*   **Output Format:** The SQL query itself should be plain text, adhering to the style guide below. Do NOT wrap the SQL query in triple backticks or any other Slack markdown within the `final_answer` parameter of the `finish_workflow` call; the display will be handled by the Slack integration.
+*   **Output Format:**
+    *   The SQL query itself should be plain text, adhering to the style guide below. **Do NOT** wrap the SQL in triple backticks or add leading phrases like "Here is the SQL query".
+    *   Include only *single-line* inline comments (`-- comment`) inside the SQL when they help clarify logic.
+    *   Any longer explanations, caveats, or limitations **must** be provided **after** the SQL block as plain bullet points – never embed multi-line notes in the SQL itself.
+    *   Avoid repeating warnings or headings (e.g., do not repeat "SQL Query (Unverified)" multiple times). One clear heading/note is sufficient.
 *   **Tool Use:**
     *   Use `fetch_model_details` if you need the schema or detailed info for models identified from the initial list.
     *   Use `model_similarity_search` *only* as a fallback if the initial list is insufficient or you need models related to specific concepts not obvious from names/descriptions. You have a limit of {max_vector_searches} vector searches (used: {search_model_calls}).
@@ -138,73 +143,7 @@ def create_system_prompt(
 """
 
     # --- SQL Style Guide Example ---
-    sql_style_example_content = """
-with
-
---
-cte_without_comment as (
-    select
-        *
-
-    from
-        database_name.schema_name.table_name
-
-    where
-        this_condition is true
-        and (
-            that_condition is true
-            or other_condition is false
-        )
-),
-
---
--- This CTE only has a small comment.
---
-cte_with_small_comment as (
-    select
-        *
-
-    from
-        cte_without_comment      
-)
-
---
--- This CTE has a few more styling examples and comes with a comment that_condition
--- spans multiple lines
---
-cte_with_comment as (
-    select
-        this_columns,
-
-        case
-            when that_condition is true
-            then this_value
-            else that_value
-        end as new_column,
-
-        count(distinct this_column) over (
-            partition by that_column
-            order by this_column
-            rows between 1 preceding and current row
-        ) as new_column_from_window_function
-
-    from
-        cte_without_comment
-)
-
---
-select 
-    wc.this_column,
-    wc.that_column,
-    wsc.new_column,
-    wsc.new_column_from_window_function
-    
-from 
-    cte_with_comment as wc
-left join
-    cte_with_small_comment as wsc
-        on wc.this_column = wsc.this_column
-    """
+    sql_style_example_content = SQL_STYLE_GUIDE_EXAMPLE
 
     prompt += f"""
 

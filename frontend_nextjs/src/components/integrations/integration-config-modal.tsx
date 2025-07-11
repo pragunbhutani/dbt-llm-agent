@@ -113,7 +113,7 @@ export function IntegrationConfigModal({
 
   return (
     <Dialog open={isOpen} onOpenChange={onClose}>
-      <DialogContent className="sm:max-w-[600px]">
+      <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <DialogTitle className="text-xl">
@@ -311,10 +311,11 @@ function SlackConfigForm({
         </h4>
         <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
           <li>Go to your Slack app configuration at api.slack.com</li>
-          <li>Navigate to "OAuth & Permissions" section</li>
-          <li>Copy the "Bot User OAuth Token" (starts with xoxb-)</li>
+          <li>Navigate to &quot;OAuth &amp; Permissions&quot; section</li>
+          <li>Copy the &quot;Bot User OAuth Token&quot; (starts with xoxb-)</li>
           <li>
-            Optionally, copy the "Signing Secret" from "Basic Information"
+            Optionally, copy the &quot;Signing Secret&quot; from &quot;Basic
+            Information&quot;
           </li>
         </ol>
       </div>
@@ -427,144 +428,149 @@ function SnowflakeConfigForm({
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="space-y-4">
-        <div>
-          <label
-            htmlFor="account"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Account <span className="text-red-500">*</span>
-          </label>
-          <input
-            id="account"
-            type="text"
-            value={account}
-            onChange={(e) => setAccount(e.target.value)}
-            placeholder="your-account-name"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={isLoading}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Your Snowflake account identifier (e.g.
-            mycompany.snowflakecomputing.com)
-          </p>
+      <div className="flex flex-col md:flex-row gap-6">
+        <div className="space-y-4 flex-1">
+          <div>
+            <label
+              htmlFor="account"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Account <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="account"
+              type="text"
+              value={account}
+              onChange={(e) => setAccount(e.target.value)}
+              placeholder="your-account-name"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              required
+              disabled={isLoading}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Your Snowflake account identifier (e.g.
+              mycompany.snowflakecomputing.com)
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="user"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Username <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="user"
+              type="text"
+              value={user}
+              onChange={(e) => setUser(e.target.value)}
+              placeholder="your-username"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              required
+              disabled={isLoading}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="password"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Password <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password..."
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              required
+              disabled={isLoading}
+            />
+          </div>
+
+          <div>
+            <label
+              htmlFor="warehouse"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Warehouse <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="warehouse"
+              type="text"
+              value={warehouse}
+              onChange={(e) => setWarehouse(e.target.value)}
+              placeholder="COMPUTE_WH"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              required
+              disabled={isLoading}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              The warehouse to use for queries
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="database"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Database (Optional)
+            </label>
+            <input
+              id="database"
+              type="text"
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              placeholder="YOUR_DATABASE"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isLoading}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Optional default database to use (can be specified later in
+              queries)
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="schema"
+              className="block text-sm font-medium text-gray-700 mb-1"
+            >
+              Schema
+            </label>
+            <input
+              id="schema"
+              type="text"
+              value={schema}
+              onChange={(e) => setSchema(e.target.value)}
+              placeholder="PUBLIC"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              disabled={isLoading}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Optional default schema to use when database is specified
+              (defaults to PUBLIC)
+            </p>
+          </div>
         </div>
 
-        <div>
-          <label
-            htmlFor="user"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Username <span className="text-red-500">*</span>
-          </label>
-          <input
-            id="user"
-            type="text"
-            value={user}
-            onChange={(e) => setUser(e.target.value)}
-            placeholder="your-username"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={isLoading}
-          />
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-3 md:w-1/3 overflow-y-auto max-h-[60vh]">
+          <h4 className="text-sm font-medium text-blue-900 mb-1">
+            Setup Instructions
+          </h4>
+          <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+            <li>Log into your Snowflake account</li>
+            <li>Create a user with appropriate permissions for data access</li>
+            <li>
+              Note your account identifier (visible in your Snowflake URL)
+            </li>
+            <li>Enter the warehouse, database, and schema you want to use</li>
+          </ol>
         </div>
-
-        <div>
-          <label
-            htmlFor="password"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Password <span className="text-red-500">*</span>
-          </label>
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password..."
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={isLoading}
-          />
-        </div>
-
-        <div>
-          <label
-            htmlFor="warehouse"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Warehouse <span className="text-red-500">*</span>
-          </label>
-          <input
-            id="warehouse"
-            type="text"
-            value={warehouse}
-            onChange={(e) => setWarehouse(e.target.value)}
-            placeholder="COMPUTE_WH"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            required
-            disabled={isLoading}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            The warehouse to use for queries
-          </p>
-        </div>
-
-        <div>
-          <label
-            htmlFor="database"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Database (Optional)
-          </label>
-          <input
-            id="database"
-            type="text"
-            value={database}
-            onChange={(e) => setDatabase(e.target.value)}
-            placeholder="YOUR_DATABASE"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isLoading}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Optional default database to use (can be specified later in queries)
-          </p>
-        </div>
-
-        <div>
-          <label
-            htmlFor="schema"
-            className="block text-sm font-medium text-gray-700 mb-1"
-          >
-            Schema
-          </label>
-          <input
-            id="schema"
-            type="text"
-            value={schema}
-            onChange={(e) => setSchema(e.target.value)}
-            placeholder="PUBLIC"
-            className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isLoading}
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            Optional default schema to use when database is specified (defaults
-            to PUBLIC)
-          </p>
-        </div>
-      </div>
-
-      <div className="bg-blue-50 border border-blue-200 rounded-md p-3">
-        <h4 className="text-sm font-medium text-blue-900 mb-1">
-          Setup Instructions
-        </h4>
-        <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
-          <li>Log into your Snowflake account</li>
-          <li>Create a user with appropriate permissions for data access</li>
-          <li>Note your account identifier (visible in your Snowflake URL)</li>
-          <li>Enter the warehouse, database, and schema you want to use</li>
-        </ol>
       </div>
 
       <div className="flex justify-end gap-3 pt-4">
@@ -984,8 +990,9 @@ function MCPConfigForm({
           <div className="mt-3 p-3 bg-purple-100 rounded-md">
             <p className="text-xs text-purple-700">
               <strong>💡 Tip:</strong> Once connected, you can ask Claude
-              questions like "Show me my dbt models" or "What data sources do I
-              have?" and Claude will use ragstar's tools to answer.
+              questions like &quot;Show me my dbt models&quot; or &quot;What
+              data sources do I have?&quot; and Claude will use ragstar&apos;s
+              tools to answer.
             </p>
           </div>
         </div>
@@ -1033,9 +1040,9 @@ function MCPConfigForm({
           </ol>
           <div className="mt-3 p-3 bg-green-100 rounded-md">
             <p className="text-xs text-green-700">
-              <strong>📝 Note:</strong> OpenAI's MCP integration is still
-              evolving. Check OpenAI's documentation for the latest connection
-              instructions.
+              <strong>📝 Note:</strong> OpenAI&apos;s MCP integration is still
+              evolving. Check OpenAI&apos;s documentation for the latest
+              connection instructions.
             </p>
           </div>
         </div>

@@ -58,8 +58,8 @@ export function DashboardOnboarding() {
 
   if (!statsData) return null;
 
-  const completedSteps = Object.values(statsData.onboarding_steps).filter(
-    (step) => step
+  const completedSteps = ONBOARDING_STEPS.filter(
+    (s) => statsData.onboarding_steps[s.key]
   ).length;
   const totalSteps = ONBOARDING_STEPS.length;
   const allCompleted = completedSteps === totalSteps;
@@ -70,7 +70,7 @@ export function DashboardOnboarding() {
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle className="text-green-800">
-              🎉 You're all set up!
+              🎉 You&apos;re all set up!
             </CardTitle>
             <Badge variant="secondary" className="bg-green-100 text-green-800">
               Complete

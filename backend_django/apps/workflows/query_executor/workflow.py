@@ -578,6 +578,13 @@ class QueryExecutorWorkflow:
             """Describes the schema of a given table in the data warehouse (for LLM use).
             (Logic moved from tools.py and uses internal _execute_sql_query)
             """
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="describe_table",
+                    tool_input={"table_name": table_name},
+                )
+
             if not re.match(
                 r"^[a-zA-Z_][a-zA-Z0-9_.]*$", table_name
             ):  # Basic validation
@@ -641,6 +648,17 @@ class QueryExecutorWorkflow:
             """Lists distinct values for a given column in a table (for LLM use).
             (Logic moved from tools.py and uses internal _execute_sql_query)
             """
+            # Log the tool call
+            if getattr(self, "conversation_logger", None):
+                await sync_to_async(self.conversation_logger.log_tool_call)(
+                    tool_name="list_column_values",
+                    tool_input={
+                        "table_name": table_name,
+                        "column_name": column_name,
+                        "limit": limit,
+                    },
+                )
+
             # Basic validation for table and column names
             if not re.match(r"^[a-zA-Z_][a-zA-Z0-9_.]*$", table_name) or not re.match(
                 r"^[a-zA-Z_][a-zA-Z0-9_]*$", column_name
@@ -872,12 +890,20 @@ class QueryExecutorWorkflow:
             "max_debug_attempts", self.max_debug_loops
         )
 
-        verifier_result = await self.sql_verifier.run(
+        from apps.workflows.schemas import SQLVerificationResponse
+
+        verifier_result_raw = await self.sql_verifier.run(
             sql_query=current_query,
             max_debug_attempts=max_debug_attempts_for_verifier,
             dbt_models_info=None,  # TODO: QueryExecutor doesn't have dbt_models_info, consider fetching if needed
             conversation_id=verifier_conversation_id,
         )
+
+        # Normalise verifier_result to a dictionary for downstream logic
+        if isinstance(verifier_result_raw, SQLVerificationResponse):
+            verifier_result = verifier_result_raw.dict()
+        else:
+            verifier_result = verifier_result_raw
 
         updates: Dict[str, Any] = {}
         if verifier_result.get("is_valid"):

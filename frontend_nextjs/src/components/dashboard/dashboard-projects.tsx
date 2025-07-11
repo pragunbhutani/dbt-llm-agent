@@ -12,8 +12,8 @@ import { ArrowTopRightOnSquareIcon } from "@heroicons/react/24/outline";
 interface DbtProject {
   id: number;
   name: string;
-  account_id: number;
-  project_id: number;
+  dbt_cloud_account_id: number;
+  dbt_cloud_url: string;
   created_at: string;
   updated_at: string;
 }
@@ -64,8 +64,7 @@ export function DashboardProjects() {
               <div>
                 <h4 className="font-medium">{project.name}</h4>
                 <p className="text-sm text-gray-500">
-                  Account ID: {project.account_id} • Project ID:{" "}
-                  {project.project_id}
+                  Account ID: {project.dbt_cloud_account_id}
                 </p>
                 <p className="text-xs text-gray-400">
                   Created: {new Date(project.created_at).toLocaleDateString()}

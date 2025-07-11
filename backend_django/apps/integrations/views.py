@@ -79,6 +79,27 @@ def slack_events_handler(request: HttpRequest):  # Removed async
         )
         return HttpResponse(status=405, content="Method Not Allowed")
 
+    # --- Handle Slack URL verification challenge requests ---------------------------------
+    # Slack sends a special URL verification payload when you first configure the Events
+    # endpoint. This payload does **not** contain a team_id and therefore will fail the
+    # logic below that expects one. We short-circuit here and simply echo back the
+    # provided challenge so Slack can confirm the endpoint.
+    try:
+        raw_body = request.body.decode(request.encoding or "utf-8")
+        payload = json.loads(raw_body)
+    except Exception:
+        payload = None
+
+    if payload and payload.get("type") == "url_verification":
+        challenge = payload.get("challenge")
+        if challenge:
+            logger.info("Responding to Slack URL verification challenge")
+            return HttpResponse(
+                json.dumps({"challenge": challenge}),
+                status=200,
+                content_type="application/json",
+            )
+
     logger.debug("slack_events_handler: Converting Django request to Bolt request")
     try:
         bolt_req: BoltRequest = to_bolt_request(request)  # Removed await
@@ -457,18 +478,23 @@ class SlackIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"team_id": team_info["team_id"]},
-                    "credentials": {
+                },
+            )
+
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
                         "bot_token": bot_token,
                         "signing_secret": signing_secret,
                         "app_token": app_token if app_token else "",
-                    },
-                },
-            )
+                    }
+                )
 
             if not created:
                 # Update existing integration
                 org_integration.configuration.update({"team_id": team_info["team_id"]})
-                org_integration.credentials.update(
+                org_integration.update_credentials(
                     {
                         "bot_token": bot_token,
                         "signing_secret": signing_secret,
@@ -606,29 +632,35 @@ class SnowflakeIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"schema": schema if database else None},
-                    "credentials": {
+                },
+            )
+
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
                         "account": account,
                         "user": user_field,
                         "password": password,
                         "warehouse": warehouse,
                         "database": database if database else None,
                         "schema": schema if database else None,
-                    },
-                },
-            )
-
-            if not created:
+                    }
+                )
+            else:
                 # Update existing integration
                 org_integration.is_enabled = True
                 org_integration.configuration = {"schema": schema if database else None}
-                org_integration.credentials = {
-                    "account": account,
-                    "user": user_field,
-                    "password": password,
-                    "warehouse": warehouse,
-                    "database": database if database else None,
-                    "schema": schema if database else None,
-                }
+                org_integration.set_credentials(
+                    {
+                        "account": account,
+                        "user": user_field,
+                        "password": password,
+                        "warehouse": warehouse,
+                        "database": database if database else None,
+                        "schema": schema if database else None,
+                    }
+                )
                 org_integration.save()
 
             # Test the connection
@@ -718,23 +750,29 @@ class MetabaseIntegrationViewSet(viewsets.ViewSet):
                 defaults={
                     "is_enabled": True,
                     "configuration": {"database_id": database_id},
-                    "credentials": {
-                        "url": url,
-                        "api_key": api_key,
-                        "database_id": database_id,
-                    },
                 },
             )
 
-            if not created:
+            if created:
+                # Set credentials using the new method
+                org_integration.set_credentials(
+                    {
+                        "url": url,
+                        "api_key": api_key,
+                        "database_id": database_id,
+                    }
+                )
+            else:
                 # Update existing integration
                 org_integration.is_enabled = True
                 org_integration.configuration = {"database_id": database_id}
-                org_integration.credentials = {
-                    "url": url,
-                    "api_key": api_key,
-                    "database_id": database_id,
-                }
+                org_integration.set_credentials(
+                    {
+                        "url": url,
+                        "api_key": api_key,
+                        "database_id": database_id,
+                    }
+                )
                 org_integration.save()
 
             # Test the connection

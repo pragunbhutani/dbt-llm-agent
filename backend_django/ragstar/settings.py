@@ -11,34 +11,36 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 """
 
 from pathlib import Path
-import os  # Import os for environment variables
-import sys  # Add this line
-import dj_database_url  # Add this import
-from typing import Optional
+import os
+import sys
+import dj_database_url
 from datetime import timedelta
-import logging
-import pytz
-from datetime import datetime
 from urllib.parse import urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Add the 'apps' directory to the Python path
-# Add these lines
 sys.path.insert(0, str(BASE_DIR / "apps"))
-# --- End of Added Lines ---
-
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
+# Detect the current runtime environment (local, development, production)
+ENVIRONMENT = os.environ.get("ENVIRONMENT", "local").lower()
+IS_LOCAL = ENVIRONMENT == "local"
+IS_DEVELOPMENT = ENVIRONMENT == "development"
+IS_PRODUCTION = ENVIRONMENT == "production"
+
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = "django-insecure-i7l&cnk2eemm1e!13kew37c=ctkpa2!0ufw)v&9vlwzqolq(y="
+SECRET_KEY = os.environ.get(
+    "SECRET_KEY", "django-insecure-i7l&cnk2eemm1e!13kew37c=ctkpa2!0ufw)v&9vlwzqolq(y="
+)
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = IS_LOCAL  # Enable Django debug mode only for the local environment
 
+# Production-ready ALLOWED_HOSTS configuration
 ALLOWED_HOSTS = [
     ".ngrok-free.app",
     "127.0.0.1",
@@ -47,24 +49,30 @@ ALLOWED_HOSTS = [
     "frontend-nextjs",
 ]
 
-# Add APP_HOST from environment variables (or derive from NEXTAUTH_URL)
-APP_HOST = os.environ.get("APP_HOST")
+# Add production hosts from environment variables
+PRODUCTION_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
+ALLOWED_HOSTS.extend([host.strip() for host in PRODUCTION_HOSTS if host.strip()])
 
-if not APP_HOST:
-    NEXTAUTH_URL_ENV = os.environ.get("NEXTAUTH_URL")
-    if NEXTAUTH_URL_ENV:
-        try:
-            parsed_url = urlparse(NEXTAUTH_URL_ENV)
-            APP_HOST = parsed_url.hostname
-        except Exception:
-            APP_HOST = None
+# Derive frontend configuration from NEXTAUTH_URL
+NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL")
+FRONTEND_URL = None
+APP_HOST = None
 
-if APP_HOST:
-    ALLOWED_HOSTS.append(APP_HOST)
+if NEXTAUTH_URL:
+    try:
+        parsed_url = urlparse(NEXTAUTH_URL)
+        FRONTEND_URL = NEXTAUTH_URL.rstrip("/")
+        APP_HOST = parsed_url.hostname
+        if APP_HOST:
+            ALLOWED_HOSTS.append(APP_HOST)
+    except Exception:
+        pass
 
+# Fallback for local development
+if not FRONTEND_URL:
+    FRONTEND_URL = "http://localhost:3000"
 
 # Application definition
-
 INSTALLED_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -123,7 +131,6 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "ragstar.wsgi.application"
 
-
 # Database
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
@@ -138,29 +145,25 @@ if DATABASE_URL_FROM_ENV:
         )
     }
 else:
-    # Fallback for local development if DATABASE_URL is not set
-    # (e.g., when running manage.py directly without Docker Compose)
+    # Default database configuration for local development
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.postgresql",
-            "NAME": os.environ.get("DB_NAME_FALLBACK", "ragstar_local_dev"),
-            "USER": os.environ.get("DB_USER_FALLBACK", "postgres"),
-            "PASSWORD": os.environ.get("DB_PASSWORD_FALLBACK", "password"),
-            "HOST": os.environ.get("DB_HOST_FALLBACK", "localhost"),
-            "PORT": os.environ.get("DB_PORT_FALLBACK", "5432"),
+            "NAME": "ragstar_local_dev",
+            "USER": "postgres",
+            "PASSWORD": "password",
+            "HOST": "localhost",
+            "PORT": "5432",
         }
     }
 
-
 # Celery Configuration
-# ------------------------------------------------------------------------------
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = "UTC"  # Will be updated after TIME_ZONE is determined
-
 
 # Password validation
 # https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
@@ -180,39 +183,13 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
 
 LANGUAGE_CODE = "en-us"
 
-# Auto-detect system timezone, fallback to UTC if detection fails
-import time
-
-try:
-    # Get system timezone
-    if hasattr(time, "tzname") and time.tzname:
-        # Use system timezone name
-        TIME_ZONE = os.environ.get("TZ") or time.tzname[0] or "UTC"
-    else:
-        TIME_ZONE = os.environ.get("TZ", "UTC")
-except:
-    TIME_ZONE = "UTC"
-
-# For better timezone handling, let's use a more reliable method
-import zoneinfo
-import datetime
-
-try:
-    # Get the system's local timezone
-    local_tz = datetime.datetime.now().astimezone().tzinfo
-    if hasattr(local_tz, "key"):
-        TIME_ZONE = local_tz.key
-    else:
-        # Fallback to environment variable or UTC
-        TIME_ZONE = os.environ.get("TZ", "UTC")
-except:
-    TIME_ZONE = os.environ.get("TZ", "UTC")
+# Timezone configuration
+TIME_ZONE = os.environ.get("TZ", "UTC")
 
 USE_I18N = True
 
@@ -220,7 +197,6 @@ USE_TZ = True
 
 # Update Celery timezone to match Django timezone
 CELERY_TIMEZONE = TIME_ZONE
-
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.2/howto/static-files/
@@ -235,51 +211,29 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
+# Security settings for production
+if IS_PRODUCTION:
+    SECURE_BROWSER_XSS_FILTER = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = "DENY"
+    SECURE_HSTS_SECONDS = 31536000  # 1 year
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+
+    # SSL Settings (uncomment when using HTTPS)
+    # SECURE_SSL_REDIRECT = True
+    # SESSION_COOKIE_SECURE = True
+    # CSRF_COOKIE_SECURE = True
+
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# --- Ragstar / LLM Settings ---
-
-# --- LLM Provider Configuration ---
-# These settings are primarily controlled by environment variables.
-# Example environment variable names are suggested in comments.
-
-# API Keys (from corresponding ENV variables like LLM_OPENAI_API_KEY_ENV)
-LLM_OPENAI_API_KEY = os.environ.get("LLM_OPENAI_API_KEY")
-LLM_GOOGLE_API_KEY = os.environ.get("LLM_GOOGLE_API_KEY")
-LLM_ANTHROPIC_API_KEY = os.environ.get("LLM_ANTHROPIC_API_KEY")
-
 # MCP OAuth Configuration
 MCP_AUTHORIZATION_BASE_URL = os.environ.get(
     "MCP_AUTHORIZATION_BASE_URL", "http://localhost:8000"
 )
-
-# Chat Provider and Model
-LLM_CHAT_PROVIDER_NAME = os.environ.get("LLM_CHAT_PROVIDER_NAME", "openai").lower()
-LLM_CHAT_MODEL = os.environ.get("LLM_CHAT_MODEL", "o4-mini")  # Default to OpenAI model
-
-# Embeddings Provider and Model
-LLM_EMBEDDINGS_PROVIDER_NAME = os.environ.get(
-    "LLM_EMBEDDINGS_PROVIDER_NAME", "openai"
-).lower()
-LLM_EMBEDDINGS_MODEL = os.environ.get(
-    "LLM_EMBEDDINGS_MODEL", "text-embedding-3-small"
-)  # Default to OpenAI model
-
-# Optional Chat Configuration
-LLM_CHAT_CONFIG_TEMPERATURE_STR = os.environ.get("LLM_CHAT_CONFIG_TEMPERATURE")
-LLM_CHAT_CONFIG_TEMPERATURE: Optional[float] = None
-if LLM_CHAT_CONFIG_TEMPERATURE_STR:
-    try:
-        LLM_CHAT_CONFIG_TEMPERATURE = float(LLM_CHAT_CONFIG_TEMPERATURE_STR)
-    except ValueError:
-        # Using logger here might be problematic if logging isn't fully configured yet.
-        # print is safer at this stage of settings.py
-        print(
-            f"WARNING: Invalid LLM_CHAT_CONFIG_TEMPERATURE value: '{LLM_CHAT_CONFIG_TEMPERATURE_STR}'. Using default temperature."
-        )
 
 
 # --- Centralized Verbosity Control ---
@@ -294,9 +248,64 @@ RAGSTAR_LOG_LEVEL = (
 )
 
 
+# CORS Configuration
+CORS_ALLOWED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",  # Explicit local development
+    "http://127.0.0.1:3000",  # Alternative localhost
+]
+
+# Add APP_HOST-based origin if APP_HOST is set
+if APP_HOST:
+    CORS_ALLOWED_ORIGINS.append(f"http://{APP_HOST}:3000")
+    # For HTTPS in production
+    CORS_ALLOWED_ORIGINS.append(f"https://{APP_HOST}")
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.ngrok-free\.app$",
+    r"^https://.*\.vercel\.app$",  # For Vercel deployments
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    FRONTEND_URL,
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+# Add APP_HOST-based origin if APP_HOST is set
+if APP_HOST:
+    CSRF_TRUSTED_ORIGINS.append(f"http://{APP_HOST}:3000")
+    # For HTTPS in production
+    CSRF_TRUSTED_ORIGINS.append(f"https://{APP_HOST}")
+
+# CORS Security Settings
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_ALL_ORIGINS = False  # Be explicit about not allowing all origins
+
+# Allowed headers for CORS requests
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
+
+# Allowed methods for CORS requests
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
 # --- Logging Configuration ---
-# Add this towards the end of your settings.py file
-# (After other settings like DATABASES, OPENAI_API_KEY, etc.)
 
 # Add REST_FRAMEWORK settings for JWT
 REST_FRAMEWORK = {
@@ -407,76 +416,3 @@ LOGGING = {
         },
     },
 }
-
-# --- Custom Settings ---
-
-# Verbosity level for Agents triggered via Admin actions
-# 0 = WARNING/ERROR, 1 = INFO, 3 = DEBUG
-# AGENT_DEFAULT_VERBOSITY = 3 # Removed, will be derived from RAGSTAR_LOG_LEVEL
-
-INTEGRATIONS_SLACK_SIGNING_SECRET = os.environ.get("INTEGRATIONS_SLACK_SIGNING_SECRET")
-INTEGRATIONS_SLACK_BOT_TOKEN = os.environ.get("INTEGRATIONS_SLACK_BOT_TOKEN")
-
-# CORS Configuration
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
-
-CORS_ALLOWED_ORIGINS = [
-    FRONTEND_URL,
-    "http://localhost:3000",  # Explicit local development
-    "http://127.0.0.1:3000",  # Alternative localhost
-]
-
-# Add APP_HOST-based origin if APP_HOST is set
-if APP_HOST:
-    CORS_ALLOWED_ORIGINS.append(f"http://{APP_HOST}:3000")
-
-# Add NEXTAUTH_URL to CORS origins if it exists (strip trailing slash)
-NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL")
-if NEXTAUTH_URL:
-    CORS_ALLOWED_ORIGINS.append(NEXTAUTH_URL.rstrip("/"))
-
-CORS_ALLOWED_ORIGIN_REGEXES = [
-    r"^https://.*\.ngrok-free\.app$",
-    r"^https://.*\.vercel\.app$",  # For Vercel deployments
-]
-
-CSRF_TRUSTED_ORIGINS = [
-    FRONTEND_URL,
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-
-# Add APP_HOST-based origin if APP_HOST is set
-if APP_HOST:
-    CSRF_TRUSTED_ORIGINS.append(f"http://{APP_HOST}:3000")
-
-# Add NEXTAUTH_URL to CSRF trusted origins if it exists (strip trailing slash)
-if NEXTAUTH_URL:
-    CSRF_TRUSTED_ORIGINS.append(NEXTAUTH_URL.rstrip("/"))
-
-# CORS Security Settings
-CORS_ALLOW_CREDENTIALS = True
-CORS_ALLOW_ALL_ORIGINS = False  # Be explicit about not allowing all origins
-
-# Allowed headers for CORS requests
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
-]
-
-# Allowed methods for CORS requests
-CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
-]

@@ -205,7 +205,7 @@ class ConversationLogger:
         content = content or f"Calling tool: {tool_name}"
         return self._create_part(
             actor="tool",
-            message_type="tool_execution",
+            message_type="tool_call",
             part_type="tool_call",  # Legacy field
             content=content,
             tool_name=tool_name,
@@ -219,6 +219,7 @@ class ConversationLogger:
         tool_output: Dict[str, Any],
         content: Optional[str] = None,
         duration_ms: int = 0,
+        result_summary: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> ConversationPart:
         """Log a tool execution result."""
@@ -232,6 +233,7 @@ class ConversationLogger:
             tool_output=tool_output,
             duration_ms=duration_ms,
             metadata=metadata or {},
+            result_summary=result_summary,
         )
 
     def log_agent_thinking(
@@ -294,6 +296,7 @@ class ConversationLogger:
         tool_name: Optional[str] = None,
         tool_input: Optional[Dict[str, Any]] = None,
         tool_output: Optional[Dict[str, Any]] = None,
+        result_summary: Optional[str] = None,
         tokens_used: int = 0,
         cost: Decimal = Decimal("0"),
         duration_ms: int = 0,
@@ -314,6 +317,7 @@ class ConversationLogger:
                     tool_name=tool_name,
                     tool_input=tool_input or {},
                     tool_output=tool_output or {},
+                    result_summary=result_summary,
                     tokens_used=tokens_used,
                     cost=cost,
                     duration_ms=duration_ms,

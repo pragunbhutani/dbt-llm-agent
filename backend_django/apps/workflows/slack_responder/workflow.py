@@ -54,6 +54,8 @@ from slack_sdk.errors import SlackApiError
 from apps.workflows.schemas import SQLVerificationResponse
 from apps.workflows.schemas import QAResponse
 from pydantic import ValidationError
+from apps.workflows.utils import ensure_contract
+from apps.workflows.utils import format_for_slack, rich_text_to_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +112,14 @@ class SlackResponderState(TypedDict):
     qa_final_answer: Optional[str]
     qa_sql_query: Optional[str]
     qa_models: Optional[List[Dict[str, Any]]]
+    qa_notes: Optional[List[str]]
 
     # SQL Verification fields
     sql_is_verified: Optional[bool]
     verified_sql_query: Optional[str]
     sql_verification_error: Optional[str]
     sql_verification_explanation: Optional[str]
+    sql_style_violations: Optional[List[str]]
 
     error_message: Optional[str]
     response_sent: Optional[bool]
@@ -238,7 +242,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=acknowledgement_text,
+                    text=format_for_slack(acknowledgement_text),
+                    blocks=rich_text_to_blocks(acknowledgement_text),
                 )
                 if self.verbose:
                     logger.info("Acknowledgement sent successfully")
@@ -279,30 +284,15 @@ class SlackResponderAgent:
                 )
 
                 # Validate against the canonical schema for safety
-                try:
-                    qa_obj = QAResponse(**result)
-                    qa_answer: Optional[str] = qa_obj.answer
-                    sql_query: Optional[str] = qa_obj.sql_query
-                    models_used: List[Dict[str, Any]] = qa_obj.models_used
-                except ValidationError as ve:
-                    # Contract broken – log and salvage what we can
-                    logger.warning(
-                        "QuestionAnswerer returned payload that failed QAResponse validation: %s",
-                        ve,
-                    )
-                    if self.conversation_logger:
-                        await sync_to_async(self.conversation_logger.log_error)(
-                            content="QA payload validation failed",
-                            error_details={"validation_error": str(ve)},
-                        )
-
-                    # Fall back to best-effort extraction to avoid throwing away work
-                    qa_answer = (
-                        result.get("answer")
-                        or "I'm still working on that – could you clarify anything else?"
-                    )
-                    sql_query = result.get("sql_query")
-                    models_used = result.get("models_used", [])
+                qa_obj = ensure_contract(
+                    QAResponse,
+                    result,
+                    component="slack_responder.ask_question_answerer",
+                    strict_mode=False,
+                )
+                qa_answer: Optional[str] = qa_obj.answer
+                sql_query: Optional[str] = qa_obj.sql_query
+                models_used: List[Dict[str, Any]] = qa_obj.models_used
 
                 # If no explicit sql_query returned, attempt to extract from fenced code block in answer
                 if sql_query is None and isinstance(qa_answer, str):
@@ -457,8 +447,13 @@ class SlackResponderAgent:
                 }
 
             try:
-                # Create SQL file content
-                sql_content = f"-- Generated SQL Query\n-- Question: {message_text[:100]}...\n\n{sql_query}"
+                # Prepare a clean summary for the SQL file header – avoid dumping raw JSON
+                if message_text.lstrip().startswith("{"):
+                    summary = "Generated SQL for the user's question"
+                else:
+                    summary = _collapse_spaces(message_text)[:120]
+
+                sql_content = f"-- Generated SQL Query\n-- {summary}\n\n{sql_query}"
                 if optional_notes:
                     sql_content += f"\n\n-- Notes:\n-- {optional_notes}"
 
@@ -475,11 +470,19 @@ class SlackResponderAgent:
                         },
                     )
 
-                # Post message with file
+                # 1️⃣ Send the rich Block Kit message first so Slack renders it correctly
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=format_for_slack(message_text),
+                    blocks=rich_text_to_blocks(message_text),
+                )
+
+                # 2️⃣ Upload the SQL file with a minimal, plain-text comment (Block Kit not supported here)
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=message_text,
+                    initial_comment="SQL query attached.",
                     content=sql_content,
                     filename="query.sql",
                     title="SQL Query",
@@ -515,7 +518,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=message_text,
+                    text=format_for_slack(message_text),
+                    blocks=rich_text_to_blocks(message_text),
                 )
 
                 if self.verbose:
@@ -543,10 +547,14 @@ class SlackResponderAgent:
                 }
 
             try:
-                # Create a comprehensive response that provides value despite verification failure
+                raw_error = verification_error
+                friendly_error = SlackResponderAgent._friendly_verification_error(
+                    raw_error
+                )
+
+                # Build analysis message with minimal duplication
                 response_parts = [message_text]
 
-                # Add information about models used if available
                 if models_used:
                     model_names = [
                         m.get("name", "Unknown")
@@ -558,23 +566,16 @@ class SlackResponderAgent:
                             f"\n📊 *Analysis based on models:* {', '.join(model_names)}"
                         )
 
-                # Add a clear disclaimer about the SQL
                 response_parts.append(
-                    f"\n⚠️ *Note:* The SQL query below was generated but could not be fully verified due to: {verification_error or 'verification issues'}"
-                )
-                response_parts.append(
-                    "\n*Please review carefully before running in production.*"
+                    f"\n⚠️ *Note:* I couldn't run this query automatically because {friendly_error}. The SQL is attached below — please review before using."
                 )
 
                 combined_message = "".join(response_parts)
 
-                # Create SQL file content with warnings
+                # SQL file content with concise header
                 sql_content = f"""-- Generated SQL Query (UNVERIFIED)
--- Question: {message_text[:100]}...
--- 
--- ⚠️ WARNING: This query could not be verified due to: {verification_error or 'verification issues'}
--- Please review and test carefully before using in production
---
+-- Reason: {friendly_error}
+-- Review carefully before use.
 
 {sql_query}"""
 
@@ -597,11 +598,19 @@ class SlackResponderAgent:
                         },
                     )
 
-                # Post message with file
+                # 1️⃣ Post the analysis text with full Block Kit formatting
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=format_for_slack(combined_message),
+                    blocks=rich_text_to_blocks(combined_message),
+                )
+
+                # 2️⃣ Upload the SQL file with a concise plain-text comment
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=combined_message,
+                    initial_comment="SQL query attached (unverified).",
                     content=sql_content,
                     filename="unverified_query.sql",
                     title="SQL Query (Unverified)",
@@ -618,7 +627,6 @@ class SlackResponderAgent:
 
         # Store tools for graph building
         self._tools = [
-            fetch_slack_thread,
             acknowledge_question,
             ask_question_answerer,
             verify_sql_query,
@@ -725,10 +733,12 @@ class SlackResponderAgent:
             qa_final_answer=state.get("qa_final_answer"),
             qa_sql_query=state.get("qa_sql_query"),
             qa_models=state.get("qa_models"),
+            qa_notes=state.get("qa_notes"),
             sql_is_verified=state.get("sql_is_verified"),
             verified_sql_query=state.get("verified_sql_query"),
             sql_verification_error=state.get("sql_verification_error"),
             sql_verification_explanation=state.get("sql_verification_explanation"),
+            sql_style_violations=state.get("sql_style_violations"),
             acknowledgement_sent=state.get("acknowledgement_sent"),
             error_message=state.get("error_message"),
         )
@@ -779,6 +789,47 @@ class SlackResponderAgent:
             if self.verbose:
                 logger.info(f"SlackResponder Agent response: {response}")
 
+            # --- NEW: capture prompt & completion tokens ---
+            if getattr(self, "conversation_logger", None):
+                try:
+                    usage_meta = (
+                        getattr(response, "additional_kwargs", {}).get("usage", {})
+                        or getattr(response, "response_metadata", {}).get("usage", {})
+                        or getattr(response, "usage_metadata", {})
+                    )
+
+                    prompt_tokens = int(
+                        usage_meta.get("prompt_tokens")
+                        or usage_meta.get("input_tokens")
+                        or 0
+                    )
+                    completion_tokens = int(
+                        usage_meta.get("completion_tokens")
+                        or usage_meta.get("output_tokens")
+                        or 0
+                    )
+
+                    if prompt_tokens:
+                        self.conversation_logger.log_agent_response(
+                            content="[LLM Prompt – SlackResponder]",
+                            tokens_used=prompt_tokens,
+                            metadata={"type": "llm_input"},
+                        )
+
+                    self.conversation_logger.log_agent_response(
+                        content=(
+                            response.content
+                            if hasattr(response, "content")
+                            else "[LLM Response]"
+                        ),
+                        tokens_used=completion_tokens,
+                        metadata={"type": "llm_output"},
+                    )
+                except Exception as log_err:
+                    logger.warning(
+                        f"SlackResponder: failed to record LLM token usage: {log_err}"
+                    )
+
             if first_turn_human_message:
                 return {"messages": [first_turn_human_message, response]}
             else:
@@ -818,16 +869,7 @@ class SlackResponderAgent:
             logger.info(f"Processing ToolMessage: {last_message.name}")
 
         # Update state based on tool call
-        if last_message.name == "fetch_slack_thread":
-            if isinstance(tool_content, list):
-                updates["thread_history"] = tool_content
-            elif isinstance(tool_content, dict) and tool_content.get("error"):
-                updates["error_message"] = (
-                    f"Failed to fetch thread: {tool_content['error']}"
-                )
-                logger.error(f"Tool fetch_slack_thread failed: {tool_content['error']}")
-
-        elif last_message.name == "acknowledge_question":
+        if last_message.name == "acknowledge_question":
             if isinstance(tool_content, dict) and tool_content.get("success"):
                 updates["acknowledgement_sent"] = True
             else:
@@ -852,6 +894,7 @@ class SlackResponderAgent:
                     qa_answer = tool_content.get("answer")
                     updates["qa_final_answer"] = qa_answer
                     updates["qa_models"] = tool_content.get("models_used", [])
+                    updates["qa_notes"] = tool_content.get("notes", [])
                     # Store sql_query directly if provided
                     if "sql_query" in tool_content and tool_content["sql_query"]:
                         updates["qa_sql_query"] = tool_content["sql_query"]
@@ -866,6 +909,9 @@ class SlackResponderAgent:
                     updates["sql_verification_error"] = tool_content.get("error")
                     updates["sql_verification_explanation"] = tool_content.get(
                         "explanation"
+                    )
+                    updates["sql_style_violations"] = tool_content.get(
+                        "style_violations", []
                     )
                     if self.verbose:
                         logger.info(
@@ -972,7 +1018,7 @@ class SlackResponderAgent:
                     await self.slack_client.files_upload_v2(
                         channel=self.current_channel_id,
                         thread_ts=self.current_thread_ts,
-                        initial_comment=initial_comment,
+                        initial_comment=format_for_slack(initial_comment),
                         content=sql_query,
                         filename="query.sql",
                         title="SQL Query",
@@ -1005,7 +1051,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=response_text,
+                    text=format_for_slack(response_text),
+                    blocks=rich_text_to_blocks(response_text),
                 )
 
                 if self.verbose:
@@ -1079,14 +1126,11 @@ class SlackResponderAgent:
         if not sql_query:
             return {"error_message": "No SQL query available for auto post."}
 
-        verification_error = (
-            state.get("sql_verification_error") or "verification issues"
-        )
+        raw_error = state.get("sql_verification_error")
+        friendly_error = SlackResponderAgent._friendly_verification_error(raw_error)
 
         # Build analysis text (will be posted as a normal message)
-        analysis_parts: List[str] = [
-            "I couldn't verify this query automatically, but it should help answer your question.",
-        ]
+        analysis_parts: List[str] = []
 
         qa_answer = state.get("qa_final_answer")
         if qa_answer:
@@ -1098,7 +1142,7 @@ class SlackResponderAgent:
                 analysis_parts.append("\n\n" + stripped_answer)
 
         analysis_parts.append(
-            f"\n\n⚠️ *Note:* The SQL query could not be verified due to: {verification_error}. Please review carefully before using."
+            f"\n\n⚠️ *Note:* I couldn't run this query automatically because {friendly_error}. The SQL is attached below — please review before using."
         )
 
         qa_models = state.get("qa_models") or []
@@ -1114,8 +1158,8 @@ class SlackResponderAgent:
         analysis_text = "".join(analysis_parts)
 
         sql_content = f"""-- Generated SQL Query (UNVERIFIED)
--- ⚠️ WARNING: This query could not be verified automatically.
--- Please review and test carefully before using.
+-- Reason: {friendly_error}
+-- Review carefully before use.
 
 {sql_query}
 """
@@ -1125,14 +1169,15 @@ class SlackResponderAgent:
             await self.slack_client.chat_postMessage(
                 channel=self.current_channel_id,
                 thread_ts=self.current_thread_ts,
-                text=analysis_text,
+                text=format_for_slack(_collapse_spaces(analysis_text)[:3000]),
+                blocks=rich_text_to_blocks(analysis_text),
             )
 
-            # 2) upload SQL file with a very short comment to avoid 414
+            # 2) upload SQL file with a concise comment to avoid duplication
             await self.slack_client.files_upload_v2(
                 channel=self.current_channel_id,
                 thread_ts=self.current_thread_ts,
-                initial_comment="Here is the SQL query (unverified).",
+                initial_comment="SQL query attached (unverified).",
                 content=sql_content,
                 filename="unverified_query.sql",
                 title="SQL Query (Unverified)",
@@ -1169,7 +1214,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=fallback_text,
+                    text=format_for_slack(fallback_text),
+                    blocks=rich_text_to_blocks(fallback_text),
                 )
                 return {"response_sent": True}
             except Exception as ee:
@@ -1197,11 +1243,8 @@ class SlackResponderAgent:
                     "status": ConversationStatus.ACTIVE,
                     "trigger": ConversationTrigger.SLACK_MENTION,
                     "initial_question": question,
-                    "llm_provider": getattr(
-                        self.org_settings, "llm_anthropic_api_key", None
-                    )
-                    and "anthropic"
-                    or "openai",
+                    "llm_provider": self.org_settings.llm_chat_provider,
+                    "llm_chat_model": self.org_settings.llm_chat_model,
                     "enabled_integrations": self._get_enabled_integrations(),
                 },
             )
@@ -1249,11 +1292,8 @@ class SlackResponderAgent:
                     status=ConversationStatus.ACTIVE,
                     trigger=ConversationTrigger.SLACK_MENTION,
                     initial_question=question,
-                    llm_provider=getattr(
-                        self.org_settings, "llm_anthropic_api_key", None
-                    )
-                    and "anthropic"
-                    or "openai",
+                    llm_provider=self.org_settings.llm_chat_provider,
+                    llm_chat_model=self.org_settings.llm_chat_model,
                     enabled_integrations=enabled_integrations,
                 )
                 if self.verbose:
@@ -1287,19 +1327,68 @@ class SlackResponderAgent:
         self.current_channel_id = channel_id
         self.current_thread_ts = thread_ts
 
+        # --- NEW: Pre-fetch complete Slack thread history (incl. files) ---
+        thread_history: List[Dict[str, Any]] | None = None
+        try:
+            logger.info(
+                f"Fetching Slack thread history for channel={channel_id}, thread_ts={thread_ts}"
+            )
+            history_resp = await self.slack_client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=200,  # Fetch up to 200 messages (Slack max for one call)
+            )
+            if history_resp.get("ok"):
+                thread_history = [
+                    {
+                        "user": m.get("user"),
+                        "text": m.get("text"),
+                        "ts": m.get("ts"),
+                        # Preserve any files metadata so downstream agents can act on them
+                        "files": m.get("files", []),
+                    }
+                    for m in history_resp.get("messages", [])
+                ]
+                logger.info(
+                    f"Fetched {len(thread_history)} messages for thread {thread_ts}"
+                )
+            else:
+                logger.warning(
+                    f"Slack conversations_replies returned error: {history_resp.get('error')}"
+                )
+        except Exception as e:
+            logger.exception(f"Failed to fetch Slack thread history: {e}")
+        # --- END NEW ---
+
         # --- Fetch Slack user display name for better UX ---
         user_display_name: str | None = None
+        user_locale: str | None = None
         try:
             # Attempt to fetch user info from Slack to get their real/display name
             if self.slack_client and user_id:
+                logger.info(f"Fetching Slack user info for user_id: {user_id}")
                 user_info_resp = await self.slack_client.users_info(user=user_id)
+                logger.info(f"Slack users_info response: {user_info_resp}")
                 if user_info_resp.get("ok"):
                     profile = user_info_resp["user"].get("profile", {})
+                    logger.info(f"User profile data: {profile}")
                     user_display_name = (
                         profile.get("real_name")
                         or profile.get("display_name")
                         or user_info_resp["user"].get("name")
                     )
+                    user_locale = user_info_resp["user"].get("locale")
+                    logger.info(
+                        f"Successfully fetched user display name: {user_display_name}"
+                    )
+                else:
+                    logger.warning(
+                        f"Slack users_info API returned not ok: {user_info_resp}"
+                    )
+            else:
+                logger.warning(
+                    f"Slack client not available or user_id empty. slack_client: {self.slack_client}, user_id: {user_id}"
+                )
         except SlackApiError as e:
             logger.warning(
                 f"Could not fetch Slack user info for {user_id}: {e.response['error']}"
@@ -1319,17 +1408,34 @@ class SlackResponderAgent:
             )
 
             # If we successfully fetched the user's display name, update the conversation
+            logger.info(
+                f"Checking if user_external_id needs update. user_display_name: '{user_display_name}', current user_external_id: '{self.conversation.user_external_id}'"
+            )
             if (
                 user_display_name
                 and user_display_name != self.conversation.user_external_id
             ):
+                logger.info(
+                    f"Updating conversation user_external_id from '{self.conversation.user_external_id}' to '{user_display_name}'"
+                )
                 self.conversation.user_external_id = user_display_name
                 await sync_to_async(self.conversation.save)(
                     update_fields=["user_external_id"]
                 )
+                logger.info(
+                    f"Successfully updated conversation user_external_id to: {user_display_name}"
+                )
+            else:
+                logger.info(
+                    f"Not updating user_external_id. user_display_name: {user_display_name}, current user_external_id: {self.conversation.user_external_id}"
+                )
 
             # Initialize conversation logger
             self.conversation_logger = ConversationLogger(self.conversation)
+
+            # Pass the logger down to child workflows so they can log tool usage
+            self.question_answerer.conversation_logger = self.conversation_logger
+            self.sql_verifier.conversation_logger = self.conversation_logger
 
             # Log the initial user message (wrapped in sync_to_async)
             await sync_to_async(self.conversation_logger.log_user_message)(
@@ -1346,6 +1452,10 @@ class SlackResponderAgent:
                     f"Initialized conversation logging for conversation {self.conversation.id}"
                 )
 
+            # Save user context for prompt generation
+            self._user_display_name = user_display_name
+            self._user_locale = user_locale
+
             config = {"configurable": {"thread_id": conversation_id}}
 
             # Initial state
@@ -1355,15 +1465,17 @@ class SlackResponderAgent:
                 thread_ts=thread_ts,
                 user_id=user_id,
                 messages=[],
-                thread_history=None,
+                thread_history=thread_history,  # Pass the pre-fetched history
                 acknowledgement_sent=None,
                 qa_final_answer=None,
                 qa_sql_query=None,
                 qa_models=None,
+                qa_notes=None,
                 sql_is_verified=None,
                 verified_sql_query=None,
                 sql_verification_error=None,
                 sql_verification_explanation=None,
+                sql_style_violations=None,
                 error_message=None,
                 response_sent=None,
                 conversation_id=self.conversation.id,
@@ -1449,11 +1561,13 @@ class SlackResponderAgent:
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=fallback_message
-                    + f"\n\n⚠️ *Note:* The SQL below couldn't be fully verified due to: {sql_verification_error or 'verification issues'}. Please review before using.",
+                    initial_comment=format_for_slack(
+                        fallback_message
+                        + f"\n\n*Note:* I couldn't run this query automatically because {SlackResponderAgent._friendly_verification_error(sql_verification_error)}. Please review before using."
+                    ),
                     content=f"""-- Generated SQL Query (UNVERIFIED)
--- ⚠️ WARNING: Could not be verified due to: {sql_verification_error or 'verification issues'}
--- Please review and test carefully before using
+-- Reason: {SlackResponderAgent._friendly_verification_error(sql_verification_error)}
+-- Review carefully before use.
 
 {qa_sql}""",
                     filename="unverified_query.sql",
@@ -1489,7 +1603,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=fallback_message,
+                    text=format_for_slack(fallback_message),
+                    blocks=rich_text_to_blocks(fallback_message),
                 )
 
                 if self.verbose:
@@ -1522,7 +1637,8 @@ class SlackResponderAgent:
                 await self.slack_client.chat_postMessage(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    text=user_message,
+                    text=format_for_slack(user_message),
+                    blocks=rich_text_to_blocks(user_message),
                 )
                 if self.verbose:
                     logger.info("Sent user-friendly error message")
@@ -1530,3 +1646,57 @@ class SlackResponderAgent:
             logger.exception(f"Failed to send error message: {e}")
 
         return {"response_sent": True, "error_handled": True}
+
+    # --- Helper: map raw verifier errors to concise, user-friendly messages ---
+
+    @staticmethod
+    def _friendly_verification_error(error: Optional[str]) -> str:
+        """Return a concise, user-friendly reason why verification failed.
+
+        We try to detect common failure patterns (missing warehouse credentials,
+        authentication failures, dialect/unsupported warehouse, etc.) and map
+        them to a short explanation.  If we cannot recognise the pattern we
+        return the original error string so the user still gets some context.
+        """
+        if not error:
+            return "warehouse connection is not configured"
+
+        lowered = error.lower()
+
+        # Missing configuration / integration disabled
+        if (
+            "not configured" in lowered
+            or "no credentials" in lowered
+            or "credentials not available" in lowered
+        ):
+            return "warehouse connection is not configured"
+
+        # Authentication / password issues
+        if any(
+            word in lowered
+            for word in [
+                "authentication",
+                "auth failed",
+                "password",
+                "invalid credentials",
+            ]
+        ):
+            return "warehouse credentials appear to be incorrect"
+
+        # Network / connectivity
+        if any(
+            word in lowered
+            for word in [
+                "could not connect",
+                "connection refused",
+                "network",
+                "timeout",
+            ]
+        ):
+            return "unable to connect to the warehouse"
+
+        # Generic Snowflake error pattern
+        if "snowflake" in lowered:
+            return "unable to connect to Snowflake"
+
+        return error.strip()

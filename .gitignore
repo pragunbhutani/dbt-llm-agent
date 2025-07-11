@@ -4,6 +4,9 @@ output/
 # Environment variables
 .env
 
+# LocalStack data
+.localstack_data/
+
 # Python cache files
 __pycache__/
 *.py[cod]
