@@ -54,7 +54,7 @@ Focus on helping the user with their data questions in a natural, conversational
             user_text = msg.get("text", "")[:100]
             prompt += f"- {msg.get('user', 'User')}: {user_text}...\n"
     else:
-        prompt += "\n**Conversation History:** Not yet fetched\n"
+        prompt += "\n**Conversation History:** No previous messages in this thread.\n"
 
     # --- Current Status ---
     status_items = []
@@ -109,10 +109,9 @@ Step 2 — Respond appropriately:
   - Craft a friendly reply and send it with `post_text_response` (no analysis).
 
 • DATA ANALYSIS (follow the workflow):
-  1. If thread history not fetched → call `fetch_slack_thread`.
-  2. If not yet acknowledged → call `acknowledge_question` with a brief, friendly message.
-  3. If analysis not done → call `ask_question_answerer` with the question (and thread context when available).
-  4. Once analysis is complete:
+  1. If not yet acknowledged → call `acknowledge_question` with a brief, friendly message.
+  2. If analysis not done → call `ask_question_answerer` with the question (and thread context when available).
+  3. Once analysis is complete:
      - If an SQL query is produced, verify it using `verify_sql_query`.
      - If verification succeeds → `post_final_response_with_snippet`.
      - If verification fails **but a query is still available** → `post_analysis_with_unverified_sql` with the analysis, unverified SQL, verification error, and models used. This provides maximum value to the user despite verification failure.

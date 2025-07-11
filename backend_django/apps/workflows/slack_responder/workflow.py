@@ -627,7 +627,6 @@ class SlackResponderAgent:
 
         # Store tools for graph building
         self._tools = [
-            fetch_slack_thread,
             acknowledge_question,
             ask_question_answerer,
             verify_sql_query,
@@ -870,16 +869,7 @@ class SlackResponderAgent:
             logger.info(f"Processing ToolMessage: {last_message.name}")
 
         # Update state based on tool call
-        if last_message.name == "fetch_slack_thread":
-            if isinstance(tool_content, list):
-                updates["thread_history"] = tool_content
-            elif isinstance(tool_content, dict) and tool_content.get("error"):
-                updates["error_message"] = (
-                    f"Failed to fetch thread: {tool_content['error']}"
-                )
-                logger.error(f"Tool fetch_slack_thread failed: {tool_content['error']}")
-
-        elif last_message.name == "acknowledge_question":
+        if last_message.name == "acknowledge_question":
             if isinstance(tool_content, dict) and tool_content.get("success"):
                 updates["acknowledgement_sent"] = True
             else:
@@ -1337,6 +1327,39 @@ class SlackResponderAgent:
         self.current_channel_id = channel_id
         self.current_thread_ts = thread_ts
 
+        # --- NEW: Pre-fetch complete Slack thread history (incl. files) ---
+        thread_history: List[Dict[str, Any]] | None = None
+        try:
+            logger.info(
+                f"Fetching Slack thread history for channel={channel_id}, thread_ts={thread_ts}"
+            )
+            history_resp = await self.slack_client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=200,  # Fetch up to 200 messages (Slack max for one call)
+            )
+            if history_resp.get("ok"):
+                thread_history = [
+                    {
+                        "user": m.get("user"),
+                        "text": m.get("text"),
+                        "ts": m.get("ts"),
+                        # Preserve any files metadata so downstream agents can act on them
+                        "files": m.get("files", []),
+                    }
+                    for m in history_resp.get("messages", [])
+                ]
+                logger.info(
+                    f"Fetched {len(thread_history)} messages for thread {thread_ts}"
+                )
+            else:
+                logger.warning(
+                    f"Slack conversations_replies returned error: {history_resp.get('error')}"
+                )
+        except Exception as e:
+            logger.exception(f"Failed to fetch Slack thread history: {e}")
+        # --- END NEW ---
+
         # --- Fetch Slack user display name for better UX ---
         user_display_name: str | None = None
         user_locale: str | None = None
@@ -1442,7 +1465,7 @@ class SlackResponderAgent:
                 thread_ts=thread_ts,
                 user_id=user_id,
                 messages=[],
-                thread_history=None,
+                thread_history=thread_history,  # Pass the pre-fetched history
                 acknowledgement_sent=None,
                 qa_final_answer=None,
                 qa_sql_query=None,
