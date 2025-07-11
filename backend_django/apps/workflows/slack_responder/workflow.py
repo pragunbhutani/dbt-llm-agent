@@ -55,7 +55,7 @@ from apps.workflows.schemas import SQLVerificationResponse
 from apps.workflows.schemas import QAResponse
 from pydantic import ValidationError
 from apps.workflows.utils import ensure_contract
-from apps.workflows.utils import format_for_slack
+from apps.workflows.utils import format_for_slack, rich_text_to_blocks
 
 logger = logging.getLogger(__name__)
 
@@ -243,6 +243,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(acknowledgement_text),
+                    blocks=rich_text_to_blocks(acknowledgement_text),
                 )
                 if self.verbose:
                     logger.info("Acknowledgement sent successfully")
@@ -446,8 +447,13 @@ class SlackResponderAgent:
                 }
 
             try:
-                # Create SQL file content
-                sql_content = f"-- Generated SQL Query\n-- Question: {message_text[:100]}...\n\n{sql_query}"
+                # Prepare a clean summary for the SQL file header – avoid dumping raw JSON
+                if message_text.lstrip().startswith("{"):
+                    summary = "Generated SQL for the user's question"
+                else:
+                    summary = _collapse_spaces(message_text)[:120]
+
+                sql_content = f"-- Generated SQL Query\n-- {summary}\n\n{sql_query}"
                 if optional_notes:
                     sql_content += f"\n\n-- Notes:\n-- {optional_notes}"
 
@@ -464,11 +470,19 @@ class SlackResponderAgent:
                         },
                     )
 
-                # Post message with file
+                # 1️⃣ Send the rich Block Kit message first so Slack renders it correctly
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=format_for_slack(message_text),
+                    blocks=rich_text_to_blocks(message_text),
+                )
+
+                # 2️⃣ Upload the SQL file with a minimal, plain-text comment (Block Kit not supported here)
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=format_for_slack(message_text),
+                    initial_comment="SQL query attached.",
                     content=sql_content,
                     filename="query.sql",
                     title="SQL Query",
@@ -505,6 +519,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(message_text),
+                    blocks=rich_text_to_blocks(message_text),
                 )
 
                 if self.verbose:
@@ -583,11 +598,19 @@ class SlackResponderAgent:
                         },
                     )
 
-                # Post message with file
+                # 1️⃣ Post the analysis text with full Block Kit formatting
+                await self.slack_client.chat_postMessage(
+                    channel=self.current_channel_id,
+                    thread_ts=self.current_thread_ts,
+                    text=format_for_slack(combined_message),
+                    blocks=rich_text_to_blocks(combined_message),
+                )
+
+                # 2️⃣ Upload the SQL file with a concise plain-text comment
                 await self.slack_client.files_upload_v2(
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
-                    initial_comment=format_for_slack(combined_message),
+                    initial_comment="SQL query attached (unverified).",
                     content=sql_content,
                     filename="unverified_query.sql",
                     title="SQL Query (Unverified)",
@@ -1039,6 +1062,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(response_text),
+                    blocks=rich_text_to_blocks(response_text),
                 )
 
                 if self.verbose:
@@ -1155,7 +1179,8 @@ class SlackResponderAgent:
             await self.slack_client.chat_postMessage(
                 channel=self.current_channel_id,
                 thread_ts=self.current_thread_ts,
-                text=analysis_text,
+                text=format_for_slack(_collapse_spaces(analysis_text)[:3000]),
+                blocks=rich_text_to_blocks(analysis_text),
             )
 
             # 2) upload SQL file with a concise comment to avoid duplication
@@ -1200,6 +1225,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(fallback_text),
+                    blocks=rich_text_to_blocks(fallback_text),
                 )
                 return {"response_sent": True}
             except Exception as ee:
@@ -1555,6 +1581,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(fallback_message),
+                    blocks=rich_text_to_blocks(fallback_message),
                 )
 
                 if self.verbose:
@@ -1588,6 +1615,7 @@ class SlackResponderAgent:
                     channel=self.current_channel_id,
                     thread_ts=self.current_thread_ts,
                     text=format_for_slack(user_message),
+                    blocks=rich_text_to_blocks(user_message),
                 )
                 if self.verbose:
                     logger.info("Sent user-friendly error message")

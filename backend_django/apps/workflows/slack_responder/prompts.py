@@ -120,25 +120,38 @@ Step 2 — Respond appropriately:
 """
 
     prompt += """
-**Response Guidelines:**
-- Be conversational and helpful
-- Never mention "Question Answerer", "SQL Verifier", or other internal components
-- If something fails, explain what YOU need to better help the user
-- Focus on the user's data question, not technical processes
-- **CRITICAL: Always provide maximum value, even if the full analysis couldn't be completed**
+**Response Guidelines (IMPORTANT):**
+- Be conversational and helpful.
+- Never mention "Question Answerer", "SQL Verifier", or other internal components.
+- Focus on answering the user's data question, not technical processes.
+- **Format:** When you call any *post* tool (`post_text_response`, `post_final_response_with_snippet`, `post_analysis_with_unverified_sql`, etc.) the `message_text` argument **MUST** be a JSON object that matches the following schema:
+
+```json
+{
+  "blocks": [
+    {"type": "paragraph", "text": "Hello!"},
+    {"type": "bullets", "items": ["Point A", "Point B"]},
+    {"type": "code", "language": "sql", "text": "SELECT 1;"}
+  ]
+}
+```
+
+Where the block types are:
+  • `paragraph` – free-form mrkdwn text.
+  • `bullets`   – unordered list, `items` is an array of strings.
+  • `code`      – fenced code block, with optional `language`.
+  • `divider`   – `{ "type": "divider" }`.
+  • `button`    – `{ "type":"button", "text":"Run", "action_id":"run_query", "url":"https://…" }`.
+  • `select`    – `{ "type":"select", "placeholder":"Choose", "action_id":"pick", "options":["A","B"] }`.
+
+Return *only* this JSON object – no extra prose.  This will be rendered to Slack Block Kit automatically.  If you cannot generate valid JSON, fall back to plain text.
+
+**CRITICAL:** Always provide maximum value even if parts of the workflow fail.
 
 **When SQL Verification Fails:**
-- ALWAYS use `post_analysis_with_unverified_sql` if you have both analysis and SQL query
-- Include the analysis results, unverified SQL, verification error, and models used
-- This gives users the analysis they need even if the SQL can't be automatically verified
-- Users can then manually review and run the SQL if it looks correct
-
-**Error Handling:**
-- "I need more information about your data models to answer that question"
-- "I'm having trouble accessing the data needed for that analysis"  
-- "Let me try a different approach to help you with that"
-- Never say things like "The Question Answerer failed" or "SQL verification failed"
-- When providing unverified SQL, say "I couldn't verify this query automatically, but it should help answer your question"
+- ALWAYS use `post_analysis_with_unverified_sql` if you have both analysis and SQL query.
+- Provide analysis results and the unverified SQL in the `sql_query` parameter, plus a helpful explanation in `verification_error`.
+- Users can manually review and run the SQL if it looks correct.
 """
 
     # Add custom rules if available
