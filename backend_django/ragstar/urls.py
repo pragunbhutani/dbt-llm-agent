@@ -60,8 +60,9 @@ urlpatterns = [
     ),
     # Generic integrations API (internal, authenticated)
     path("api/integrations/", include("apps.integrations.urls")),
-    # MCP Server OAuth endpoints for remote authentication
-    path("", include("apps.mcp_server.urls")),
+    # MCP Server OAuth endpoints - Available at both root and /api/ for compatibility
+    path("api/", include("apps.mcp_server.urls")),  # For FastAPI redirects
+    path("", include("apps.mcp_server.urls")),  # For direct access
 ]
 
 if settings.DEBUG:

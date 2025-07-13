@@ -145,17 +145,20 @@ middleware = [
     )
 ]
 
-# Import the MCP FastAPI app
-from apps.mcp_server.main import app as mcp_app
 
-# Create the Starlette application with MCP server mounted
+# Import the Django-integrated MCP FastAPI app
+# (Removed import and mount of MCP app after extraction to standalone service.)
+
+# Define routes with explicit ordering
+routes = [
+    # Mount Django app as the sole application now that MCP is standalone
+    Mount("/", app=django_asgi_app),
+]
+
+# Create the main application with proper middleware and lifespan management
 application = Starlette(
-    lifespan=lifespan,
+    debug=settings.DEBUG,
+    routes=routes,
     middleware=middleware,
-    routes=[
-        # Add a trailing slash to the MCP mount to see if it affects routing priority.
-        Mount("/mcp/", app=mcp_app),
-        # Mount the Django app at the root as the fallback.
-        Mount("/", app=django_asgi_app),
-    ],
+    lifespan=lifespan,
 )
