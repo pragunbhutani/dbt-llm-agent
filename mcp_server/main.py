@@ -282,43 +282,30 @@ async def list_dbt_models(
         f"Parameters: project_name={project_name}, schema_name={schema_name}, materialization={materialization}, limit={limit}"
     )
 
-    # Return proper MCP content format
-    models = [
-        {
-            "type": "text",
-            "text": json.dumps(
-                {
-                    "models": [
-                        {
-                            "name": "customers",
-                            "project_name": "analytics",
-                            "schema_name": "marts",
-                            "materialization": "table",
-                            "description": "Customer dimension table with demographic and account information",
-                        },
-                        {
-                            "name": "orders",
-                            "project_name": "analytics",
-                            "schema_name": "marts",
-                            "materialization": "table",
-                            "description": "Order fact table with transaction details",
-                        },
-                    ],
-                    "total_count": 2,
-                    "filters": {
-                        "project_name": project_name,
-                        "schema_name": schema_name,
-                        "materialization": materialization,
-                        "limit": limit,
-                    },
-                },
-                indent=2,
-            ),
-        }
-    ]
+    # Prepare query parameters for Django backend
+    params: Dict[str, Any] = {"limit": min(limit, 200)}
+    if project_name:
+        params["project_name"] = project_name
+    if schema_name:
+        params["schema_name"] = schema_name
+    if materialization:
+        params["materialization"] = materialization
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{DJANGO_BACKEND_URL}/mcp/tools/list-models/",
+                params=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"list_dbt_models backend error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to list dbt models")
 
     logger.info("🔧 ===== MCP TOOL COMPLETED: list_dbt_models =====")
-    return models
+    return [{"type": "text", "text": json.dumps(data, indent=2)}]
 
 
 @mcp.tool()
@@ -338,41 +325,23 @@ async def search_dbt_models(
     logger.info("🔧 ===== MCP TOOL CALLED: search_dbt_models =====")
     logger.info(f"Parameters: query='{query}', limit={limit}")
 
-    # Return proper MCP content format
-    results = [
-        {
-            "type": "text",
-            "text": json.dumps(
-                {
-                    "results": [
-                        {
-                            "name": "customers",
-                            "project_name": "analytics",
-                            "schema_name": "marts",
-                            "relevance_score": 0.95,
-                            "description": "Customer dimension table with demographic and account information",
-                            "match_reason": f"Matches query: {query}",
-                        },
-                        {
-                            "name": "customer_orders",
-                            "project_name": "analytics",
-                            "schema_name": "marts",
-                            "relevance_score": 0.87,
-                            "description": "Customer order history and transaction details",
-                            "match_reason": f"Related to query: {query}",
-                        },
-                    ],
-                    "total_count": 2,
-                    "query": query,
-                    "limit": limit,
-                },
-                indent=2,
-            ),
-        }
-    ]
+    payload = {"query": query, "limit": min(limit, 50)}
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{DJANGO_BACKEND_URL}/mcp/tools/search-models/",
+                json=payload,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"search_dbt_models backend error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to search dbt models")
 
     logger.info("🔧 ===== MCP TOOL COMPLETED: search_dbt_models =====")
-    return results
+    return [{"type": "text", "text": json.dumps(data, indent=2)}]
 
 
 @mcp.tool()
@@ -392,41 +361,25 @@ async def get_model_details(
     logger.info("🔧 ===== MCP TOOL CALLED: get_model_details =====")
     logger.info(f"Parameters: model_name='{model_name}', project_name={project_name}")
 
-    # Return proper MCP content format
-    details = [
-        {
-            "type": "text",
-            "text": json.dumps(
-                {
-                    "model_name": model_name,
-                    "project_name": project_name or "analytics",
-                    "schema_name": "marts",
-                    "materialization": "table",
-                    "description": f"Detailed information about {model_name} model",
-                    "sql": f"SELECT * FROM staging.{model_name}",
-                    "columns": [
-                        {"name": "id", "type": "string", "description": "Primary key"},
-                        {
-                            "name": "name",
-                            "type": "string",
-                            "description": "Display name",
-                        },
-                        {
-                            "name": "created_at",
-                            "type": "timestamp",
-                            "description": "Creation timestamp",
-                        },
-                    ],
-                    "dependencies": ["staging.raw_data"],
-                    "documentation": f"This model contains {model_name} data processed from raw sources",
-                },
-                indent=2,
-            ),
-        }
-    ]
+    params: Dict[str, Any] = {"name": model_name}
+    if project_name:
+        params["project_name"] = project_name
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.get(
+                f"{DJANGO_BACKEND_URL}/mcp/tools/model-details/",
+                params=params,
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            logger.error(f"get_model_details backend error: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to get model details")
 
     logger.info("🔧 ===== MCP TOOL COMPLETED: get_model_details =====")
-    return details
+    return [{"type": "text", "text": json.dumps(data, indent=2)}]
 
 
 @mcp.tool()
@@ -484,48 +437,31 @@ async def ragstar_introduction() -> str:
 
     return """# Welcome to Ragstar! 🌟
 
-Ragstar is an AI-powered data analyst designed specifically for teams working with **dbt** (data build tool). I help you understand, explore, and analyze your dbt projects and data models with intelligent search and question-answering capabilities.
+Ragstar is an AI-powered data analyst for teams whose analytics stack is built with **dbt**. Users will ask questions about their *data*—your job is to discover the dbt models that contain that data, understand them, and use them to generate the correct SQL (and eventually charts) that answers the question.
 
-## What I Can Do
+Although we operate on dbt models, always remember that the ultimate goal is DATA analysis, not model cataloguing.
 
-### 🔍 **Model Discovery & Search**
-- **List Models**: Browse all your dbt models with filtering by project, schema, or materialization type
-- **Semantic Search**: Find relevant models using natural language queries (e.g., "customer revenue models" or "user behavior data")
-- **Model Details**: Get comprehensive information about specific models including SQL, documentation, and lineage
+## How You Work
 
-### 🤔 **Intelligent Question Answering**
-- Ask analytical questions about your data in plain English
-- Get insights backed by relevant dbt models and supporting SQL queries
-- Understand relationships between different data models
+1. **Discover available data** – Call `list_dbt_models` to see which models are enabled for question-answering. Filter by project, schema or materialisation when helpful.
+2. **Find relevant models** – Call `search_dbt_models` with a natural-language description of the information you need. This performs a semantic search across model docs and metadata.
+3. **Understand the details** – Call `get_model_details` on promising models to inspect their SQL, columns, and lineage.
+4. **Answer the question** – Combine what you learn to craft SQL (and later visualisations). Reference the models you used in your explanation.
 
-### 📊 **Project Overview**
-- Get summaries of your connected dbt projects
-- Understand model relationships and dependencies
-- Explore different materialization strategies
+## Available Tools
 
-## My Tools Available to You
+• `list_dbt_models` – browse and filter dbt models  
+• `search_dbt_models` – semantic search for relevant models  
+• `get_model_details` – deep dive into model SQL & metadata
 
-1. **`list_dbt_models`** - Browse and filter your dbt models
-2. **`search_dbt_models`** - Find models using natural language search
-3. **`get_model_details`** - Deep dive into specific models with SQL and lineage
-4. **`get_project_summary`** - Get overview of your dbt projects
+## Best-practice Tips
 
-## How to Get Started
+• Be precise in search queries (e.g. "monthly mrr growth" vs "revenue")  
+• Chain your reasoning: *identify candidate models → verify details → write SQL*.  
+• When uncertain, inspect columns and dependencies via `get_model_details`.  
+• Cite model names in your answers so users understand the data source.
 
-1. **Explore your models**: Start with `get_project_summary` to understand what data you have
-2. **Search for relevant data**: Use `search_dbt_models` to find models related to your analysis
-3. **Dive deeper**: Use `get_model_details` to understand specific models better
-4. **Ask questions**: Use the discovered models to ask analytical questions
-
-## Tips for Best Results
-
-- **Be specific** in your search queries (e.g., "customer acquisition models" vs "customer data")
-- **Provide context** when asking questions to get more relevant answers
-- **Explore dependencies** to understand how models relate to each other
-- **Ask follow-up questions** to dive deeper into interesting findings
-
-Ready to explore your data? Start with a project summary or search for relevant models to build your analysis!
-"""
+Ready to explore? Start by listing or searching for models related to the user’s question!"""
 
 
 @mcp.prompt()
@@ -533,66 +469,28 @@ async def data_analysis_guidance() -> str:
     """Get guidance on how to analyze data and ask effective questions using Ragstar."""
     logger.info("📝 ===== MCP PROMPT CALLED: data_analysis_guidance =====")
 
-    return """# Data Analysis with Ragstar 📈
+    return """# Guidance for Analysing Data with Ragstar 📈
 
-## Asking Effective Questions
+## Crafting Great Questions
 
-### 🎯 **Be Specific and Contextual**
-Instead of: *"Show me sales data"*
-Try: *"What are the top 5 products by revenue in the last quarter, and how do they compare to the previous quarter?"*
+• **Be specific & contextual** – "What were the top 5 products by revenue last quarter compared with the previous one?" is better than "Show me sales data".  
+• **Iterate** – Start broad, then drill down based on insights.  
+• **Reference models** – Mention model names or metrics you’ve discovered to ground follow-ups.
 
-### 🔗 **Build on Previous Insights**
-- Start with broad questions, then drill down
-- Reference specific models or metrics you've discovered
-- Ask about relationships between different data points
+## Recommended Workflow
 
-### 💡 **Great Question Examples**
+1. **Discovery** – Call `list_dbt_models` to understand the available data surfaces.  
+2. **Exploration** – Use `search_dbt_models` with business language to narrow the candidate models.  
+3. **Investigation** – Call `get_model_details` on 1-3 promising models to examine SQL, columns and dependencies.  
+4. **Synthesis** – Combine insights from the models, write SQL, and form your answer.
 
-**Business Metrics:**
-- "What is our customer acquisition cost trend over the past 6 months?"
-- "Which marketing channels are driving the highest lifetime value customers?"
-- "How has our monthly recurring revenue grown year-over-year?"
+## Tool Reference
 
-**Operational Insights:**
-- "What percentage of orders are shipped within 2 days?"
-- "Which product categories have the highest return rates?"
-- "How does customer support response time correlate with satisfaction scores?"
+• `list_dbt_models` – list & filter models  
+• `search_dbt_models` – semantic search  
+• `get_model_details` – detailed metadata
 
-**Cohort & Segmentation:**
-- "How do user retention rates differ between subscription tiers?"
-- "What are the characteristics of our most valuable customer segment?"
-- "How has user engagement changed since the new feature launch?"
-
-## Analysis Workflow
-
-### 1. **Discovery Phase**
-Start with: `get_project_summary`
-→ Understand what data domains you have
-→ Identify key business areas
-
-### 2. **Exploration Phase**  
-Use: `search_dbt_models` with business terms
-→ Find models related to your analysis area
-→ Review model descriptions and metadata
-
-### 3. **Investigation Phase**
-Use: `get_model_details` on relevant models
-→ Examine SQL and business logic
-→ Understand data transformations and calculations
-
-### 4. **Synthesis Phase**
-Combine discovered models and their SQL
-→ Build comprehensive understanding of data flow
-→ Compose analytical insights from multiple sources
-
-## Available Tools:
-- `list_dbt_models`: Explore all available data models
-- `search_dbt_models`: Find relevant models using natural language
-- `get_model_details`: Deep dive into specific models
-- `get_project_summary`: Understand your data ecosystem
-
-Ready to start your analysis? Begin by exploring your project structure and discovering relevant models!
-"""
+When responding, clearly explain *which* models you used and *why* they answer the question. If no suitable model exists, say so and suggest next steps (e.g., create a new model or gather additional data)."""
 
 
 # ---------------------------------------------------------------------------
@@ -604,7 +502,7 @@ if __name__ == "__main__":
     logger.info("🚀 Starting MCP server...")
     logger.info("📍 Server will run on: http://0.0.0.0:8080")
     logger.info(
-        "🔧 Available tools: list_dbt_models, search_dbt_models, get_model_details, get_project_summary"
+        "🔧 Available tools: list_dbt_models, search_dbt_models, get_model_details"
     )
     logger.info("📝 Available prompts: ragstar_introduction, data_analysis_guidance")
     logger.info("🌐 OAuth endpoints available at: /oauth/auth/...")

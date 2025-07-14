@@ -189,17 +189,10 @@ def mcp_validate_token(request):
 def mcp_list_models(request):
     """List dbt models with filtering and organization scoping for MCP server."""
     try:
-        # Extract JWT token from Authorization header
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                {"error": "Authorization header required"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove 'Bearer ' prefix
-        user_data = _validate_jwt_token(token)
-        organisation_id = user_data.get("organisation_id")
+        # Authentication temporarily disabled – organisation scoping is now optional.
+        # If a caller still wishes to scope results they can pass `organisation_id` as
+        # a query parameter. When we re-enable auth this logic can be reverted.
+        organisation_id = request.GET.get("organisation_id")
 
         # Get query parameters
         project_name = request.GET.get("project_name")
@@ -207,10 +200,10 @@ def mcp_list_models(request):
         materialization = request.GET.get("materialization")
         limit = min(int(request.GET.get("limit", 50)), 200)
 
-        # Build queryset with organization scoping
-        queryset = Model.objects.select_related("dbt_project").filter(
-            organisation_id=organisation_id
-        )
+        # Build queryset and apply organisation filter only when provided
+        queryset = Model.objects.select_related("dbt_project")
+        if organisation_id:
+            queryset = queryset.filter(organisation_id=organisation_id)
 
         # Apply filters
         if project_name:
@@ -270,17 +263,10 @@ def mcp_list_models(request):
 def mcp_search_models(request):
     """Search dbt models using semantic similarity for MCP server."""
     try:
-        # Extract JWT token from Authorization header
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                {"error": "Authorization header required"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove 'Bearer ' prefix
-        user_data = _validate_jwt_token(token)
-        organisation_id = user_data.get("organisation_id")
+        # Authentication temporarily disabled – organisation_id may be supplied in body.
+        # If absent, attempt to find an organisation that has the 'claude_mcp' integration
+        # enabled so we can still run embeddings for development/testing.
+        organisation_id = None
 
         # Get request data
         data = json.loads(request.body)
@@ -288,39 +274,101 @@ def mcp_search_models(request):
         limit = min(data.get("limit", 10), 50)
         similarity_threshold = data.get("similarity_threshold", 0.7)
 
+        # ------------------------------------------------------------------
+        # Resolve organisation_id fallback using claude_mcp integration
+        # ------------------------------------------------------------------
+        if not organisation_id:
+            claude_integration = OrganisationIntegration.objects.filter(
+                integration_key="claude_mcp", is_enabled=True
+            ).first()
+            if claude_integration:
+                organisation_id = claude_integration.organisation_id
+
+        # ------------------------------------------------------------------
+        # Retrieve organisation settings for embedding service (may still be None)
+        # ------------------------------------------------------------------
+        org_settings = None
+        if organisation_id:
+            try:
+                org_settings = OrganisationSettings.objects.get(
+                    organisation_id=organisation_id
+                )
+            except OrganisationSettings.DoesNotExist:
+                logger.warning(
+                    "OrganisationSettings not found for organisation_id=%s",
+                    organisation_id,
+                )
+
         if not query:
             return Response(
                 {"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get organization settings
-        try:
-            org_settings = OrganisationSettings.objects.get(
-                organisation_id=organisation_id
-            )
-        except OrganisationSettings.DoesNotExist:
-            return Response(
-                {"error": "Organization settings not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+        # Attempt semantic embedding search; fall back to simple text search on failure
+        fallback_plain_search = False
+        similar_models = []
 
-        # Get embedding for the query
-        embedding_service = EmbeddingService()
-        query_embedding = embedding_service.get_embedding(query)
+        if org_settings:
+            try:
+                embedding_service = EmbeddingService(org_settings)
+                if embedding_service.client:
+                    query_embedding = embedding_service.get_embedding(query)
+                else:
+                    query_embedding = None
+            except Exception as e:
+                logger.warning("EmbeddingService init or embedding failed: %s", e)
+                query_embedding = None
+        else:
+            query_embedding = None
 
-        # Use pgvector cosine distance search with organization scoping
-        similar_models = (
-            ModelEmbedding.objects.filter(organisation_id=organisation_id)
-            .annotate(similarity=1 - CosineDistance("embedding", query_embedding))
-            .filter(similarity__gte=similarity_threshold)
-            .select_related("model", "model__dbt_project")
-            .order_by("-similarity")[:limit]
-        )
+        if query_embedding is not None:
+            # Vector similarity search
+            similar_models_qs = ModelEmbedding.objects.all()
+            if organisation_id:
+                similar_models_qs = similar_models_qs.filter(
+                    organisation_id=organisation_id
+                )
+
+            similar_models = (
+                similar_models_qs.annotate(
+                    similarity=1 - CosineDistance("embedding", query_embedding)
+                )
+                .filter(similarity__gte=similarity_threshold)
+                .select_related("model", "model__dbt_project")
+                .order_by("-similarity")[:limit]
+            )
+        else:
+            # Fallback: plain text search across model name and descriptions
+            fallback_plain_search = True
+            model_qs = Model.objects.select_related("dbt_project")
+            if organisation_id:
+                model_qs = model_qs.filter(organisation_id=organisation_id)
+
+            model_qs = model_qs.filter(
+                (
+                    models.Q(name__icontains=query)
+                    | models.Q(yml_description__icontains=query)
+                    | models.Q(interpreted_description__icontains=query)
+                )
+            )[:limit]
+
+            # Wrap into a structure resembling embedding results
+            for model in model_qs:
+                similar_models.append(
+                    type(
+                        "Dummy",
+                        (),
+                        {
+                            "model": model,
+                            "similarity": None,
+                        },
+                    )
+                )
 
         # Format response
         results = []
         for embedding in similar_models:
-            model = embedding.model
+            model = embedding.model if not fallback_plain_search else embedding.model
             results.append(
                 {
                     "model": {
@@ -346,7 +394,16 @@ def mcp_search_models(request):
                             model.updated_at.isoformat() if model.updated_at else None
                         ),
                     },
-                    "similarity": float(embedding.similarity),
+                    "similarity": (
+                        float(embedding.similarity)
+                        if not fallback_plain_search
+                        else None
+                    ),
+                    "match_reason": (
+                        f"Semantic similarity >= {similarity_threshold}"
+                        if not fallback_plain_search
+                        else "Plain text match"
+                    ),
                 }
             )
 
@@ -372,17 +429,8 @@ def mcp_search_models(request):
 def mcp_get_model_details(request):
     """Get detailed information about specific dbt models for MCP server."""
     try:
-        # Extract JWT token from Authorization header
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                {"error": "Authorization header required"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove 'Bearer ' prefix
-        user_data = _validate_jwt_token(token)
-        organisation_id = user_data.get("organisation_id")
+        # Authentication disabled – organisation scoping optional via query param
+        organisation_id = request.GET.get("organisation_id")
 
         # Get query parameters
         name = request.GET.get("name")
@@ -393,13 +441,9 @@ def mcp_get_model_details(request):
                 {"error": "Model name is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Build queryset with organization scoping
-        queryset = Model.objects.select_related("dbt_project").filter(
-            organisation_id=organisation_id, name=name
-        )
-
-        if project_name:
-            queryset = queryset.filter(dbt_project__name__icontains=project_name)
+        queryset = Model.objects.select_related("dbt_project").filter(name=name)
+        if organisation_id:
+            queryset = queryset.filter(organisation_id=organisation_id)
 
         models = list(queryset)
 
@@ -460,23 +504,17 @@ def mcp_get_model_details(request):
 def mcp_get_project_summary(request):
     """Get summary of dbt projects for MCP server."""
     try:
-        # Extract JWT token from Authorization header
-        auth_header = request.headers.get("Authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return Response(
-                {"error": "Authorization header required"},
-                status=status.HTTP_401_UNAUTHORIZED,
-            )
-
-        token = auth_header[7:]  # Remove 'Bearer ' prefix
-        user_data = _validate_jwt_token(token)
-        organisation_id = user_data.get("organisation_id")
+        # Authentication disabled – organisation scoping optional via query param
+        organisation_id = request.GET.get("organisation_id")
 
         # Get query parameters
         project_name = request.GET.get("project_name")
 
-        # Build queryset with organization scoping
-        projects_queryset = DbtProject.objects.filter(organisation_id=organisation_id)
+        projects_queryset = DbtProject.objects.all()
+        if organisation_id:
+            projects_queryset = projects_queryset.filter(
+                organisation_id=organisation_id
+            )
 
         if project_name:
             projects_queryset = projects_queryset.filter(name__icontains=project_name)
@@ -487,9 +525,10 @@ def mcp_get_project_summary(request):
         results = []
         for project in projects:
             # Get model count for this project
-            model_count = Model.objects.filter(
-                organisation_id=organisation_id, dbt_project=project
-            ).count()
+            model_qs = Model.objects.filter(dbt_project=project)
+            if organisation_id:
+                model_qs = model_qs.filter(organisation_id=organisation_id)
+            model_count = model_qs.count()
 
             results.append(
                 {
