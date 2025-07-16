@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { Button } from "@/components/ui/button";
 import { StarIcon } from "@heroicons/react/24/outline";
+import { WaitlistModal } from "@/components/waitlist-modal";
 
 export default function CtaSection() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -16,8 +17,8 @@ export default function CtaSection() {
             Ready to stop being a human SQL compiler?
           </h2>
           <p className="mx-auto mt-6 max-w-xl text-lg/8 text-pretty text-gray-300">
-            Join thousands of data engineers who've reclaimed their time and
-            become heroes instead of bottlenecks.
+            Join thousands of data engineers who&apos;ve reclaimed their time
+            and become heroes instead of bottlenecks.
           </p>
           <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             {isLoading ? null : isAuthenticated ? (
@@ -29,12 +30,16 @@ export default function CtaSection() {
               </Button>
             ) : (
               <>
-                <Button
-                  size="lg"
-                  className="bg-white text-gray-900 hover:bg-gray-200"
-                >
-                  <Link href="/signup">Join Cloud Waitlist</Link>
-                </Button>
+                <WaitlistModal
+                  trigger={
+                    <Button
+                      size="lg"
+                      className="bg-white text-gray-900 hover:bg-gray-200"
+                    >
+                      Join Cloud Waitlist
+                    </Button>
+                  }
+                />
                 <Button
                   variant="outline"
                   size="lg"

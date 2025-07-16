@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { Button } from "@/components/ui/button";
 import { Github } from "lucide-react";
+import { WaitlistModal } from "@/components/waitlist-modal";
 
 /**
  * Marketing hero section displayed on the public landing page ("/").
@@ -92,10 +93,7 @@ export default function LandingHero() {
                 MIT License
               </span>
               {/* GitHub Star Button */}
-              <a
-                href="https://github.com/pragunbhutani/dbt-llm-agent"
-                target="_blank"
-                rel="noopener noreferrer"
+              <p
                 className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm/6 font-medium text-gray-700 hover:bg-gray-200 transition"
                 style={{ lineHeight: "1.5" }}
                 aria-label="Star dbt-llm-agent on GitHub"
@@ -107,7 +105,7 @@ export default function LandingHero() {
                     {starCount?.toLocaleString()}
                   </span>
                 )}
-              </a>
+              </p>
 
               {latestTag && (
                 <span className="inline-flex items-center space-x-2 text-sm/6 font-medium text-gray-600">
@@ -136,9 +134,9 @@ export default function LandingHero() {
                   <Link href="/dashboard">Go to Dashboard</Link>
                 </Button>
               ) : (
-                <Button size="lg" asChild>
-                  <Link href="/signup">Join Cloud Waitlist</Link>
-                </Button>
+                <WaitlistModal
+                  trigger={<Button size="lg">Join Cloud Waitlist</Button>}
+                />
               )}
               <Button variant="outline" size="lg" asChild>
                 <Link
@@ -180,7 +178,8 @@ export default function LandingHero() {
                       💼 Head of Product asks:
                     </p>
                     <p className="text-white">
-                      "What's driving the drop in user activation this month?"
+                      &quot;What&apos;s driving the drop in user activation this
+                      month?&quot;
                     </p>
                   </div>
                   <div className="bg-indigo-600 rounded-lg p-4">
@@ -188,13 +187,14 @@ export default function LandingHero() {
                       🤖 Ragstar responds:
                     </p>
                     <p className="text-white text-sm mb-3">
-                      "User activation dropped 12% due to email verification
-                      issues. Here's the funnel analysis and the fix:"
+                      &quot;User activation dropped 12% due to email
+                      verification issues. Here&apos;s the funnel analysis and
+                      the fix:&quot;
                     </p>
                     <div className="bg-indigo-700 rounded p-3 text-xs font-mono">
                       SELECT funnel_step, conversion_rate{"\n"}
                       FROM user_activation_funnel{"\n"}
-                      WHERE created_at &gt;= '2024-01-01'...
+                      WHERE created_at &gt;= &apos;2024-01-01&apos;...
                     </div>
                   </div>
                   <div className="flex items-center justify-between text-xs text-gray-400">

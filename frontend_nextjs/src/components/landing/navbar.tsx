@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useAuth } from "@/lib/useAuth";
 import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
+import { WaitlistModal } from "@/components/waitlist-modal";
 
 const navigation = [
   { name: "Features", href: "#features" },
@@ -30,7 +32,13 @@ export default function Navbar() {
         <div className="flex lg:flex-1">
           <Link href="/" className="-m-1.5 p-1.5">
             <span className="sr-only">Ragstar</span>
-            <img className="h-8 w-auto" src="/file.svg" alt="Ragstar" />
+            <Image
+              className="h-8 w-auto"
+              src="/file.svg"
+              alt="Ragstar"
+              width={32}
+              height={32}
+            />
           </Link>
         </div>
         <div className="flex lg:hidden">
@@ -68,9 +76,7 @@ export default function Navbar() {
               <Button variant="ghost" asChild>
                 <Link href="/signin">Sign in</Link>
               </Button>
-              <Button asChild>
-                <Link href="/signup">Join Cloud Waitlist</Link>
-              </Button>
+              <WaitlistModal trigger={<Button>Join Cloud Waitlist</Button>} />
             </>
           )}
         </div>
@@ -84,7 +90,13 @@ export default function Navbar() {
             <div className="flex items-center justify-between">
               <Link href="/" className="-m-1.5 p-1.5">
                 <span className="sr-only">Ragstar</span>
-                <img className="h-8 w-auto" src="/file.svg" alt="Ragstar" />
+                <Image
+                  className="h-8 w-auto"
+                  src="/file.svg"
+                  alt="Ragstar"
+                  width={32}
+                  height={32}
+                />
               </Link>
               <button
                 type="button"
@@ -123,9 +135,13 @@ export default function Navbar() {
                       <Button variant="ghost" asChild className="w-full">
                         <Link href="/signin">Sign in</Link>
                       </Button>
-                      <Button asChild className="w-full">
-                        <Link href="/signup">Sign up</Link>
-                      </Button>
+                      <WaitlistModal
+                        trigger={
+                          <Button className="w-full">
+                            Join Cloud Waitlist
+                          </Button>
+                        }
+                      />
                     </>
                   )}
                 </div>

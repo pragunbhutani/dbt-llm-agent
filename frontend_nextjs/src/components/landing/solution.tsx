@@ -73,7 +73,7 @@ export default function Solution() {
         {/* Main headline */}
         <div className="text-center mb-16">
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            It's time to automate the mundane
+            It&apos;s time to automate the mundane
           </h2>
           <p className="text-lg text-gray-600 max-w-3xl mx-auto">
             Self-serve analytics that understands your dbt projects, turns

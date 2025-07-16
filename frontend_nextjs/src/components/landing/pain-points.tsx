@@ -15,7 +15,7 @@ const painPoints = [
     icon: Clock,
     title: "50% Time Drain",
     description:
-      'Data engineers spend half their time answering questions like "What\'s our churn?" for the 20th time.',
+      'Data engineers spend half their time answering questions like "What&apos;s our churn?" for the 20th time.',
     color: "text-red-500",
     stat: "50%",
   },
@@ -104,8 +104,8 @@ export default function PainPoints() {
               <span className="font-semibold text-gray-900">
                 The bottom line:
               </span>{" "}
-              You're stuck writing repetitive SQL queries instead of driving
-              impact.
+              You&apos;re stuck writing repetitive SQL queries instead of
+              driving impact.
             </div>
           </div>
         </div>

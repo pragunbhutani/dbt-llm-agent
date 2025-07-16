@@ -1,5 +1,7 @@
 "use client";
 
+import Image from "next/image";
+
 const featuredTestimonial = {
   body: "Ragstar freed up 10 hours of my week — now I can focus on modeling instead of answering tickets.",
   author: {
@@ -163,10 +165,12 @@ export default function Testimonials() {
               <p>{`"${featuredTestimonial.body}"`}</p>
             </blockquote>
             <figcaption className="flex flex-wrap items-center gap-x-4 gap-y-4 border-t border-gray-900/10 px-6 py-4 sm:flex-nowrap">
-              <img
+              <Image
                 alt=""
                 src={featuredTestimonial.author.imageUrl}
                 className="size-10 flex-none rounded-full bg-gray-50"
+                width={40}
+                height={40}
               />
               <div className="flex-auto">
                 <div className="font-semibold">
@@ -176,10 +180,12 @@ export default function Testimonials() {
                   @{featuredTestimonial.author.handle}
                 </div>
               </div>
-              <img
+              <Image
                 alt=""
                 src={featuredTestimonial.author.logoUrl}
                 className="h-10 w-auto flex-none"
+                width={40}
+                height={40}
               />
             </figcaption>
           </figure>
@@ -209,10 +215,12 @@ export default function Testimonials() {
                         <p>{`"${testimonial.body}"`}</p>
                       </blockquote>
                       <figcaption className="mt-6 flex items-center gap-x-4">
-                        <img
+                        <Image
                           alt=""
                           src={testimonial.author.imageUrl}
                           className="size-10 rounded-full bg-gray-50"
+                          width={40}
+                          height={40}
                         />
                         <div>
                           <div className="font-semibold">
