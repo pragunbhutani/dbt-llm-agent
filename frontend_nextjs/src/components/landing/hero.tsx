@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { ChevronRightIcon, ArrowRightIcon } from "@heroicons/react/20/solid";
-import { StarIcon } from "@heroicons/react/24/outline";
+import { StarIcon, ScaleIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
 import { Button } from "@/components/ui/button";
+import { Github } from "lucide-react";
 
 /**
  * Marketing hero section displayed on the public landing page ("/").
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 export default function LandingHero() {
   const { isAuthenticated, isLoading } = useAuth();
   const [latestTag, setLatestTag] = useState<string | null>(null);
+  const [starCount, setStarCount] = useState<number | null>(null);
 
   // Retrieve most recent Git tag once on mount.
   useEffect(() => {
@@ -32,7 +34,22 @@ export default function LandingHero() {
       }
     }
 
+    async function fetchStarCount() {
+      try {
+        const res = await fetch(
+          "https://api.github.com/repos/pragunbhutani/dbt-llm-agent"
+        );
+        if (res.ok) {
+          const json = (await res.json()) as { stargazers_count: number };
+          setStarCount(json.stargazers_count);
+        }
+      } catch (err) {
+        console.error("Unable to fetch star count", err);
+      }
+    }
+
     fetchLatestTag();
+    fetchStarCount();
   }, []);
 
   return (
@@ -71,9 +88,27 @@ export default function LandingHero() {
               rel="noopener noreferrer"
             >
               <span className="rounded-full bg-indigo-600/10 px-3 py-1 text-sm/6 font-semibold text-indigo-600 ring-1 ring-indigo-600/10 ring-inset flex items-center gap-2">
-                <StarIcon className="h-4 w-4" />
-                Open Source
+                <ScaleIcon className="h-4 w-4" />
+                MIT License
               </span>
+              {/* GitHub Star Button */}
+              <a
+                href="https://github.com/pragunbhutani/dbt-llm-agent"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-full bg-gray-100 px-3 py-1 text-sm/6 font-medium text-gray-700 hover:bg-gray-200 transition"
+                style={{ lineHeight: "1.5" }}
+                aria-label="Star dbt-llm-agent on GitHub"
+              >
+                <StarIcon className="h-4 w-4 mr-1 text-yellow-500" />
+                <span>Star</span>
+                {typeof starCount === "number" && (
+                  <span className="ml-2 font-semibold text-gray-900 tabular-nums">
+                    {starCount?.toLocaleString()}
+                  </span>
+                )}
+              </a>
+
               {latestTag && (
                 <span className="inline-flex items-center space-x-2 text-sm/6 font-medium text-gray-600">
                   <span>{`Latest: ${latestTag}`}</span>
@@ -111,7 +146,7 @@ export default function LandingHero() {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <StarIcon className="h-4 w-4 mr-2" />
+                  <Github className="h-4 w-4 mr-2" />
                   GitHub
                 </Link>
               </Button>

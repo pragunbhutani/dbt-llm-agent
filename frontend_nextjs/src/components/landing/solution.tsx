@@ -68,17 +68,16 @@ const workflow = [
 
 export default function Solution() {
   return (
-    <section className="py-16 px-4 bg-gray-50">
+    <section className="py-24 px-4 bg-gray-50">
       <div className="container mx-auto max-w-6xl">
         {/* Main headline */}
         <div className="text-center mb-16">
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            The AI data analyst that data engineers trust
+            It's time to automate the mundane
           </h2>
           <p className="text-lg text-gray-600 max-w-3xl mx-auto">
-            Self-serve analytics that understands your dbt projects, respects
-            governance, and turns stakeholders into data analysts — while
-            keeping you in control.
+            Self-serve analytics that understands your dbt projects, turns
+            stakeholders into data analysts and lets you focus on building.
           </p>
         </div>
 

@@ -15,7 +15,7 @@ const painPoints = [
     icon: Clock,
     title: "50% Time Drain",
     description:
-      'Data engineers spend half their time answering repetitive questions instead of building. "What\'s our churn?" for the 20th time.',
+      'Data engineers spend half their time answering questions like "What\'s our churn?" for the 20th time.',
     color: "text-red-500",
     stat: "50%",
   },
@@ -23,15 +23,14 @@ const painPoints = [
     icon: MessageSquare,
     title: "Constant Interruptions",
     description:
-      "Every Slack ping is another ad-hoc request. Product needs segments, Marketing wants cohorts, Executives need board numbers.",
+      "Product needs segments, Marketing wants cohorts, Executives need board numbers.",
     color: "text-orange-500",
     stat: "10x/day",
   },
   {
     icon: Users,
     title: "Onboarding Nightmare",
-    description:
-      'New hires take months to understand dbt models. They\'re afraid to query production and ask "where do I find X?"',
+    description: "New hires take months to understand dbt models.",
     color: "text-yellow-500",
     stat: "3+ months",
   },
@@ -39,7 +38,7 @@ const painPoints = [
     icon: TrendingDown,
     title: "Innovation Stagnation",
     description:
-      "While you explain the same joins, competitors build AI features. Your team's impact is invisible to leadership.",
+      "While you explain the same joins, your team's impact is invisible to leadership.",
     color: "text-blue-500",
     stat: "↓ Impact",
   },
@@ -47,7 +46,7 @@ const painPoints = [
     icon: AlertCircle,
     title: "Data Blind Spots",
     description:
-      "You don't know if analysts are using the right tables or what questions they're asking. No visibility into data usage patterns.",
+      "You don't know if analysts are using the right tables or what questions they're asking.",
     color: "text-purple-500",
     stat: "Unknown",
   },
@@ -55,7 +54,7 @@ const painPoints = [
     icon: Search,
     title: "Knowledge Silos",
     description:
-      "Critical business logic lives in your head. When you're on vacation, the company slows down waiting for answers.",
+      "Critical business logic lives in your head. When you're away, the company has to wait for answers.",
     color: "text-pink-500",
     stat: "1 person",
   },
@@ -63,19 +62,19 @@ const painPoints = [
 
 export default function PainPoints() {
   return (
-    <section className="py-16 px-4 bg-white">
+    <section className="py-24 px-4 bg-white">
       <div className="container mx-auto max-w-6xl">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-gray-900 mb-4">
-            Sound familiar?
+            Does this sound familiar?
           </h2>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            You became a data engineer to build the future, not be a human SQL
-            compiler. Every day feels like Groundhog Day.
+            Your team is stuck writing repetitive SQL queries instead of driving
+            impact.
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 py-4">
           {painPoints.map((point, index) => (
             <Card
               key={index}
@@ -99,14 +98,14 @@ export default function PainPoints() {
           ))}
         </div>
 
-        <div className="mt-12 text-center">
+        <div className="mt-16 text-center">
           <div className="inline-flex items-center justify-center px-6 py-3 border border-gray-300 rounded-lg bg-white">
             <div className="text-sm text-gray-600">
               <span className="font-semibold text-gray-900">
                 The bottom line:
               </span>{" "}
-              You're stuck in reactive mode instead of driving innovation. It's
-              time to automate the mundane and focus on what matters.
+              You're stuck writing repetitive SQL queries instead of driving
+              impact.
             </div>
           </div>
         </div>
