@@ -1,19 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ChevronRightIcon } from "@heroicons/react/20/solid";
+import { ChevronRightIcon, ArrowRightIcon } from "@heroicons/react/20/solid";
+import { StarIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
+import { Button } from "@/components/ui/button";
 
 /**
  * Marketing hero section displayed on the public landing page ("/").
- *
- * Features:
- * 1. Fetches the latest tag from the dbt-llm-agent repo to surface in the "What's new" pill.
- * 2. Re-uses Tailwind template provided by the user for visual styling.
- * 3. Shows contextual CTA:
- *    • Authenticated users → "Go to dashboard" button.
- *    • Guests → "Get started" (signup) + secondary "Learn more" link.
  */
 export default function LandingHero() {
   const { isAuthenticated, isLoading } = useAuth();
@@ -33,7 +28,6 @@ export default function LandingHero() {
           }
         }
       } catch (err) {
-        // Silently fail – we’ll just hide the tag.
         console.error("Unable to fetch latest tag", err);
       }
     }
@@ -66,75 +60,114 @@ export default function LandingHero() {
           strokeWidth={0}
         />
       </svg>
-      <div className="mx-auto max-w-7xl px-6 pt-10 pb-24 sm:pb-32 lg:flex lg:px-8 lg:py-40">
+      <div className="mx-auto max-w-7xl px-6 pb-24 sm:pb-32 lg:flex lg:px-8 lg:py-24">
         {/* Left column */}
         <div className="mx-auto max-w-2xl lg:mx-0 lg:shrink-0 lg:pt-8">
-          {/* Logo placeholder – replace with real asset when available */}
-          <img alt="Ragstar logo" src="/file.svg" className="h-11" />
           <div className="mt-24 sm:mt-32 lg:mt-16">
-            <a
-              href="https://github.com/pragunbhutani/dbt-llm-agent/releases"
-              className="inline-flex space-x-6"
+            <Link
+              href="https://github.com/pragunbhutani/dbt-llm-agent"
+              className="inline-flex items-center space-x-6"
+              target="_blank"
+              rel="noopener noreferrer"
             >
-              <span className="rounded-full bg-indigo-600/10 px-3 py-1 text-sm/6 font-semibold text-indigo-600 ring-1 ring-indigo-600/10 ring-inset">
-                What's new
+              <span className="rounded-full bg-indigo-600/10 px-3 py-1 text-sm/6 font-semibold text-indigo-600 ring-1 ring-indigo-600/10 ring-inset flex items-center gap-2">
+                <StarIcon className="h-4 w-4" />
+                Open Source
               </span>
               {latestTag && (
                 <span className="inline-flex items-center space-x-2 text-sm/6 font-medium text-gray-600">
-                  <span>{`Just shipped ${latestTag}`}</span>
+                  <span>{`Latest: ${latestTag}`}</span>
                   <ChevronRightIcon
                     aria-hidden="true"
                     className="size-5 text-gray-400"
                   />
                 </span>
               )}
-            </a>
+            </Link>
           </div>
           <h1 className="mt-10 text-5xl font-semibold tracking-tight text-pretty text-gray-900 sm:text-7xl">
-            Turn questions into insights — instantly
+            Stop spending your time writing repetitive SQL queries
           </h1>
           <p className="mt-8 text-lg font-medium text-pretty text-gray-500 sm:text-xl/8">
-            Ragstar connects to your dbt project and warehouse so anyone can ask
-            questions in plain English and get production-ready SQL, charts, and
-            context in seconds.
+            Self-serve analytics that data engineers trust. Ragstar connects to
+            your dbt projects and warehouse so anyone can ask questions in plain
+            English — while you focus on building.
           </p>
-          <div className="mt-10 flex items-center gap-x-6">
-            {isLoading ? null : isAuthenticated ? (
-              <Link
-                href="/dashboard"
-                className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-              >
-                Go to dashboard
-              </Link>
-            ) : (
-              <>
+
+          <div className="mt-10 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <div className="flex items-center gap-x-4">
+              {isLoading ? null : isAuthenticated ? (
+                <Button size="lg" asChild>
+                  <Link href="/dashboard">Go to Dashboard</Link>
+                </Button>
+              ) : (
+                <Button size="lg" asChild>
+                  <Link href="/signup">Join Cloud Waitlist</Link>
+                </Button>
+              )}
+              <Button variant="outline" size="lg" asChild>
                 <Link
-                  href="/signup"
-                  className="rounded-md bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
+                  href="https://github.com/pragunbhutani/dbt-llm-agent"
+                  target="_blank"
+                  rel="noopener noreferrer"
                 >
-                  Get started
+                  <StarIcon className="h-4 w-4 mr-2" />
+                  GitHub
                 </Link>
-                <Link
-                  href="#features"
-                  className="text-sm/6 font-semibold text-gray-900"
-                >
-                  Learn more <span aria-hidden="true">→</span>
-                </Link>
-              </>
-            )}
+              </Button>
+            </div>
+          </div>
+
+          <div className="mt-8 flex items-center gap-6 text-sm text-gray-600">
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-green-500"></div>
+              <span>Open Source & Self-Hosted</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="h-2 w-2 rounded-full bg-blue-500"></div>
+              <span>Cloud @ $99/month (waitlist)</span>
+            </div>
           </div>
         </div>
-        {/* Right column – screenshot */}
-        <div className="mx-auto mt-16 flex max-w-2xl sm:mt-24 lg:mt-0 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-32">
+
+        {/* Right column – demo */}
+        <div className="mx-auto mt-16 flex max-w-2xl sm:mt-40 lg:mr-0 lg:ml-10 lg:max-w-none lg:flex-none xl:ml-24">
           <div className="max-w-3xl flex-none sm:max-w-5xl lg:max-w-none">
             <div className="-m-2 rounded-xl bg-gray-900/5 p-2 ring-1 ring-gray-900/10 ring-inset lg:-m-4 lg:rounded-2xl lg:p-4">
-              <img
-                alt="App screenshot"
-                src="https://tailwindcss.com/plus-assets/img/component-images/project-app-screenshot.png"
-                width={2432}
-                height={1442}
-                className="w-304 rounded-md shadow-2xl ring-1 ring-gray-900/10"
-              />
+              <div className="bg-gradient-to-br from-gray-900 to-gray-800 rounded-2xl p-6 text-white max-w-2xl">
+                <div className="space-y-4">
+                  <div className="flex items-center space-x-2 text-green-400">
+                    <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                    <span className="text-sm">Connected to dbt Cloud</span>
+                  </div>
+                  <div className="bg-gray-800 rounded-lg p-4">
+                    <p className="text-sm text-gray-300 mb-2">
+                      💼 Head of Product asks:
+                    </p>
+                    <p className="text-white">
+                      "What's driving the drop in user activation this month?"
+                    </p>
+                  </div>
+                  <div className="bg-indigo-600 rounded-lg p-4">
+                    <p className="text-sm text-indigo-200 mb-2">
+                      🤖 Ragstar responds:
+                    </p>
+                    <p className="text-white text-sm mb-3">
+                      "User activation dropped 12% due to email verification
+                      issues. Here's the funnel analysis and the fix:"
+                    </p>
+                    <div className="bg-indigo-700 rounded p-3 text-xs font-mono">
+                      SELECT funnel_step, conversion_rate{"\n"}
+                      FROM user_activation_funnel{"\n"}
+                      WHERE created_at &gt;= '2024-01-01'...
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-xs text-gray-400">
+                    <span>⚡ Answered in 3.2s</span>
+                    <span>✅ Using prod models</span>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

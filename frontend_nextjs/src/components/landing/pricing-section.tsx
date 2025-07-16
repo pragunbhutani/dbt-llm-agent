@@ -1,39 +1,54 @@
 "use client";
 
 import { CheckIcon } from "@heroicons/react/20/solid";
+import { StarIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
+import { Button } from "@/components/ui/button";
 
 // Pricing tiers configuration
 const tiers = [
   {
     name: "Open Source",
     id: "tier-open-source",
-    href: "https://github.com/pragunbhutani/ragstar",
+    href: "https://github.com/pragunbhutani/dbt-llm-agent",
     priceMonthly: "$0",
-    description: "Self-host Ragstar for free with full access to the codebase.",
+    priceDescription: "Forever free",
+    description:
+      "Perfect for data teams who want full control and customization. Deploy anywhere, modify anything.",
     features: [
+      "Complete source code (MIT license)",
       "Self-hosted deployment",
       "Unlimited dbt projects",
+      "All core AI features",
       "Community support",
-      "MIT licence",
+      "MCP server integration",
+      "Docker & Kubernetes ready",
     ],
     featured: false,
+    ctaText: "View on GitHub",
+    badge: "Most Popular",
   },
   {
     name: "Ragstar Cloud",
     id: "tier-cloud",
     href: "/signup",
     priceMonthly: "$99",
+    priceDescription: "per month",
     description:
-      "Fully managed cloud instance with premium features and priority support.",
+      "Fully managed cloud instance with premium features, enterprise security, and priority support.",
     features: [
       "Fully managed hosting",
       "Advanced analytics & insights",
-      "Priority support",
-      "Team collaboration",
-      "Premium integrations",
+      "Priority support (24/7)",
+      "Team collaboration tools",
+      "Enterprise integrations",
+      "SOC2 compliance",
+      "SLA guarantees",
+      "Advanced governance controls",
     ],
     featured: true,
+    ctaText: "Join Waitlist",
+    badge: "Invite Only",
   },
 ] as const;
 
@@ -46,7 +61,7 @@ export default function PricingSection() {
   return (
     <div
       id="pricing"
-      className="relative isolate bg-white px-6 py-16 sm:py-24 lg:px-8"
+      className="relative isolate bg-gray-50 px-6 py-16 sm:py-24 lg:px-8"
     >
       {/* Background shape */}
       <div
@@ -68,12 +83,11 @@ export default function PricingSection() {
           Pricing
         </h2>
         <p className="mt-2 text-5xl font-semibold tracking-tight text-gray-900 sm:text-6xl">
-          Choose the right plan for you
+          Start free, scale when ready
         </p>
       </div>
       <p className="mx-auto mt-6 max-w-2xl text-center text-lg text-gray-600 sm:text-xl">
-        Choose an affordable plan that’s packed with the best features for
-        engaging your audience, creating customer loyalty, and driving sales.
+        Begin with open source and upgrade to managed cloud when ready to scale.
       </p>
 
       {/* Pricing cards */}
@@ -93,6 +107,23 @@ export default function PricingSection() {
               "rounded-3xl p-8 ring-1 ring-gray-900/10 sm:p-10"
             )}
           >
+            {/* Badge */}
+            {tier.badge && (
+              <div className="mb-4">
+                <span
+                  className={classNames(
+                    tier.featured
+                      ? "bg-indigo-500 text-white"
+                      : "bg-green-100 text-green-700",
+                    "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium"
+                  )}
+                >
+                  {!tier.featured && <StarIcon className="h-3 w-3" />}
+                  {tier.badge}
+                </span>
+              </div>
+            )}
+
             <h3
               id={tier.id}
               className={classNames(
@@ -117,7 +148,7 @@ export default function PricingSection() {
                   "text-base"
                 )}
               >
-                /month
+                {tier.priceDescription}
               </span>
             </p>
             <p
@@ -148,38 +179,64 @@ export default function PricingSection() {
                 </li>
               ))}
             </ul>
+
             {/* CTA */}
-            {tier.href.startsWith("http") ? (
-              <a
-                href={tier.href}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-describedby={tier.id}
-                className={classNames(
-                  tier.featured
-                    ? "bg-indigo-500 text-white shadow-xs hover:bg-indigo-400 focus-visible:outline-indigo-500"
-                    : "text-indigo-600 ring-1 ring-indigo-200 ring-inset hover:ring-indigo-300 focus-visible:outline-indigo-600",
-                  "mt-8 block rounded-md px-3.5 py-2.5 text-center text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 sm:mt-10"
-                )}
-              >
-                {tier.featured ? "Start free trial" : "View on GitHub"}
-              </a>
-            ) : (
-              <Link
-                aria-describedby={tier.id}
-                href={tier.href}
-                className={classNames(
-                  tier.featured
-                    ? "bg-indigo-500 text-white shadow-xs hover:bg-indigo-400 focus-visible:outline-indigo-500"
-                    : "text-indigo-600 ring-1 ring-indigo-200 ring-inset hover:ring-indigo-300 focus-visible:outline-indigo-600",
-                  "mt-8 block rounded-md px-3.5 py-2.5 text-center text-sm font-semibold focus-visible:outline-2 focus-visible:outline-offset-2 sm:mt-10"
-                )}
-              >
-                {tier.featured ? "Start free trial" : "View on GitHub"}
-              </Link>
-            )}
+            <div className="mt-8 sm:mt-10">
+              {tier.href.startsWith("http") ? (
+                <Button
+                  asChild
+                  variant={tier.featured ? "default" : "outline"}
+                  className="w-full"
+                  size="lg"
+                >
+                  <Link
+                    href={tier.href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    aria-describedby={tier.id}
+                  >
+                    {!tier.featured && <StarIcon className="h-4 w-4 mr-2" />}
+                    {tier.ctaText}
+                  </Link>
+                </Button>
+              ) : (
+                <Button
+                  asChild
+                  variant={tier.featured ? "default" : "outline"}
+                  className="w-full"
+                  size="lg"
+                >
+                  <Link href={tier.href} aria-describedby={tier.id}>
+                    {tier.ctaText}
+                  </Link>
+                </Button>
+              )}
+            </div>
           </div>
         ))}
+      </div>
+
+      {/* Additional info */}
+      <div className="mx-auto mt-16 max-w-2xl text-center">
+        <p className="text-gray-600">
+          <strong>Cloud version is invite-only</strong> while we perfect the
+          experience. Join the waitlist to get early access and help shape the
+          product.
+        </p>
+        <div className="mt-6 flex items-center justify-center gap-6 text-sm text-gray-500">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-green-500"></div>
+            <span>No vendor lock-in</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+            <span>MIT license</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-purple-500"></div>
+            <span>Enterprise ready</span>
+          </div>
+        </div>
       </div>
     </div>
   );

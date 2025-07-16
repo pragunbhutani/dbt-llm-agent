@@ -2,42 +2,62 @@
 
 import Link from "next/link";
 import { useAuth } from "@/lib/useAuth";
+import { Button } from "@/components/ui/button";
+import { StarIcon } from "@heroicons/react/24/outline";
 
 export default function CtaSection() {
   const { isAuthenticated, isLoading } = useAuth();
 
   return (
-    <div className="bg-white">
+    <div className="bg-gray-50">
       <div className="mx-auto max-w-7xl py-16 sm:px-6 sm:py-24 lg:px-8">
         <div className="relative isolate overflow-hidden bg-gray-900 px-6 py-24 text-center shadow-2xl sm:rounded-3xl sm:px-16">
           <h2 className="text-4xl font-semibold tracking-tight text-balance text-white sm:text-5xl">
-            Boost your data productivity today
+            Ready to stop being a human SQL compiler?
           </h2>
           <p className="mx-auto mt-6 max-w-xl text-lg/8 text-pretty text-gray-300">
-            Free your team from ad-hoc requests and let everyone explore data
-            securely.
+            Join thousands of data engineers who've reclaimed their time and
+            become heroes instead of bottlenecks.
           </p>
-          <div className="mt-10 flex items-center justify-center gap-x-6">
+          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
             {isLoading ? null : isAuthenticated ? (
-              <Link
-                href="/dashboard"
-                className="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-gray-900 shadow-xs hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
+              <Button
+                size="lg"
+                className="bg-white text-gray-900 hover:bg-gray-100"
               >
-                Go to dashboard
-              </Link>
+                <Link href="/dashboard">Go to Dashboard</Link>
+              </Button>
             ) : (
-              <Link
-                href="/signup"
-                className="rounded-md bg-white px-3.5 py-2.5 text-sm font-semibold text-gray-900 shadow-xs hover:bg-gray-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              >
-                Get started
-              </Link>
+              <>
+                <Button
+                  size="lg"
+                  className="bg-white text-gray-900 hover:bg-gray-200"
+                >
+                  <Link href="/signup">Join Cloud Waitlist</Link>
+                </Button>
+                <Button
+                  variant="outline"
+                  size="lg"
+                  className="border-white text-gray-900 hover:bg-gray-200"
+                  asChild
+                >
+                  <Link
+                    href="https://github.com/pragunbhutani/dbt-llm-agent"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <StarIcon className="w-4 h-4 mr-2" />
+                    Start with Open Source
+                  </Link>
+                </Button>
+              </>
             )}
-            {!isAuthenticated && (
-              <a href="#pricing" className="text-sm/6 font-semibold text-white">
-                Learn more<span aria-hidden="true">→</span>
-              </a>
-            )}
+          </div>
+          <div className="mt-6 text-sm text-gray-400">
+            <span className="font-semibold">Open source:</span> Free forever
+            &nbsp;•&nbsp;
+            <span className="font-semibold">Cloud:</span> $99/month (invite
+            only)
           </div>
           <svg
             viewBox="0 0 1024 1024"
