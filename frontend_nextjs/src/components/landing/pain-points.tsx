@@ -62,7 +62,7 @@ const painPoints = [
 
 export default function PainPoints() {
   return (
-    <section className="py-24 px-4 bg-white">
+    <section className="py-12 px-4 bg-white">
       <div className="container mx-auto max-w-6xl">
         <div className="text-center mb-12">
           <h2 className="text-3xl font-bold text-gray-900 mb-4">

@@ -29,7 +29,7 @@ const features = [
   {
     name: "Enterprise-grade Security",
     description:
-      "SOC2-ready architecture with least-privilege warehouse credentials and encrypted secrets.",
+      "Secure architecture with least-privilege warehouse credentials and encrypted secrets.",
     icon: FingerPrintIcon,
   },
 ] as const;
