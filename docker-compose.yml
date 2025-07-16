@@ -63,6 +63,7 @@ services:
       - DATABASE_URL=${DATABASE_URL:-postgresql://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-ragstar}}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - LOCALSTACK_HOST=localstack
+      - AUTHORIZATION_BASE_URL=${AUTHORIZATION_BASE_URL:-http://localhost:8080}
     depends_on:
       db:
         condition: service_healthy # Wait for DB to be ready
@@ -142,6 +143,28 @@ services:
       - INTERNAL_API_URL=http://backend-django:8000
     depends_on:
       - backend-django
+    restart: unless-stopped
+
+  mcp-server:
+    image: ragstar/mcp_server
+    build:
+      context: ./mcp_server
+      dockerfile: Dockerfile
+    container_name: ragstar_mcp
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./mcp_server:/app
+      - /app/.venv # Exclude the virtual environment from volume mount
+    env_file:
+      - .env
+    environment:
+      - DJANGO_BACKEND_URL=http://backend-django:8000
+      - SECRET_KEY=${SECRET_KEY}
+      - AUTHORIZATION_BASE_URL=${AUTHORIZATION_BASE_URL}
+    depends_on:
+      backend-django:
+        condition: service_started
     restart: unless-stopped
 
 volumes:

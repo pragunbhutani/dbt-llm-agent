@@ -168,6 +168,224 @@ We 💛 community PRs. Please file an issue first for major changes. Make sure `
 
 ---
 
-## 8. License
+---
+
+## 8. MCP Server Integration (Self-Hosted Only)
+
+Ragstar includes a **Model Context Protocol (MCP)** server that allows LLM clients like Claude.ai to directly access your dbt knowledge base. The MCP server provides secure, OAuth-authenticated access to your dbt models and project information.
+
+> **⚠️ Important:** The MCP server can only be used with **self-hosted/open source** deployments of Ragstar. This is due to the **1:1 relationship** between an MCP client and server — each client needs its own dedicated server instance.
+
+### 8.1 What is the MCP Server?
+
+The MCP server acts as a bridge between LLM clients (like Claude.ai) and your Ragstar knowledge base. It provides:
+
+- **Secure OAuth 2.0 authentication** with PKCE
+- **Organization-scoped access** to dbt models and projects
+- **Real-time data access** without manual imports
+- **Semantic search** capabilities across your dbt documentation
+- **Detailed model information** including SQL, lineage, and metadata
+
+### 8.2 Available MCP Tools
+
+The MCP server exposes these tools to LLM clients:
+
+- `list_dbt_models` — Browse and filter dbt models by project, schema, or materialization
+- `search_dbt_models` — Semantic search for relevant models using natural language
+- `get_model_details` — Get detailed information about specific models including SQL and lineage
+- `get_project_summary` — Overview of connected dbt projects and their structure
+
+### 8.3 Setting Up the MCP Server
+
+#### Prerequisites
+
+1. **Self-hosted Ragstar** running with Docker Compose
+2. **dbt project connected** and models loaded in your knowledge base
+3. **LLM client** that supports MCP (e.g., Claude.ai, ChatGPT with MCP support)
+
+#### Configuration
+
+The MCP server runs on port `8080` by default. Add these environment variables to your `.env` file:
+
+```bash
+# MCP Server Configuration
+MCP_AUTHORIZATION_BASE_URL=http://localhost:8000  # Your Django backend URL
+DJANGO_BACKEND_URL=http://localhost:8000          # Backend URL for MCP server
+ALLOWED_ORIGINS=*                                 # Or specific origins for security
+```
+
+#### Starting the MCP Server
+
+The MCP server is included in the Docker Compose stack:
+
+```bash
+# Start all services including MCP server
+docker compose up -d
+
+# Check MCP server health
+curl http://localhost:8080/health
+```
+
+### 8.4 OAuth 2.0 Flow Explanation
+
+The MCP server implements a complete OAuth 2.0 authorization flow with organization-scoped access. Here's how it works:
+
+#### Flow Overview
+
+```mermaid
+sequenceDiagram
+    participant Claude as Claude.ai
+    participant MCP as MCP Server
+    participant Django as Django Backend
+    participant User as User Browser
+
+    Claude->>MCP: 1. Request OAuth metadata
+    MCP->>Django: 2. Proxy metadata request
+    Django->>MCP: 3. Return OAuth configuration
+    MCP->>Claude: 4. OAuth server metadata
+
+    Claude->>MCP: 5. Authorization request (with PKCE)
+    MCP->>Django: 6. Proxy authorization request
+    Django->>User: 7. Redirect to frontend login
+    User->>Django: 8. Authenticate via Next.js
+    Django->>MCP: 9. Authorization code
+    MCP->>Claude: 10. Return authorization code
+
+    Claude->>MCP: 11. Exchange code for tokens
+    MCP->>Django: 12. Validate and exchange
+    Django->>MCP: 13. Access & refresh tokens
+    MCP->>Claude: 14. JWT tokens
+
+    Claude->>MCP: 15. API calls with Bearer token
+    MCP->>Django: 16. Validate token & get user context
+    Django->>MCP: 17. Organization-scoped data
+    MCP->>Claude: 18. Formatted response
+```
+
+#### Key Components
+
+1. **OAuth Metadata Discovery**: MCP server exposes RFC 8414 compliant metadata endpoints
+2. **PKCE Security**: Uses Proof Key for Code Exchange for enhanced security
+3. **Auto-Registration**: Automatically registers new OAuth clients (like Claude.ai)
+4. **Organization Scoping**: All data access is automatically scoped to the user's organization
+5. **JWT Tokens**: Secure, stateless authentication using JSON Web Tokens
+
+#### Security Features
+
+- **PKCE (Proof Key for Code Exchange)**: Prevents authorization code interception attacks
+- **Organization Isolation**: Users can only access their organization's data
+- **Token Validation**: All API calls require valid JWT tokens
+- **Automatic Expiry**: Access tokens expire after 1 hour, refresh tokens after 7 days
+
+### 8.5 Connecting Claude.ai to Your MCP Server
+
+#### Step 1: Configure MCP in Claude.ai
+
+1. Go to Claude.ai settings
+2. Find the "MCP Servers" or "Model Context Protocol" section
+3. Add a new server with these details:
+   - **Server URL**: `http://localhost:8080` (or your public URL)
+   - **OAuth**: Enable OAuth 2.0 authentication
+   - **Auto-discovery**: Enable to automatically discover capabilities
+
+#### Step 2: Authorize the Connection
+
+1. Claude.ai will redirect you to your Ragstar login page
+2. Sign in with your Ragstar account
+3. You'll be redirected back to Claude.ai with authorization
+4. The connection will be linked to your organization
+
+#### Step 3: Start Using MCP Tools
+
+You can now ask Claude.ai to:
+
+- "List all my dbt models"
+- "Search for revenue-related models"
+- "Show me details about the customer_metrics model"
+- "What dbt projects do I have connected?"
+
+### 8.6 Example MCP Interactions
+
+#### Listing Models
+
+```
+You: "What dbt models do I have available?"
+Claude: [Calls list_dbt_models tool]
+Claude: "You have 23 dbt models across 2 projects:
+- analytics_prod: 15 models (staging, marts schemas)
+- marketing_analytics: 8 models (staging, reporting schemas)
+..."
+```
+
+#### Searching Models
+
+```
+You: "Find models related to customer revenue"
+Claude: [Calls search_dbt_models with "customer revenue"]
+Claude: "I found 3 relevant models:
+- customer_revenue_monthly (similarity: 0.95)
+- customer_ltv_calculation (similarity: 0.87)
+- revenue_attribution (similarity: 0.82)
+..."
+```
+
+#### Getting Model Details
+
+```
+You: "Show me the SQL for customer_revenue_monthly"
+Claude: [Calls get_model_details for "customer_revenue_monthly"]
+Claude: "Here's the customer_revenue_monthly model:
+- Schema: marts
+- Materialization: table
+- SQL: SELECT customer_id, DATE_TRUNC('month', order_date) as month, SUM(amount) as revenue FROM..."
+```
+
+### 8.7 Troubleshooting MCP Connection
+
+#### Common Issues
+
+1. **Authentication Fails**: Check that your Ragstar backend is accessible and you're logged in
+2. **No Models Found**: Ensure your dbt project is connected and models are loaded
+3. **Permission Errors**: Verify the user has access to the organization's dbt projects
+4. **Network Issues**: Check firewall settings and port accessibility
+
+#### Debug Commands
+
+```bash
+# Check MCP server health
+curl http://localhost:8080/health
+
+# Test OAuth metadata
+curl http://localhost:8080/.well-known/oauth-authorization-server
+
+# View MCP server logs
+docker compose logs -f mcp-server
+```
+
+### 8.8 Production Deployment
+
+For production use:
+
+1. **Use HTTPS**: Configure SSL certificates for secure connections
+2. **Restrict Origins**: Set specific allowed origins instead of `*`
+3. **Monitor Usage**: Track OAuth token usage and API calls
+4. **Scale Considerations**: Each client needs its own server instance
+
+### 8.9 Limitations
+
+- **1:1 Client-Server Relationship**: Each MCP client needs its own server instance
+- **Organization Scoping**: Users can only access their own organization's data
+- **Token Expiry**: Access tokens expire after 1 hour (refresh tokens after 7 days)
+- **Self-Hosted Only**: Not available in hosted/SaaS deployments
+
+---
+
+## 9. Contributing
+
+We 💛 community PRs. Please file an issue first for major changes. Make sure `ruff`, `black`, `mypy`, and `eslint` pass before opening a pull request.
+
+---
+
+## 10. License
 
 Ragstar is released under the MIT License — see [LICENSE](./LICENSE).

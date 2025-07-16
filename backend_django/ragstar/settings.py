@@ -95,7 +95,8 @@ INSTALLED_APPS = [
     "apps.llm_providers.apps.LlmProvidersConfig",
     "apps.workflows.apps.WorkflowsConfig",
     "apps.integrations.apps.IntegrationsConfig",
-    "apps.mcp_server.apps.McpServerConfig",
+    # Removed MCP server app – migrated to standalone FastAPI service
+    # "apps.mcp_server.apps.McpServerConfig",
 ]
 
 AUTH_USER_MODEL = "accounts.User"
@@ -232,9 +233,24 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # MCP OAuth Configuration
 MCP_AUTHORIZATION_BASE_URL = os.environ.get(
-    "MCP_AUTHORIZATION_BASE_URL", "http://localhost:8000"
+    "AUTHORIZATION_BASE_URL", "http://localhost:8000"
 )
 
+# OAuth 2.0 Settings for MCP
+MCP_OAUTH_ACCESS_TOKEN_LIFETIME = timedelta(hours=1)
+MCP_OAUTH_REFRESH_TOKEN_LIFETIME = timedelta(days=7)
+
+# NextAuth URL for OAuth flow redirects
+NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL", "http://localhost:3000/")
+
+# CORS origins - include MCP-related origins
+ALLOWED_ORIGINS = [
+    "http://localhost:3000",  # Frontend
+    "http://localhost:8080",  # Standalone MCP server (if used)
+    "https://claude.ai",  # Claude.ai
+    "https://api.claude.ai",  # Claude API
+    "*",  # For development - should be restricted in production
+]
 
 # --- Centralized Verbosity Control ---
 # Define the log level for RAGstar application components.
