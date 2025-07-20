@@ -1,25 +1,32 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from . import views
+from .views import (
+    IntegrationViewSet,
+    OrganisationIntegrationViewSet,
+    SlackIntegrationViewSet,
+    SnowflakeIntegrationViewSet,
+    MetabaseIntegrationViewSet,
+)
+from .github.views import GitHubIntegrationViewSet, github_oauth_callback
 
 # Create router for API endpoints
 router = DefaultRouter(trailing_slash=True)
-router.register(r"integrations", views.IntegrationViewSet, basename="integration")
+router.register(r"definitions", IntegrationViewSet, basename="integration-definitions")
 router.register(
     r"organisation-integrations",
-    views.OrganisationIntegrationViewSet,
+    OrganisationIntegrationViewSet,
     basename="organisation-integration",
 )
-router.register(r"slack", views.SlackIntegrationViewSet, basename="slack-integration")
-router.register(
-    r"snowflake", views.SnowflakeIntegrationViewSet, basename="snowflake-integration"
-)
-router.register(
-    r"metabase", views.MetabaseIntegrationViewSet, basename="metabase-integration"
-)
+router.register(r"slack", SlackIntegrationViewSet, basename="slack")
+router.register(r"snowflake", SnowflakeIntegrationViewSet, basename="snowflake")
+router.register(r"metabase", MetabaseIntegrationViewSet, basename="metabase")
+router.register(r"github", GitHubIntegrationViewSet, basename="github")
+
 
 # Define URL patterns for this app
 urlpatterns = [
+    path("github/callback/", github_oauth_callback, name="github-oauth-callback"),
     # Path for Slack events
     path("slack/events/", views.slack_events_handler, name="slack_events"),
     # Include URLs for Slack-specific integrations (like commands)

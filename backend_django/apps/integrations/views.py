@@ -250,9 +250,23 @@ class OrganisationIntegrationViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return OrganisationIntegration.objects.filter(
-            organisation=self.request.user.organisation
-        )
+        """
+        This view should return a list of all the integrations
+        for the currently authenticated user's organisation.
+        """
+        user = self.request.user
+        queryset = OrganisationIntegration.objects.filter(
+            organisation=user.organisation
+        ).order_by("integration_key")
+
+        integration_keys_str = self.request.query_params.get("integration_keys")
+        if integration_keys_str:
+            integration_keys = [
+                key.strip() for key in integration_keys_str.split(",") if key.strip()
+            ]
+            queryset = queryset.filter(integration_key__in=integration_keys)
+
+        return queryset
 
     def perform_create(self, serializer):
         serializer.save(organisation=self.request.user.organisation)
@@ -311,73 +325,46 @@ class OrganisationIntegrationViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(org_integration)
         return Response(serializer.data)
 
+    @action(detail=True, methods=["post"])
+    def refresh_link(self, request, pk=None):
+        """Initiate re-link / OAuth refresh for integrations like GitHub."""
+        org_integration = self.get_object()
+
+        if org_integration.integration_key == "github":
+            from apps.integrations.github.views import build_github_authorization_url
+
+            url = build_github_authorization_url(request.user)
+            return Response({"authorization_url": url})
+
+        return Response(
+            {"error": "Refresh not supported for this integration."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     @action(detail=False, methods=["get"])
     def status(self, request):
-        """Get status of all integrations for the organization."""
-        try:
-            # Get all available integrations from constants
-            available_integrations = get_active_integration_definitions()
+        """
+        Returns the status of all or a subset of integrations for the user's organisation.
+        """
+        manager = IntegrationsManager(request.user.organisation)
+        all_statuses = manager.get_integration_status()
 
-            # Get organization integrations
-            org_integrations = {oi.integration_key: oi for oi in self.get_queryset()}
+        integration_keys_str = request.query_params.get("integration_keys")
+        if integration_keys_str:
+            integration_keys = [
+                key.strip() for key in integration_keys_str.split(",") if key.strip()
+            ]
+            # Filter the statuses based on the provided keys
+            statuses = [
+                status
+                for key, status in all_statuses.items()
+                if key in integration_keys
+            ]
+        else:
+            statuses = list(all_statuses.values())
 
-            # Create integration manager for this organization
-            manager = IntegrationsManager(request.user.organisation)
-
-            status_data = []
-            for integration_def in available_integrations:
-                org_integration = org_integrations.get(integration_def.key)
-
-                if org_integration:
-                    status_info = {
-                        "id": org_integration.id,
-                        "key": integration_def.key,
-                        "name": integration_def.name,
-                        "integration_type": integration_def.integration_type,
-                        "is_enabled": org_integration.is_enabled,
-                        "is_configured": org_integration.is_configured,
-                        "connection_status": org_integration.connection_status,
-                        "last_tested_at": org_integration.last_tested_at,
-                        "tools_count": 0,  # Will be populated below
-                    }
-
-                    # Get tools count if integration is loaded
-                    if org_integration.is_enabled and org_integration.is_configured:
-                        integration_instance = manager.get_integration(
-                            integration_def.key
-                        )
-                        if integration_instance:
-                            try:
-                                tools = integration_instance.get_available_tools()
-                                status_info["tools_count"] = len(tools)
-                            except:
-                                pass
-
-                else:
-                    # Integration not configured for this organization
-                    status_info = {
-                        "id": None,
-                        "key": integration_def.key,
-                        "name": integration_def.name,
-                        "integration_type": integration_def.integration_type,
-                        "is_enabled": False,
-                        "is_configured": False,
-                        "connection_status": "not_configured",
-                        "last_tested_at": None,
-                        "tools_count": 0,
-                    }
-
-                status_data.append(status_info)
-
-            serializer = IntegrationStatusSerializer(status_data, many=True)
-            return Response(serializer.data)
-
-        except Exception as e:
-            logger.error(f"Error getting integration status: {e}")
-            return Response(
-                {"error": "Failed to get integration status"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        serializer = IntegrationStatusSerializer(statuses, many=True)
+        return Response(serializer.data)
 
     @action(detail=False, methods=["get"])
     def tools(self, request):

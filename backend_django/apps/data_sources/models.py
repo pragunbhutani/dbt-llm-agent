@@ -22,6 +22,17 @@ class DbtProject(OrganisationScopedModelMixin, models.Model):
     )
     dbt_cloud_url = models.URLField(blank=True, null=True)
     dbt_cloud_account_id = models.BigIntegerField(blank=True, null=True)
+
+    # GitHub connection settings
+    github_repository_url = models.URLField(blank=True, null=True)
+    github_branch = models.CharField(max_length=255, blank=True, null=True)
+    github_project_folder = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Path to the folder containing dbt_project.yml within the repository.",
+    )
+
     # Path in AWS SSM Parameter Store where a JSON blob containing
     # sensitive credentials (e.g. {"dbt_cloud_api_key": "..."}) is stored.
     credentials_path = models.CharField(

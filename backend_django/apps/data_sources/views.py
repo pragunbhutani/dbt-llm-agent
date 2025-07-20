@@ -37,6 +37,15 @@ class DbtProjectViewSet(viewsets.ModelViewSet):
         """
         serializer.save(organisation=self.request.user.organisation)
 
+    def perform_destroy(self, instance):
+        """Delete project and cascade-clean related models & embeddings."""
+        from apps.knowledge_base.models import Model
+        from apps.embeddings.models import ModelEmbedding
+
+        ModelEmbedding.objects.filter(dbt_project=instance).delete()
+        Model.objects.filter(dbt_project=instance).delete()
+        super().perform_destroy(instance)
+
     @action(
         detail=False, methods=["post"], serializer_class=DbtCloudProjectCreateSerializer
     )
@@ -71,6 +80,44 @@ class DbtProjectViewSet(viewsets.ModelViewSet):
             )
         except Exception as e:
             logger.error(f"Failed to create dbt Cloud project: {e}", exc_info=True)
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=False, methods=["post"])
+    def create_github_project(self, request):
+        """
+        Create a new dbt project from a GitHub repository.
+        """
+        # TODO: Add a serializer for this action
+        name = request.data.get("name")
+        github_repository_url = request.data.get("github_repository_url")
+        github_branch = request.data.get("github_branch")
+        github_project_folder = request.data.get("github_project_folder")
+
+        if not all([name, github_repository_url, github_branch]):
+            return Response(
+                {"error": "Missing required fields"}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                project = DbtProject.objects.create(
+                    name=name,
+                    organisation=request.user.organisation,
+                    connection_type=DbtProject.ConnectionType.GITHUB,
+                    github_repository_url=github_repository_url,
+                    github_branch=github_branch,
+                    github_project_folder=github_project_folder,
+                )
+
+                from .tasks import parse_github_project_task
+
+                parse_github_project_task.delay(project.id)
+
+            return Response(
+                DbtProjectSerializer(project).data, status=status.HTTP_201_CREATED
+            )
+        except Exception as e:
+            logger.error(f"Failed to create GitHub project: {e}", exc_info=True)
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=["post"])

@@ -15,6 +15,7 @@ WORKDIR /app
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    git \
     && rm -rf /var/lib/apt/lists/*
 
 # Install the latest uv (e.g., 0.7.x line)

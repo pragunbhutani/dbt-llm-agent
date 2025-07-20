@@ -130,6 +130,27 @@ export function IntegrationsContent() {
     mutate(); // Refresh the data after successful configuration
   };
 
+  const handleRefreshLink = async (integrationId: number) => {
+    if (!session?.accessToken) return;
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/integrations/organisation-integrations/${integrationId}/refresh_link/`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${session.accessToken}`,
+          },
+        }
+      );
+      const data = await res.json();
+      if (data.authorization_url) {
+        window.location.href = data.authorization_url;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const inboundIntegrations =
     integrationStatus?.filter(
       (i: IntegrationStatus) =>
@@ -186,6 +207,7 @@ export function IntegrationsContent() {
                 onConfigure={handleConfigureIntegration}
                 testingIntegration={testingIntegration}
                 togglingIntegration={togglingIntegration}
+                onRefreshLink={handleRefreshLink}
               />
             </div>
 
@@ -204,6 +226,7 @@ export function IntegrationsContent() {
                 onConfigure={handleConfigureIntegration}
                 testingIntegration={testingIntegration}
                 togglingIntegration={togglingIntegration}
+                onRefreshLink={handleRefreshLink}
               />
             </div>
           </div>
@@ -217,6 +240,7 @@ export function IntegrationsContent() {
             onConfigure={handleConfigureIntegration}
             testingIntegration={testingIntegration}
             togglingIntegration={togglingIntegration}
+            onRefreshLink={handleRefreshLink}
           />
         </TabsContent>
 
@@ -228,6 +252,7 @@ export function IntegrationsContent() {
             onConfigure={handleConfigureIntegration}
             testingIntegration={testingIntegration}
             togglingIntegration={togglingIntegration}
+            onRefreshLink={handleRefreshLink}
           />
         </TabsContent>
       </Tabs>
@@ -243,6 +268,7 @@ function IntegrationGrid({
   onConfigure,
   testingIntegration,
   togglingIntegration,
+  onRefreshLink,
 }: {
   integrations: IntegrationStatus[];
   onTestConnection: (id: number) => void;
@@ -250,6 +276,7 @@ function IntegrationGrid({
   onConfigure: (integration: IntegrationStatus) => void;
   testingIntegration: number | null;
   togglingIntegration: number | null;
+  onRefreshLink: (id: number) => void;
 }) {
   const getEnabledBadgeColor = (enabled: boolean) => {
     return enabled
@@ -280,6 +307,15 @@ function IntegrationGrid({
                 >
                   {getEnabledBadgeText(integration.is_enabled)}
                 </Badge>
+                {integration.key === "github" && integration.is_enabled && (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onRefreshLink(integration.id!)}
+                  >
+                    Refresh
+                  </Button>
+                )}
               </div>
               <CardDescription className="text-sm">
                 {getIntegrationDescription(integration.key)}

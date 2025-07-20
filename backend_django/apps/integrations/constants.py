@@ -133,6 +133,16 @@ AVAILABLE_INTEGRATIONS: Dict[str, IntegrationDefinition] = {
         documentation_url="https://modelcontextprotocol.io/",
         is_active=True,
     ),
+    "github": IntegrationDefinition(
+        key="github",
+        name="GitHub",
+        description="Connect a GitHub repository containing your dbt Core project.",
+        integration_type=IntegrationType.OUTBOUND,
+        configuration_schema={},
+        icon_url="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+        documentation_url="https://docs.github.com/en/developers/apps",
+        is_active=True,
+    ),
 }
 
 

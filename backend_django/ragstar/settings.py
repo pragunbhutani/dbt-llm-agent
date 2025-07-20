@@ -242,6 +242,11 @@ MCP_OAUTH_REFRESH_TOKEN_LIFETIME = timedelta(days=7)
 
 # NextAuth URL for OAuth flow redirects
 NEXTAUTH_URL = os.environ.get("NEXTAUTH_URL", "http://localhost:3000/")
+NEXT_PUBLIC_API_URL = os.environ.get("NEXT_PUBLIC_API_URL", "http://localhost:8000")
+
+# GitHub App Credentials
+GITHUB_APP_CLIENT_ID = os.environ.get("GITHUB_APP_CLIENT_ID")
+GITHUB_APP_CLIENT_SECRET = os.environ.get("GITHUB_APP_CLIENT_SECRET")
 
 # CORS origins - include MCP-related origins
 ALLOWED_ORIGINS = [
