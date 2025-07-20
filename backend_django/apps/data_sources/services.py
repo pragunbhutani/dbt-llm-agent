@@ -52,6 +52,81 @@ def initialize_dbt_cloud_project(
                 )
 
 
+def import_from_github_repository(dbt_project: Any, organisation: Any):
+    """
+    Initializes a project from a GitHub repository.
+
+    Args:
+        dbt_project: The DbtProject instance.
+        organisation: The organisation to associate the models with.
+    """
+    import subprocess
+    from apps.integrations.models import OrganisationIntegration
+
+    try:
+        integration = OrganisationIntegration.objects.get(
+            organisation=organisation, integration_key="github", is_enabled=True
+        )
+        access_token = integration.get_credential("access_token")
+        if not access_token:
+            raise CommandError("GitHub access token not found.")
+    except OrganisationIntegration.DoesNotExist:
+        raise CommandError("GitHub integration not found or not enabled.")
+
+    repo_url = dbt_project.github_repository_url
+    branch = dbt_project.github_branch
+
+    # Inject token into URL for https authentication
+    repo_url_with_auth = repo_url.replace("https://", f"https://oauth2:{access_token}@")
+
+    from git import Repo  # GitPython
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        repo_path = Path(temp_dir) / "repo"
+        try:
+            Repo.clone_from(
+                repo_url_with_auth,
+                repo_path,
+                branch=branch,
+                depth=1,
+            )
+
+            project_folder = dbt_project.github_project_folder or ""
+            dbt_project_path = repo_path / project_folder
+
+            try:
+                # Try normal dbt workflow first
+                subprocess.run(["dbt", "deps"], cwd=dbt_project_path, check=True)
+                subprocess.run(["dbt", "compile"], cwd=dbt_project_path, check=True)
+
+                manifest_path = dbt_project_path / "target" / "manifest.json"
+                if manifest_path.exists():
+                    return import_from_manifest(
+                        manifest_path_str=str(manifest_path),
+                        organisation=organisation,
+                        dbt_project=dbt_project,
+                    )
+                logger.warning(
+                    "manifest.json missing after compile – falling back to raw source parse"
+                )
+            except Exception as compile_err:
+                logger.warning(
+                    f"dbt compile failed ({compile_err}); falling back to raw source parse"
+                )
+
+            # Fallback: parse raw source files
+            return import_from_source(
+                project_path_str=str(dbt_project_path),
+                organisation=organisation,
+                dbt_project=dbt_project,
+            )
+
+        except Exception as e:
+            # Git errors, dbt errors, etc.
+            logger.error(f"Error importing from GitHub: {e}")
+            raise CommandError(f"Error importing from GitHub: {e}")
+
+
 def _fetch_dbt_cloud_manifest(
     dbt_cloud_url: str, dbt_cloud_account_id: int, dbt_cloud_api_key: str
 ) -> str:
@@ -303,7 +378,11 @@ def import_from_manifest(
 
 
 # --- Service for Importing from Source Code ---
-def import_from_source(project_path_str: str, organisation: Any) -> Dict[str, int]:
+def import_from_source(
+    project_path_str: str,
+    organisation: Any,
+    dbt_project: Any | None = None,
+) -> Dict[str, int]:
     """
     Parses a dbt project from a local file path and stores the models
     in the database, associating them with the given organisation.
@@ -355,9 +434,18 @@ def import_from_source(project_path_str: str, organisation: Any) -> Dict[str, in
         logger.info("Storing models from source parsing in database...")
         for model_name, model_data in parsed_models.items():
             model_data["organisation"] = organisation  # Set organisation
+            if dbt_project is not None:
+                model_data["dbt_project"] = dbt_project  # Associate with project
             try:
+                lookup_kwargs = {
+                    "name": model_name,
+                    "organisation": organisation,
+                }
+                if dbt_project is not None:
+                    lookup_kwargs["dbt_project"] = dbt_project
+
                 _, created = Model.objects.update_or_create(
-                    name=model_name, defaults=model_data
+                    **lookup_kwargs, defaults=model_data
                 )
                 if created:
                     models_created += 1
@@ -550,7 +638,8 @@ def _calculate_all_upstream(parsed_models: Dict):
             all_deps.add(dep_name)
             upstream_of_dep = find_upstream_recursive(dep_name)
             all_deps.update(upstream_of_dep)
-            visited_during_recursion.remove(dep_name)
+            # Remove the dependency name from the current recursion path after exploring its upstreams
+            visited_during_recursion.discard(dep_name)
         memo[model_name] = all_deps
         return all_deps
 

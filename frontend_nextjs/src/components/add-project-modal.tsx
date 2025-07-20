@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { mutate } from "swr";
+import GitHubConnection from "./integrations/github-connection";
 
 export function AddProjectModal({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
@@ -88,9 +89,7 @@ export function AddProjectModal({ children }: { children: React.ReactNode }) {
         <Tabs defaultValue="dbt-cloud" className="mt-4">
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="dbt-cloud">dbt Cloud</TabsTrigger>
-            <TabsTrigger value="github" disabled>
-              Source Code (GitHub)
-            </TabsTrigger>
+            <TabsTrigger value="github">Source Code (GitHub)</TabsTrigger>
           </TabsList>
           <TabsContent value="dbt-cloud" className="mt-6">
             <form onSubmit={handleSubmit} className="space-y-4">
@@ -158,9 +157,13 @@ export function AddProjectModal({ children }: { children: React.ReactNode }) {
             </form>
           </TabsContent>
           <TabsContent value="github">
-            <p className="text-sm text-gray-500 my-4">
-              Connecting via GitHub is coming soon.
-            </p>
+            <GitHubConnection
+              onSuccess={() => {
+                setOpen(false);
+                mutate("/api/data_sources/projects/");
+                mutate("/api/data_sources/dashboard-stats/");
+              }}
+            />
           </TabsContent>
         </Tabs>
       </DialogContent>

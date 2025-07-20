@@ -18,10 +18,48 @@ interface DbtProject {
   updated_at: string;
 }
 
+import { toast } from "sonner";
+
+function DeleteProjectButton({
+  id,
+  mutate,
+}: {
+  id: number;
+  mutate: () => void;
+}) {
+  const { accessToken } = useAuth();
+
+  const handleDelete = async () => {
+    if (!accessToken) return;
+    if (
+      !confirm(
+        "Are you sure you want to delete this project? All associated models will be removed."
+      )
+    )
+      return;
+    try {
+      await fetcher(`/api/data_sources/projects/${id}/`, accessToken, {
+        method: "DELETE",
+      });
+      toast.success("Project deleted");
+      mutate();
+    } catch (e) {
+      toast.error("Failed to delete project");
+      console.error(e);
+    }
+  };
+
+  return (
+    <Button variant="destructive" size="sm" onClick={handleDelete}>
+      Delete
+    </Button>
+  );
+}
+
 export function DashboardProjects() {
   const { accessToken, isAuthenticated } = useAuth();
 
-  const { data: projects } = useSWR<DbtProject[]>(
+  const { data: projects, mutate } = useSWR<DbtProject[]>(
     isAuthenticated && accessToken ? "/api/data_sources/projects/" : null,
     (url: string) => fetcher(url, accessToken),
     { suspense: true }
@@ -83,6 +121,7 @@ export function DashboardProjects() {
                     <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                   </Link>
                 </Button>
+                <DeleteProjectButton id={project.id} mutate={mutate} />
               </div>
             </div>
           ))}

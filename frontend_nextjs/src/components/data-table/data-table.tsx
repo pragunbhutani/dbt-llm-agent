@@ -47,6 +47,7 @@ interface DataTableProps<TData, TValue> {
   filterOptions?: FilterOption[];
   bulkActions?: BulkAction[];
   onBulkAction?: (action: string, selectedRows: TData[]) => void;
+  leadingComponents?: React.ReactNode;
 }
 
 export function DataTable<TData, TValue>({
@@ -56,6 +57,7 @@ export function DataTable<TData, TValue>({
   filterOptions,
   bulkActions,
   onBulkAction,
+  leadingComponents,
 }: DataTableProps<TData, TValue>) {
   const [rowSelection, setRowSelection] = React.useState({});
   const [columnVisibility, setColumnVisibility] =
@@ -94,6 +96,7 @@ export function DataTable<TData, TValue>({
         filterOptions={filterOptions}
         bulkActions={bulkActions}
         onBulkAction={onBulkAction}
+        leadingComponents={leadingComponents}
       />
       <div className="rounded-md border bg-white">
         <Table className="">

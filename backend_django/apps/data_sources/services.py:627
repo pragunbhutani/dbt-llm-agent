@@ -1,0 +1,1 @@
+visited_during_recursion.discard(dep_name) 

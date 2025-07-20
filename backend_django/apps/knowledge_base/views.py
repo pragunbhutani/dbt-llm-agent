@@ -93,9 +93,11 @@ class ModelViewSet(viewsets.ModelViewSet):
             # Use the custom manager method if available and preferred,
             # otherwise filter directly.
             # Assumes the default manager on Model is OrganisationScopedManager or similar
-            return Model.objects.for_organisation(user.organisation).order_by(
-                "-updated_at"
-            )
+            qs = Model.objects.for_organisation(user.organisation)
+            project_id = self.request.query_params.get("project")
+            if project_id:
+                qs = qs.filter(dbt_project_id=project_id)
+            return qs.order_by("-updated_at")
         # Return an empty queryset if no organisation is associated with the user
         return Model.objects.none()
 

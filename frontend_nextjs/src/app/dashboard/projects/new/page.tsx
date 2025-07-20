@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import { useSession } from "next-auth/react";
 import { fetcher } from "@/utils/fetcher";
+import GitHubConnection from "@/components/integrations/github-connection";
 
 export default function NewProjectPage() {
   const { data: session } = useSession();
@@ -61,9 +62,7 @@ export default function NewProjectPage() {
       <Tabs defaultValue="dbt-cloud" className="w-[600px]">
         <TabsList className="grid w-full grid-cols-2">
           <TabsTrigger value="dbt-cloud">dbt Cloud</TabsTrigger>
-          <TabsTrigger value="github" disabled>
-            Source Code (Github)
-          </TabsTrigger>
+          <TabsTrigger value="github">Source Code (Github)</TabsTrigger>
         </TabsList>
         <TabsContent value="dbt-cloud">
           <Card>
@@ -122,18 +121,7 @@ export default function NewProjectPage() {
           </Card>
         </TabsContent>
         <TabsContent value="github">
-          <Card>
-            <CardHeader>
-              <CardTitle>Connect with GitHub</CardTitle>
-              <CardDescription>This feature is coming soon.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              <p>
-                You&apos;ll be able to connect your dbt project from a GitHub
-                repository here.
-              </p>
-            </CardContent>
-          </Card>
+          <GitHubConnection />
         </TabsContent>
       </Tabs>
     </div>

@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import DbtModelsTable from "./dbt-models-table";
 import PageLayout from "@/components/layout/page-layout";

@@ -7,20 +7,63 @@ import { useAuth } from "@/lib/useAuth";
 import { fetcher } from "@/utils/fetcher";
 import { DataTable } from "@/components/data-table/data-table";
 import { getColumns, DbtModel } from "./columns";
+import {
+  Select,
+  SelectTrigger,
+  SelectContent,
+  SelectItem,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
-export default function DbtModelsTable() {
+export default function DbtModelsTable({
+  initialProjectId,
+}: {
+  initialProjectId?: string;
+}) {
   const { accessToken, isAuthenticated } = useAuth();
   const [isProcessing, setIsProcessing] = useState(false);
+  const [projectId, setProjectId] = useState<string>(initialProjectId || "all");
+
+  // Fetch list of projects for dropdown
+  const { data: projects } = useSWR<{ id: number; name: string }[]>(
+    isAuthenticated && accessToken ? "/api/data_sources/projects/" : null,
+    (url: string) => fetcher(url, accessToken)
+  );
+
+  const apiPath = projectId === "all" ? "" : `?project=${projectId}`;
 
   const {
     data: models,
     error,
     mutate,
   } = useSWR<DbtModel[]>(
-    isAuthenticated && accessToken ? "/api/knowledge_base/models/" : null,
+    isAuthenticated && accessToken
+      ? `/api/knowledge_base/models/${apiPath}`
+      : null,
     (url: string) => fetcher(url, accessToken),
     { suspense: true }
   );
+
+  // UI component for project filter to be rendered inside the table toolbar
+  const projectFilterNode =
+    projects && projects.length > 0 ? (
+      <div className="w-48">
+        <Select value={projectId} onValueChange={setProjectId}>
+          <SelectTrigger id="project-filter" className="h-9">
+            <SelectValue placeholder="All projects" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All projects</SelectItem>
+            {projects.map((p) => (
+              <SelectItem key={p.id} value={p.id.toString()}>
+                {p.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+    ) : null;
 
   const handleToggleAnswering = async (
     modelId: string,
@@ -153,6 +196,7 @@ export default function DbtModelsTable() {
       data={sortedModels}
       initialColumnVisibility={initialColumnVisibility}
       onBulkAction={handleBulkAction}
+      leadingComponents={projectFilterNode}
     />
   );
 }

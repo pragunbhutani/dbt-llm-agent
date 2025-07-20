@@ -37,6 +37,7 @@ interface DataTableToolbarProps<TData> {
   filterOptions?: FilterOption[];
   bulkActions?: BulkAction[];
   onBulkAction?: (action: string, selectedRows: TData[]) => void;
+  leadingComponents?: React.ReactNode;
 }
 
 export function DataTableToolbar<TData>({
@@ -63,6 +64,7 @@ export function DataTableToolbar<TData>({
     },
   ],
   onBulkAction,
+  leadingComponents,
 }: DataTableToolbarProps<TData>) {
   const [filterBy, setFilterBy] = React.useState(filterOptions[0]?.value || "");
   const numSelected = table.getFilteredSelectedRowModel().rows.length;
@@ -101,20 +103,9 @@ export function DataTableToolbar<TData>({
     <div className="flex items-center justify-between">
       <div className="flex items-center space-x-2">
         <DataTableViewOptions table={table} />
+        {leadingComponents}
         {filterOptions.length > 0 && (
           <>
-            <Input
-              placeholder={`Filter by ${
-                filterOptions
-                  .find((opt) => opt.value === filterBy)
-                  ?.label?.toLowerCase() || filterBy
-              }...`}
-              value={
-                (table.getColumn(filterBy)?.getFilterValue() as string) ?? ""
-              }
-              onChange={handleFilterChange}
-              className="h-9 w-[150px] lg:w-[250px]"
-            />
             {filterOptions.length > 1 && (
               <Select value={filterBy} onValueChange={handleSelectChange}>
                 <SelectTrigger className="h-9 w-[120px]">
@@ -129,6 +120,18 @@ export function DataTableToolbar<TData>({
                 </SelectContent>
               </Select>
             )}
+            <Input
+              placeholder={`Filter by ${
+                filterOptions
+                  .find((opt) => opt.value === filterBy)
+                  ?.label?.toLowerCase() || filterBy
+              }...`}
+              value={
+                (table.getColumn(filterBy)?.getFilterValue() as string) ?? ""
+              }
+              onChange={handleFilterChange}
+              className="h-9"
+            />
           </>
         )}
       </div>
