@@ -6,9 +6,13 @@ export function useAuth() {
   const { data: session, status } = useSession();
   const pathname = usePathname();
 
-  const isAuthenticated = status === "authenticated" && !session?.error;
-  const isLoading =
-    status === "loading" || session?.error === "RefreshAccessTokenError";
+  // Treat blacklisted tokens and sessions without accessToken as unauthenticated
+  const isAuthenticated =
+    status === "authenticated" &&
+    !session?.error &&
+    session?.accessToken &&
+    session?.user;
+  const isLoading = status === "loading";
 
   // Handle session errors globally, but only redirect if not on landing page
   useEffect(() => {
@@ -22,6 +26,12 @@ export function useAuth() {
         return;
       }
       signOut({ callbackUrl: "/signin" });
+    }
+
+    // Handle blacklisted tokens by clearing the session completely
+    if (session?.error === "TokenBlacklisted") {
+      // Clear the session without redirect for all pages
+      signOut({ redirect: false });
     }
   }, [session?.error, pathname]);
 

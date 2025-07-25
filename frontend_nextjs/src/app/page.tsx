@@ -1,6 +1,6 @@
 "use client";
 
-import { useAuth } from "@/lib/useAuth";
+import { useSession } from "next-auth/react";
 import Navbar from "@/components/landing/navbar";
 import LandingHero from "@/components/landing/hero";
 import PainPoints from "@/components/landing/pain-points";
@@ -14,9 +14,11 @@ import Footer from "@/components/landing/footer";
 import Stats from "@/components/landing/stats";
 
 export default function Home() {
-  const { isLoading } = useAuth();
+  const { status } = useSession();
 
-  if (isLoading) {
+  // Only show loading if we're actively loading a session
+  // Don't show loading for unauthenticated users
+  if (status === "loading") {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
