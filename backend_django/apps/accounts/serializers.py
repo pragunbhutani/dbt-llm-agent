@@ -4,6 +4,7 @@ from django.db import transaction
 from .models import Organisation, OrganisationSettings
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from .llm_constants import CHAT_MODELS, EMBEDDING_MODELS
+from apps.whitelist.models import SignupWhitelist
 
 User = get_user_model()
 
@@ -43,6 +44,15 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         }
 
     def validate_email(self, value):
+        # Check against the whitelist if it's not empty
+        if (
+            SignupWhitelist.objects.exists()
+            and not SignupWhitelist.objects.filter(email__iexact=value).exists()
+        ):
+            raise serializers.ValidationError(
+                "This email address is not yet whitelisted for signup."
+            )
+
         # Ensure email is unique
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("A user with this email already exists.")

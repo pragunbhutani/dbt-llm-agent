@@ -35,10 +35,25 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
     };
   } catch (error) {
     console.error("Error refreshing access token", error);
+
+    // Check if this is a blacklisted token error
+    if (
+      error &&
+      typeof error === "object" &&
+      "detail" in error &&
+      (error.detail === "Token is blacklisted" ||
+        (error as any).code === "token_not_valid")
+    ) {
+      // Return a token that signals complete logout
+      return {
+        error: "TokenBlacklisted" as const,
+      };
+    }
+
     // The refresh token is likely expired or invalid, so we need to sign out
     return {
       ...token,
-      error: "RefreshAccessTokenError", // This will be used to trigger a sign-out on the client
+      error: "RefreshAccessTokenError" as const,
     };
   }
 }
@@ -121,8 +136,16 @@ const handler = NextAuth({
         return token;
       }
 
+      // If token is blacklisted, clear the session completely
+      if (token.error === "TokenBlacklisted") {
+        return { error: "TokenBlacklisted" as const };
+      }
+
       // Return previous token if the access token has not expired yet
-      if (Date.now() < (token.accessTokenExpiresAt as number)) {
+      if (
+        token.accessTokenExpiresAt &&
+        Date.now() < token.accessTokenExpiresAt
+      ) {
         return token;
       }
 
@@ -131,11 +154,21 @@ const handler = NextAuth({
     },
     // The 'token' object is the one returned from the 'jwt' callback
     async session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.id as string;
+      // If token is blacklisted or empty, return minimal empty session
+      if (token.error === "TokenBlacklisted" || !token.accessToken) {
+        return {
+          expires: session.expires,
+          user: undefined,
+          accessToken: undefined,
+          error: "TokenBlacklisted" as const,
+        };
       }
-      session.accessToken = token.accessToken as string;
-      session.error = token.error as "RefreshAccessTokenError" | undefined; // Pass error to the client
+
+      if (session.user && token.id) {
+        session.user.id = token.id;
+      }
+      session.accessToken = token.accessToken;
+      session.error = token.error;
       return session;
     },
   },

@@ -35,12 +35,19 @@ export function WaitlistModal({ trigger }: WaitlistModalProps) {
     setIsSubmitting(true);
 
     const formData = new FormData(e.currentTarget);
+    const data = Object.fromEntries(formData.entries());
 
     try {
-      const response = await fetch("https://submit-form.com/oTK0LiASp", {
-        method: "POST",
-        body: formData,
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL}/api/waitlist/`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(data),
+        }
+      );
 
       if (response.ok) {
         setSubmitted(true);

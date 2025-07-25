@@ -95,6 +95,8 @@ INSTALLED_APPS = [
     "apps.llm_providers.apps.LlmProvidersConfig",
     "apps.workflows.apps.WorkflowsConfig",
     "apps.integrations.apps.IntegrationsConfig",
+    "apps.waitlist.apps.WaitlistConfig",
+    "apps.whitelist.apps.WhitelistConfig",
     # Removed MCP server app – migrated to standalone FastAPI service
     # "apps.mcp_server.apps.McpServerConfig",
 ]

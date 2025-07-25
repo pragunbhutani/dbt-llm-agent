@@ -47,6 +47,7 @@ urlpatterns = [
     path("api/workflows/", include("apps.workflows.urls")),
     path("api/embeddings/", include("apps.embeddings.urls")),
     path("api/data_sources/", include("apps.data_sources.urls")),
+    path("api/waitlist/", include("apps.waitlist.urls")),
     # External webhook endpoints (placed BEFORE the generic integrations include so
     # they take precedence). The regex allows both with and without the trailing
     # slash to prevent CSRF issues when Slack calls the URL without it.

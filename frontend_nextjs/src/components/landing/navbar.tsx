@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useAuth } from "@/lib/useAuth";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Menu, X } from "lucide-react";
 import { WaitlistModal } from "@/components/waitlist-modal";
@@ -20,8 +20,16 @@ const navigation = [
 ];
 
 export default function Navbar() {
-  const { isAuthenticated, isLoading } = useAuth();
+  const { data: session, status } = useSession();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  // Treat blacklisted tokens and sessions without accessToken as unauthenticated
+  const isAuthenticated =
+    status === "authenticated" &&
+    !session?.error &&
+    session?.accessToken &&
+    session?.user;
+  const isLoading = status === "loading";
 
   return (
     <header className="bg-white">

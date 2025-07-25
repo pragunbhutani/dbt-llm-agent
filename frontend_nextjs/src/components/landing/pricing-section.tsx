@@ -4,6 +4,7 @@ import { CheckIcon } from "@heroicons/react/20/solid";
 import { StarIcon } from "@heroicons/react/24/outline";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { WaitlistModal } from "@/components/waitlist-modal";
 
 const tiers = [
   {
@@ -24,11 +25,11 @@ const tiers = [
     ],
     ctaText: "View on GitHub",
     badge: "Most Popular",
+    isExternal: true,
   },
   {
     name: "Ragstar Cloud",
     id: "tier-cloud",
-    href: "/signup",
     priceMonthly: "$99",
     description:
       "Fully managed cloud instance with premium features and priority support for teams who want to focus on building.",
@@ -40,6 +41,7 @@ const tiers = [
     ],
     ctaText: "Join Waitlist",
     badge: "Invite Only",
+    isWaitlist: true,
   },
 ];
 
@@ -140,7 +142,15 @@ export default function PricingSection() {
                   </div>
 
                   {/* CTA Button */}
-                  {tier.href.startsWith("http") ? (
+                  {tier.isWaitlist ? (
+                    <WaitlistModal
+                      trigger={
+                        <button className="mt-8 block w-full rounded-md bg-indigo-600 px-3.5 py-2 text-center text-sm/6 font-semibold text-white shadow-xs hover:bg-indigo-500 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+                          {tier.ctaText}
+                        </button>
+                      }
+                    />
+                  ) : tier.isExternal && tier.href ? (
                     <Link
                       href={tier.href}
                       target="_blank"
@@ -150,7 +160,7 @@ export default function PricingSection() {
                     >
                       {tier.ctaText}
                     </Link>
-                  ) : (
+                  ) : tier.href ? (
                     <Link
                       href={tier.href}
                       aria-describedby={tier.id}
@@ -158,7 +168,7 @@ export default function PricingSection() {
                     >
                       {tier.ctaText}
                     </Link>
-                  )}
+                  ) : null}
                 </div>
               ))}
 
@@ -174,12 +184,13 @@ export default function PricingSection() {
                     shape the product.
                   </p>
                 </div>
-                <Link
-                  href="/signup"
-                  className="rounded-md px-3.5 py-2 text-sm/6 font-semibold text-indigo-600 ring-1 ring-indigo-200 ring-inset hover:ring-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600"
-                >
-                  Join Waitlist <span aria-hidden="true">&rarr;</span>
-                </Link>
+                <WaitlistModal
+                  trigger={
+                    <button className="rounded-md px-3.5 py-2 text-sm/6 font-semibold text-indigo-600 ring-1 ring-indigo-200 ring-inset hover:ring-indigo-300 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600">
+                      Join Waitlist <span aria-hidden="true">&rarr;</span>
+                    </button>
+                  }
+                />
               </div>
             </div>
           </div>
